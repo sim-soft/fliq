@@ -1,9 +1,9 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder\Conditions;
+namespace Simsoft\DB\Builder\Conditions;
 
-use Simsoft\DB\MySQL\Builder\Clauses\Clause;
-use Simsoft\DB\MySQL\Builder\Raw;
+use Simsoft\DB\Builder\Clauses\Clause;
+use Simsoft\DB\Builder\Raw;
 
 /**
  * Class BetweenCondition

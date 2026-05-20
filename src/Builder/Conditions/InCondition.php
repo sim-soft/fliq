@@ -1,10 +1,10 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder\Conditions;
+namespace Simsoft\DB\Builder\Conditions;
 
-use Simsoft\DB\MySQL\Builder\ActiveQuery;
-use Simsoft\DB\MySQL\Builder\Clauses\Clause;
-use Simsoft\DB\MySQL\Builder\Raw;
+use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Builder\Clauses\Clause;
+use Simsoft\DB\Builder\Raw;
 
 /**
  * Class InCondition
@@ -24,13 +24,16 @@ class InCondition extends Clause
         if (is_array($this->value)) {
             $this->appendBinds($this->value);
             $sql .= implode(',', array_fill(0, count($this->value), $this->getPlaceHolder()));
-        } else {
+        }
+
+        if ($this->value instanceof ActiveQuery) {
             $this->appendBinds($this->value->getBinds());
-            $sql .= match (true) {
-                $this->value instanceof ActiveQuery => $this->value->buildSQL(false),
-                $this->value instanceof Raw => (string)$this->value,
-                default => null,
-            };
+            $sql .= $this->value->getSQL();
+        }
+
+        if ($this->value instanceof Raw) {
+            $this->appendBinds($this->value->getBinds());
+            $sql .= (string)$this->value;
         }
 
         return $sql . ')';

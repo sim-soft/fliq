@@ -1,23 +1,29 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder\Clauses;
+namespace Simsoft\DB\Builder\Clauses;
 
-use Simsoft\DB\MySQL\Traits\Binds;
-use Simsoft\DB\MySQL\Traits\PlaceHolder;
-use Simsoft\DB\MySQL\Traits\Qualifier;
+use Simsoft\DB\Traits\Binds;
+use Simsoft\DB\Traits\PlaceHolder;
+use Simsoft\DB\Traits\Qualifier;
 
 /**
- * Class Clause
+ * Class Clause.
  *
+ * Base class for all SQL clause/condition value objects.
  */
 abstract class Clause
 {
     use PlaceHolder, Qualifier, Binds;
 
+    /** @var string|null Cached SQL output */
     private ?string $sql = null;
 
     /**
-     * Constructor
+     * Constructor.
+     *
+     * @param mixed $attribute The attribute name or array of conditions.
+     * @param mixed $value The condition value.
+     * @param bool $is Whether the condition is positive (true) or negated (false).
      */
     public function __construct(
         protected mixed $attribute,
@@ -25,11 +31,6 @@ abstract class Clause
         protected bool $is = true,
     )
     {
-        if (is_numeric($this->value) && !str_starts_with($this->value, '0')) {
-            $this->value = str_contains($this->value, '.')
-                ? floatval($this->value)
-                : intval($this->value);
-        }
     }
 
     /**
@@ -40,7 +41,7 @@ abstract class Clause
     abstract protected function buildSQL(): string;
 
     /**
-     * Get SQL statement.
+     * Get SQL statement (cached after first build).
      *
      * @return string
      */

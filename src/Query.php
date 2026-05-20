@@ -1,28 +1,35 @@
 <?php
 
-namespace Simsoft\DB\MySQL;
+namespace Simsoft\DB;
 
-use Simsoft\DB\MySQL\Builder\ActiveQuery;
-use Simsoft\DB\MySQL\Builder\Raw;
+use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Builder\Raw;
 
 /**
  * Query Class.
  *
- * @method static distinct()
- * @method static where(string|array|callable|Raw $attribute, mixed $operator = '=', mixed $value = null, string $logicalOperator = 'AND')
+ * Static proxy for ActiveQuery. Use DB::table() instead.
+ *
+ * @deprecated Use DB::table() for query building.
+ *
+ * @method static ActiveQuery from(string|array<string, string|ActiveQuery|Raw>|Model $table)
+ * @method static ActiveQuery where(string|array<mixed>|callable|Raw $attribute, mixed $operator = '=', mixed $value = null, string $logicalOperator = 'AND')
+ * @method static ActiveQuery distinct()
  */
 class Query
 {
     /**
-     * @param string $name ActiveQuery's method name.
-     * @param array $arguments Arguments to be used by the ActiveQuery's method.
-     * @return mixed|ActiveQuery
+     * Proxy static calls to a new ActiveQuery instance.
+     *
+     * @param string $name ActiveQuery method name.
+     * @param array<int, mixed> $arguments Method arguments.
+     * @return mixed
      */
-    public static function __callStatic(string $name, array $arguments)
+    public static function __callStatic(string $name, array $arguments): mixed
     {
         $query = new ActiveQuery();
         if (method_exists($query, $name)) {
-            return call_user_func_array([$query, $name], $arguments);
+            return $query->{$name}(...$arguments);
         }
         return $query;
     }

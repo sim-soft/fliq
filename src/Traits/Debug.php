@@ -1,9 +1,9 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Traits;
+namespace Simsoft\DB\Traits;
 
 /**
- * Debug Trait
+ * Debug Trait.
  */
 trait Debug
 {
@@ -13,13 +13,32 @@ trait Debug
     /**
      * Enable debug mode.
      *
-     * @param bool $enabled Enable debug mode. Default: true.
-     * @return $this
+     * @return static
      */
-    public function debug(bool $enabled = true): self
+    public function enableDebug(): static
     {
-        $this->debugMode = $enabled;
-
+        $this->debugMode = true;
         return $this;
+    }
+
+    /**
+     * Disable debug mode.
+     *
+     * @return static
+     */
+    public function disableDebug(): static
+    {
+        $this->debugMode = false;
+        return $this;
+    }
+
+    /**
+     * Determine if debug mode is enabled.
+     *
+     * @return bool
+     */
+    public function isDebugEnabled(): bool
+    {
+        return $this->debugMode;
     }
 }

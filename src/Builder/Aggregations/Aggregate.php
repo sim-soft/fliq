@@ -1,10 +1,10 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder\Aggregations;
+namespace Simsoft\DB\Builder\Aggregations;
 
-use Simsoft\DB\MySQL\Builder\ActiveQuery;
-use Simsoft\DB\MySQL\Builder\Builder;
-use Simsoft\DB\MySQL\Builder\Raw;
+use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Builder\Builder;
+use Simsoft\DB\Builder\Raw;
 
 /**
  * Aggregate Query Builder class.
@@ -41,12 +41,11 @@ abstract class Aggregate extends Builder
     /**
      * Enable select distinct.
      *
-     * @param bool $enable Enable distinct.
      * @return $this
      */
-    public function distinct(bool $enable = true): self
+    public function distinct(): self
     {
-        $this->distinct = $enable;
+        $this->distinct = true;
         return $this;
     }
 
@@ -67,7 +66,7 @@ abstract class Aggregate extends Builder
      */
     protected function buildSQL(): string
     {
-        $this->alias(trim($this->table, '`'));
+        $this->alias(trim($this->table, '`"'));
 
         $select = $this->distinct
             ? "SELECT $this->functionName(DISTINCT {$this->queryAttribute($this->attribute)})"
@@ -77,7 +76,7 @@ abstract class Aggregate extends Builder
 
         $sql = implode(' ', array_filter([
             $select,
-            $this->as ? "AS `$this->as`" : null,
+            $this->as ? "AS " . $this->quote($this->as) : null,
             "FROM $this->table",
             $this->getCondition(),
         ]));
@@ -92,7 +91,6 @@ abstract class Aggregate extends Builder
      */
     public function getCondition(): ?string
     {
-        $condition = null;
         if ($this->condition instanceof ActiveQuery) {
             $condition = implode(' ', array_filter([
                 $this->condition->getJoinSQL(),
@@ -105,15 +103,23 @@ abstract class Aggregate extends Builder
             if ($this->condition->getBinds()) {
                 $this->appendBinds($this->condition->getBinds());
             }
-        } elseif ($this->condition instanceof Raw) {
+
+            return $condition;
+        }
+
+        if ($this->condition instanceof Raw) {
             $condition = $this->condition->getSQL();
             if ($this->condition->getBinds()) {
                 $this->appendBinds($this->condition->getBinds());
             }
-        } elseif (is_string($this->condition) && $this->condition != '') {
-            $condition = 'WHERE ' . trim($this->condition);
+            return $condition;
         }
-        return $condition;
+
+        if ($this->condition !== '') {
+            return 'WHERE ' . trim($this->condition);
+        }
+
+        return null;
     }
 
     /**

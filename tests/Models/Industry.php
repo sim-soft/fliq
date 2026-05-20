@@ -2,7 +2,7 @@
 
 namespace Models;
 
-use Simsoft\DB\MySQL\Model;
+use Simsoft\DB\Model;
 
 /**
  * Industry Model Class.

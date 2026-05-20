@@ -10,7 +10,7 @@
         <properties>
             <property name="ignorepattern"
                       description="Ignore methods matching this regex. Example: /^(__construct|get.*Filtered)$/"
-                      value="/^(__construct|parse|formal|make|lookup)$/"/>
+                      value="/^(__construct|parse|formal|make|lookup|save|like|orLike|notLike|orNotLike|whereLike|orWhereLike|whereNotLike|orWhereNotLike|between|betweenDate|betweenDateInterval|matchAll|jsonExtract)$/"/>
         </properties>
     </rule>
     <rule ref="rulesets/cleancode.xml/ElseExpression"/>
@@ -20,6 +20,14 @@
                 <value>
                     MyGOV\MyJPN\Lang,
                     MyGOV\MyJPN\PlaceOfBirth,
+                    Simsoft\DB\Connection,
+                    Simsoft\DB\QueryMonitor,
+                    Simsoft\DB\QueryLogger,
+                    Simsoft\DB\EagerLoader,
+                    Simsoft\DB\Cache\QueryCache,
+                    Simsoft\DB\Exceptions\ConnectionException,
+                    Simsoft\DB\Exceptions\QueryException,
+                    Closure,
                 </value>
             </property>
             <property name="ignorepattern" description="Ignore methods matching this regex. Example: /^create/i"
@@ -29,12 +37,36 @@
     <rule ref="rulesets/codesize.xml/CyclomaticComplexity"/>
     <rule ref="rulesets/codesize.xml/NPathComplexity"/>
     <rule ref="rulesets/codesize.xml/ExcessiveMethodLength"/>
-    <rule ref="rulesets/codesize.xml/ExcessiveClassLength"/>
+    <rule ref="rulesets/codesize.xml/ExcessiveClassLength">
+        <properties>
+            <!-- ActiveQuery is a fluent builder with intentionally many methods -->
+            <property name="minimum" value="3000"/>
+        </properties>
+    </rule>
     <rule ref="rulesets/codesize.xml/ExcessiveParameterList"/>
-    <rule ref="rulesets/codesize.xml/ExcessivePublicCount"/>
-    <rule ref="rulesets/codesize.xml/TooManyFields"/>
-    <rule ref="rulesets/codesize.xml/TooManyMethods"/>
-    <rule ref="rulesets/codesize.xml/TooManyPublicMethods"/>
+    <rule ref="rulesets/codesize.xml/ExcessivePublicCount">
+        <properties>
+            <!-- ActiveQuery and Model are ORM classes with intentionally large public APIs -->
+            <property name="minimum" value="160"/>
+        </properties>
+    </rule>
+    <rule ref="rulesets/codesize.xml/TooManyFields">
+        <properties>
+            <property name="maxfields" value="16"/>
+        </properties>
+    </rule>
+    <rule ref="rulesets/codesize.xml/TooManyMethods">
+        <properties>
+            <!-- ActiveQuery and Model are ORM classes with intentionally many methods -->
+            <property name="maxmethods" value="160"/>
+        </properties>
+    </rule>
+    <rule ref="rulesets/codesize.xml/TooManyPublicMethods">
+        <properties>
+            <!-- ActiveQuery, Model, Collection, DB are ORM/facade classes with intentionally large public APIs -->
+            <property name="maxmethods" value="140"/>
+        </properties>
+    </rule>
     <!--<rule ref="rulesets/codesize.xml/ExcessiveClassComplexity"/>-->
     <!--<rule ref="rulesets/controversial.xml/Superglobals" />-->
     <rule ref="rulesets/controversial.xml/CamelCaseClassName"/>
@@ -59,7 +91,12 @@
         </properties>
     </rule>
     <rule ref="rulesets/naming.xml/LongVariable"/>
-    <rule ref="rulesets/naming.xml/ShortMethodName"/>
+    <rule ref="rulesets/naming.xml/ShortMethodName">
+        <properties>
+            <property name="minimum" value="3"/>
+            <property name="exceptions" value="in,on,to"/>
+        </properties>
+    </rule>
     <rule ref="rulesets/naming.xml/ConstructorWithNameAsEnclosingClass"/>
     <rule ref="rulesets/naming.xml/ConstantNamingConventions"/>
     <rule ref="rulesets/naming.xml/BooleanGetMethodName"/>

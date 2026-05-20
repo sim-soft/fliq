@@ -1,377 +1,356 @@
 <?php
 
-namespace Simsoft\DB\MySQL;
+namespace Simsoft\DB;
 
-use Simsoft\DB\MySQL\Builder\ActiveQuery;
-use Simsoft\DB\MySQL\Builder\Delete;
-use Simsoft\DB\MySQL\Builder\Insert;
-use Simsoft\DB\MySQL\Builder\Raw;
-use Simsoft\DB\MySQL\Builder\Update;
-use Simsoft\DB\MySQL\Interfaces\Executable;
-use Throwable;
+use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Builder\Delete;
+use Simsoft\DB\Builder\Insert;
+use Simsoft\DB\Builder\Raw;
+use Simsoft\DB\Builder\Update;
+use Simsoft\DB\Builder\Upsert;
+use Simsoft\DB\Exceptions\QueryException;
+use Simsoft\DB\Interfaces\Executable;
 
 /**
- * Class DB
+ * Class DB.
  *
- * The DB class is responsible for basic INSERT, UPDATE and DELETE operations.
- *
- * @package ActiveRecord
- *
- * @author: vzangloo <vzangloo@7mayday.com>
- *
- * @link: https://www.7mayday.com
- * @since 1.0.0
- * @copyright 2022
+ * Static facade for common database operations.
+ * Returns builder objects in sqlOnly mode, executes directly otherwise.
  */
 class DB
 {
-
-    /** @var string Default connection */
-    protected static string $defaultConnection = 'mysql';
-
-    /** @var bool Return SQL instead of execute the SQL. Default: false; */
+    /** @var bool Return SQL instead of executing. Default: false. */
     private static bool $sqlOnly = false;
 
-    /** @var array Operation errors. */
-    private static array $errors = [];
-
     /**
-     * Set default connection.
+     * Enable SQL-only mode (returns builder objects without executing).
      *
-     * @param string $connection The default connection name.
      * @return void
      */
-    public static function setDefaultConnection(string $connection): void
+    public static function sqlOnly(): void
     {
-        self::$defaultConnection = $connection;
+        self::$sqlOnly = true;
     }
 
     /**
-     * Prevent execution and return SQL only.
+     * Disable SQL-only mode.
      *
-     * @param bool $enable Enable SQL only.
      * @return void
      */
-    public static function sqlOnly(bool $enable = true): void
+    public static function disableSqlOnly(): void
     {
-        self::$sqlOnly = $enable;
+        self::$sqlOnly = false;
     }
 
     /**
-     * Perform query on table.
+     * Perform a query on a table.
      *
-     * @param string|array|Model $name The table name
-     * @param string|null $connection Connection name
+     * @param string|array<string, string|ActiveQuery|Raw>|Model $name The table name.
+     * @param string|null $connection Connection name.
      * @return ActiveQuery
      */
     public static function table(string|array|Model $name, ?string $connection = null): ActiveQuery
     {
-        return match (true) {
-            $name instanceof Model => $name::find(),
-            default => (new ActiveQuery())->from($name)->setConnection($connection ?? self::$defaultConnection),
-        };
+        if ($name instanceof Model) {
+            return $name::find();
+        }
+
+        return (new ActiveQuery())
+            ->from($name)
+            ->withConnection($connection ?? Connection::getDefaultName());
     }
 
     /**
-     * Perform INSERT operation
+     * Create an INSERT builder for a table.
      *
-     * @param string|Model $table Table name.
-     * @param array $attributes Attributes => values to be inserted.
-     * @param string|null $connection The connection name.
-     * @return string|bool|Executable|null
+     * In sqlOnly mode, returns the builder. Otherwise, executes immediately.
+     *
+     * @param string|Model $table Table name or model.
+     * @param array<string, mixed> $attributes Column => value pairs.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function insert(
         string|Model $table,
         array        $attributes,
         ?string      $connection = null
-    ): string|bool|null|Executable
+    ): Executable|bool
     {
-        if ($table instanceof Model) {
-            $connection = $table->getConnection();
-            $table = $table->getTable();
-        }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = new Insert($tableName, $attributes);
 
-        $insert = (new Insert($table, $attributes));
-
-        return self::$sqlOnly
-            ? $insert
-            : $insert->setConnection($connection ?? self::$defaultConnection)->execute();
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Perform INSERT or IGNORE operation
+     * Create an INSERT IGNORE builder.
      *
-     * @param string|Model $table Table name.
-     * @param array $attributes Attributes => values to be inserted.
-     * @param string|null $connection The connection name.
-     * @return mixed
+     * @param string|Model $table Table name or model.
+     * @param array<string, mixed> $attributes Column => value pairs.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function insertOrIgnore(
         string|Model $table,
         array        $attributes,
         ?string      $connection = null
-    ): mixed
+    ): Executable|bool
     {
-        if ($table instanceof Model) {
-            $connection = $table->getConnection();
-            $table = $table->getTable();
-        }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = (new Insert($tableName, $attributes))->ignore();
 
-        $insert = (new Insert($table, $attributes))->ignore();
-
-        return self::$sqlOnly
-            ? $insert
-            : $insert->setConnection($connection ?? self::$defaultConnection)->execute();
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Perform UPDATE operation
+     * Create an UPDATE builder.
      *
-     * @param string|array|Model $table The table name.
-     * @param array $attributes Attributes => values to be update.
-     * @param string|ActiveQuery|Raw $condition The condition to be updated.
-     * @return Executable|bool|null
+     * @param string|Model $table Table name or model.
+     * @param array<string, mixed> $attributes Column => value pairs to update.
+     * @param string|ActiveQuery|Raw $condition WHERE condition.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function update(
-        string|array|Model     $table,
+        string|Model           $table,
         array                  $attributes,
-        string|ActiveQuery|Raw $condition
-    ): Executable|bool|null
+        string|ActiveQuery|Raw $condition,
+        ?string                $connection = null
+    ): Executable|bool
     {
-        try {
-            if ($table instanceof Model) {
-                $connection = $table->getConnection();
-                $table = $table->getTable();
-            }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = new Update($tableName, $attributes, $condition);
 
-            $update = new Update($table, $attributes, $condition);
-
-            return self::$sqlOnly
-                ? $update
-                : $update->setConnection($connection ?? self::$defaultConnection)->execute();
-        } catch (Throwable $exception) {
-            self::$errors[] = $exception->getMessage();
-        }
-        return false;
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Perform UPDATE IGNORE operation
+     * Create an UPDATE IGNORE builder.
      *
-     * @param string|array|Model $table The table name.
-     * @param array $attributes Attributes => values to be update.
-     * @param string|ActiveQuery|Raw $condition The condition to be updated.
-     * @return Executable|bool|null
+     * @param string|Model $table Table name or model.
+     * @param array<string, mixed> $attributes Column => value pairs to update.
+     * @param string|ActiveQuery|Raw $condition WHERE condition.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function updateIgnore(
-        string|array|Model     $table,
+        string|Model           $table,
         array                  $attributes,
-        string|ActiveQuery|Raw $condition
-    ): Executable|bool|null
+        string|ActiveQuery|Raw $condition,
+        ?string                $connection = null
+    ): Executable|bool
     {
-        try {
-            if ($table instanceof Model) {
-                $connection = $table->getConnection();
-                $table = $table->getTable();
-            }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = (new Update($tableName, $attributes, $condition))->ignore();
 
-            $update = (new Update($table, $attributes, $condition))->ignore();
-
-            return self::$sqlOnly
-                ? $update
-                : $update->setConnection($connection ?? self::$defaultConnection)->execute();
-        } catch (Throwable $exception) {
-            self::$errors[] = $exception->getMessage();
-        }
-        return false;
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Perform UPDATE LOW_PRIORITY IGNORE operation
+     * Create an UPDATE LOW_PRIORITY IGNORE builder.
      *
-     * @param string|array|Model $table The table name.
-     * @param array $attributes Attributes => values to be update.
-     * @param string|ActiveQuery|Raw $condition The condition to be updated.
-     * @return Executable|bool|null
+     * @param string|Model $table Table name or model.
+     * @param array<string, mixed> $attributes Column => value pairs to update.
+     * @param string|ActiveQuery|Raw $condition WHERE condition.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function updateLowPriorityIgnore(
-        string|array|Model     $table,
+        string|Model           $table,
         array                  $attributes,
-        string|ActiveQuery|Raw $condition
-    ): Executable|bool|null
+        string|ActiveQuery|Raw $condition,
+        ?string                $connection = null
+    ): Executable|bool
     {
-        try {
-            if ($table instanceof Model) {
-                $connection = $table->getConnection();
-                $table = $table->getTable();
-            }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = (new Update($tableName, $attributes, $condition))->lowPriority()->ignore();
 
-            $update = (new Update($table, $attributes, $condition))->lowPriority()->ignore();
-
-            return self::$sqlOnly
-                ? $update
-                : $update->setConnection($connection ?? self::$defaultConnection)->execute();
-        } catch (Throwable $exception) {
-            self::$errors[] = $exception->getMessage();
-        }
-        return false;
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Perform DELETE operation
+     * Create a DELETE builder.
      *
-     * @param string|Model $table
-     * @param string|ActiveQuery|Raw $condition
-     * @return mixed
+     * @param string|Model $table Table name or model.
+     * @param string|ActiveQuery|Raw $condition WHERE condition.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function delete(
         string|Model           $table,
-        string|ActiveQuery|Raw $condition
-    ): mixed
+        string|ActiveQuery|Raw $condition,
+        ?string                $connection = null
+    ): Executable|bool
     {
-        try {
-            if ($table instanceof Model) {
-                $table = $table->getTable();
-            }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = new Delete($tableName, $condition);
 
-            $delete = new Delete($table, $condition);
-
-            return self::$sqlOnly
-                ? $delete
-                : $delete->setConnection($connection ?? self::$defaultConnection)->execute();
-
-        } catch (Throwable $exception) {
-            self::$errors[] = $exception->getMessage();
-        }
-        return false;
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Perform DELETE IGNORE operation
+     * Create a DELETE IGNORE builder.
      *
-     * @param string|Model $table
-     * @param string|ActiveQuery|Raw $condition
-     * @return mixed
+     * @param string|Model $table Table name or model.
+     * @param string|ActiveQuery|Raw $condition WHERE condition.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function deleteIgnore(
         string|Model           $table,
-        string|ActiveQuery|Raw $condition
-    ): mixed
+        string|ActiveQuery|Raw $condition,
+        ?string                $connection = null
+    ): Executable|bool
     {
-        try {
-            if ($table instanceof Model) {
-                $table = $table->getTable();
-            }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = (new Delete($tableName, $condition))->ignore();
 
-            $delete = (new Delete($table, $condition))->ignore();
-
-            return self::$sqlOnly
-                ? $delete
-                : $delete->setConnection($connection ?? self::$defaultConnection)->execute();
-
-        } catch (Throwable $exception) {
-            self::$errors[] = $exception->getMessage();
-        }
-        return false;
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Perform DELETE QUICK operation
+     * Create a DELETE QUICK builder.
      *
-     * @param string|Model $table
-     * @param string|ActiveQuery|Raw $condition
-     * @return mixed
+     * @param string|Model $table Table name or model.
+     * @param string|ActiveQuery|Raw $condition WHERE condition.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function deleteQuick(
         string|Model           $table,
-        string|ActiveQuery|Raw $condition
-    ): mixed
+        string|ActiveQuery|Raw $condition,
+        ?string                $connection = null
+    ): Executable|bool
     {
-        try {
-            if ($table instanceof Model) {
-                $table = $table->getTable();
-            }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = (new Delete($tableName, $condition))->quick();
 
-            $delete = (new Delete($table, $condition))->quick();
-
-            return self::$sqlOnly
-                ? $delete
-                : $delete->setConnection($connection ?? self::$defaultConnection)->execute();
-
-        } catch (Throwable $exception) {
-            self::$errors[] = $exception->getMessage();
-        }
-        return false;
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Perform DELETE QUICK IGNORE operation
+     * Create a DELETE QUICK IGNORE builder.
      *
-     * @param string|Model $table
-     * @param string|ActiveQuery|Raw $condition
-     * @return mixed
+     * @param string|Model $table Table name or model.
+     * @param string|ActiveQuery|Raw $condition WHERE condition.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function deleteQuickIgnore(
         string|Model           $table,
-        string|ActiveQuery|Raw $condition
-    ): mixed
+        string|ActiveQuery|Raw $condition,
+        ?string                $connection = null
+    ): Executable|bool
     {
-        try {
-            if ($table instanceof Model) {
-                $table = $table->getTable();
-            }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = (new Delete($tableName, $condition))->quick()->ignore();
 
-            $delete = (new Delete($table, $condition))->quick()->ignore();
-
-            return self::$sqlOnly
-                ? $delete
-                : $delete->setConnection($connection ?? self::$defaultConnection)->execute();
-
-        } catch (Throwable $exception) {
-            self::$errors[] = $exception->getMessage();
-        }
-        return false;
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Perform DELETE LOW_PRIORITY QUICK IGNORE operation
+     * Create a DELETE LOW_PRIORITY QUICK IGNORE builder.
      *
-     * @param string|Model $table
-     * @param string|ActiveQuery|Raw $condition
-     * @return mixed
+     * @param string|Model $table Table name or model.
+     * @param string|ActiveQuery|Raw $condition WHERE condition.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
      */
     public static function deleteLowPriorityQuickIgnore(
         string|Model           $table,
-        string|ActiveQuery|Raw $condition
-    ): mixed
+        string|ActiveQuery|Raw $condition,
+        ?string                $connection = null
+    ): Executable|bool
     {
-        try {
-            if ($table instanceof Model) {
-                $table = $table->getTable();
-            }
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = (new Delete($tableName, $condition))->lowPriority()->quick()->ignore();
 
-            $delete = (new Delete($table, $condition))->lowPriority()->quick()->ignore();
-
-            return self::$sqlOnly
-                ? $delete
-                : $delete->setConnection($connection ?? self::$defaultConnection)->execute();
-
-        } catch (Throwable $exception) {
-            self::$errors[] = $exception->getMessage();
-        }
-        return false;
+        return self::executeOrReturn($builder, $connectionName);
     }
 
     /**
-     * Execute raw.
+     * Execute raw SQL (INSERT, UPDATE, DELETE).
      *
      * @param string $sql The SQL query statement.
-     * @param array $binds The bind values for the SQL query statement.
-     * @param string|null $connection The connection to be used.
-     * @return bool|null
+     * @param array<int, mixed> $binds The bind values.
+     * @param string|null $connection The connection name.
+     * @return bool
+     * @throws QueryException
      */
-    public static function raw(string $sql, array $binds = [], ?string $connection = null): ?bool
+    public static function raw(string $sql, array $binds = [], ?string $connection = null): bool
     {
-        return (new Raw($sql, $binds))->setConnection($connection ?? self::$defaultConnection)->execute();
+        return (new Raw($sql, $binds))
+            ->withConnection($connection ?? Connection::getDefaultName())
+            ->execute();
+    }
+
+    /**
+     * Execute raw SQL and return results (SELECT).
+     *
+     * @param string $sql The SQL query statement.
+     * @param array<int, mixed> $binds The bind values.
+     * @param string|null $connection The connection name.
+     * @return array<int, array<string, mixed>>
+     * @throws QueryException
+     */
+    public static function query(string $sql, array $binds = [], ?string $connection = null): array
+    {
+        return (new Raw($sql, $binds))
+            ->withConnection($connection ?? Connection::getDefaultName())
+            ->fetchAll();
+    }
+
+    /**
+     * Perform INSERT ... ON DUPLICATE KEY UPDATE (upsert).
+     *
+     * @param string|Model $table Table name or model.
+     * @param array<string, mixed> $attributes Column => value pairs to insert.
+     * @param array<int|string, mixed> $updateColumns Columns to update on duplicate. Numeric array uses VALUES(), assoc sets explicit values.
+     * @param string|null $connection Connection name override.
+     * @return Executable|bool
+     */
+    public static function upsert(
+        string|Model $table,
+        array        $attributes,
+        array        $updateColumns = [],
+        ?string      $connection = null
+    ): Executable|bool
+    {
+        [$tableName, $connectionName] = self::resolveTable($table, $connection);
+        $builder = new Upsert($tableName, $attributes, $updateColumns);
+
+        return self::executeOrReturn($builder, $connectionName);
+    }
+
+    /**
+     * Resolve table name and connection from input.
+     *
+     * @param string|Model $table The table or model.
+     * @param string|null $connection The connection name override.
+     * @return array{0: string, 1: string}
+     */
+    private static function resolveTable(string|Model $table, ?string $connection = null): array
+    {
+        if ($table instanceof Model) {
+            return [$table->getTable(), $connection ?? $table->getConnectionName()];
+        }
+
+        return [$table, $connection ?? Connection::getDefaultName()];
+    }
+
+    /**
+     * Execute a builder or return it in sqlOnly mode.
+     *
+     * @param Insert|Update|Delete $builder The builder to execute.
+     * @param string $connectionName The connection name.
+     * @return Executable|bool
+     */
+    private static function executeOrReturn(Insert|Update|Delete|Upsert $builder, string $connectionName): Executable|bool
+    {
+        if (self::$sqlOnly) {
+            return $builder;
+        }
+
+        return $builder->withConnection($connectionName)->execute();
     }
 }

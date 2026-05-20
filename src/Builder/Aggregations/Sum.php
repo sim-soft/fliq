@@ -1,6 +1,6 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder\Aggregations;
+namespace Simsoft\DB\Builder\Aggregations;
 
 /**
  * Sum Builder Class.

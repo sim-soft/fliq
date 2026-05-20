@@ -1,9 +1,9 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Interfaces;
+namespace Simsoft\DB\Interfaces;
 
 /**
- * Deletable trait.
+ * Updatable interface.
  */
 interface Updatable
 {
@@ -17,14 +17,14 @@ interface Updatable
     /**
      * Get ORDER SQL statement, the statement should start with 'ORDER BY'.
      *
-     * @return string|null Return null if order by is not defined..
+     * @return string|null Return null if order by is not defined.
      */
     public function getOrderSQL(): ?string;
 
     /**
      * Get LIMIT SQL statement, the statement should start with 'LIMIT'.
      *
-     * @return string|null Return null if limit is not defined.
+     * @return string|null Return null if the limit is not defined.
      */
     public function getLimitSQL(): ?string;
 }

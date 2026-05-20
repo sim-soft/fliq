@@ -1,12 +1,13 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder\Clauses;
+namespace Simsoft\DB\Builder\Clauses;
 
-use Simsoft\DB\MySQL\Builder\Raw;
+use Simsoft\DB\Builder\Raw;
 
 /**
- * Class SelectClause
+ * Class SelectClause.
  *
+ * Represents a SELECT column list.
  */
 class SelectClause extends Clause
 {
@@ -17,10 +18,9 @@ class SelectClause extends Clause
     {
         $sql = [];
         foreach ($this->attribute as $attribute) {
-            $sql[] = match (true) {
-                $attribute instanceof Raw => (string)$attribute,
-                default => $this->queryAttribute($attribute),
-            };
+            $sql[] = $attribute instanceof Raw
+                ? (string)$attribute
+                : $this->queryAttribute($attribute);
         }
         return implode(', ', $sql);
     }

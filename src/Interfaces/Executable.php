@@ -1,6 +1,6 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Interfaces;
+namespace Simsoft\DB\Interfaces;
 
 /**
  * Executable interface.
@@ -18,7 +18,7 @@ interface Executable
     /**
      * Get bind values for the SQL statement.
      *
-     * @return array|null
+     * @return array<int, mixed>|null
      */
     public function getBinds(): ?array;
 }

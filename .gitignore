@@ -57,55 +57,27 @@ Thumbs.db
 nbproject/
 
 *.icloud
+*.cache
 
 # Ignore everything inside .kiro by default
-
 .kiro/*
 
-
-
 # Keep important persistent AI/project knowledge
-
 !.kiro/steering/
-
 !.kiro/steering/**
-
-
-
 !.kiro/specs/
-
 !.kiro/specs/**
-
-
-
 !.kiro/context/
-
 !.kiro/context/**
-
-
-
 !.kiro/config/
-
 !.kiro/config/**
-
-
-
 !.kiro/hooks/
-
 !.kiro/hooks/**
 
-
-
 # Ignore noisy/generated/runtime data
-
 .kiro/logs/
-
 .kiro/cache/
-
 .kiro/tmp/
-
 .kiro/temp/
-
 .kiro/sessions/
-
 .kiro/history/

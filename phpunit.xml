@@ -6,8 +6,13 @@
          failOnDeprecation="false"
          displayDetailsOnTestsThatTriggerDeprecations="false">
     <testsuites>
-        <testsuite name="default">
-            <directory>tests</directory>
+        <testsuite name="unit">
+            <directory>tests/Query</directory>
+            <file>tests/DBTest.php</file>
+            <file>tests/ModelTest.php</file>
+        </testsuite>
+        <testsuite name="integration">
+            <directory>tests/Integration</directory>
         </testsuite>
     </testsuites>
     <source>
@@ -15,4 +20,12 @@
             <directory>src</directory>
         </include>
     </source>
+    <php>
+        <!-- Set these for integration tests. Override via environment variables. -->
+        <env name="DB_HOST" value="127.0.0.1" force="false"/>
+        <env name="DB_PORT" value="3306" force="false"/>
+        <env name="DB_DATABASE" value="sample_db" force="false"/>
+        <env name="DB_USERNAME" value="root" force="false"/>
+        <env name="DB_PASSWORD" value="" force="false"/>
+    </php>
 </phpunit>

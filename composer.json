@@ -1,12 +1,24 @@
 {
-  "name": "simsoft/db-mysql",
-  "description": "ORM/ Active record inspired by Yii2 ActiveRecord",
+  "name": "simsoft/fliq",
+  "description": "FLIQ — Fast, Lightweight, Independent Query Builder. High-performance Active Record ORM for MySQL/MariaDB, PostgreSQL, and SQLite. Zero-allocation query builder, nested eager loading, soft deletes, and N+1 detection built-in.",
   "keywords": [
-    "ORM",
+    "orm",
+    "active-record",
+    "query-builder",
+    "database",
+    "mysql",
+    "mariadb",
+    "postgresql",
+    "pdo",
+    "model",
+    "eloquent-alternative",
+    "eager-loading",
+    "soft-delete",
     "persistence",
-    "Active Record"
+    "php-orm"
   ],
   "type": "library",
+  "version": "1.1.0",
   "license": "MIT",
   "authors": [
     {
@@ -17,36 +29,40 @@
   ],
   "minimum-stability": "stable",
   "require": {
-    "php": "^8",
-    "ext-pdo": "*",
-    "ext-mysqli": "*",
-    "simsoft/validator": "^1.0"
+    "php": "^8.1",
+    "ext-pdo": "*"
   },
   "require-dev": {
-    "phpunit/phpunit": "^9",
-    "phpmd/phpmd": "^2.13",
-    "phpstan/phpstan": "^1.10",
-    "squizlabs/php_codesniffer": "^3.7"
+    "phpunit/phpunit": "^11.5",
+    "phpmd/phpmd": "^2.15",
+    "phpstan/phpstan": "^2.1",
+    "squizlabs/php_codesniffer": "^3.13"
+  },
+  "suggest": {
+    "ext-mysqli": "Required for MySQLi driver support",
+    "simsoft/validator": "For model validation support"
   },
   "autoload": {
     "psr-4": {
-      "Simsoft\\DB\\MySQL\\": "src"
+      "Simsoft\\DB\\": "src"
     }
   },
   "autoload-dev": {
     "psr-4": {
-      "Models\\": "tests/Models"
+      "Models\\": "tests/Models",
+      "Integration\\": "tests/Integration"
     }
   },
   "config": {
-    "optimize-autoloader": true
+    "optimize-autoloader": true,
+    "sort-packages": true
   },
   "scripts": {
     "qc": [
       "phpstan analyse --memory-limit=512M",
       "phpmd src text phpmd.xml"
     ],
-    "qc-fix": "php-cs-fixer fix src --config=php-cs-fixer.php",
+    "qc-fix": "phpcbf --standard=PSR12 src",
     "test": "phpunit tests"
   }
 }

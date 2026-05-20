@@ -1,6 +1,6 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Traits;
+namespace Simsoft\DB\Traits;
 
 /**
  * LowPriority trait
@@ -12,8 +12,10 @@ trait LowPriority
 
     /**
      * Enable LOW PRIORITY modifier.
+     *
+     * @return static
      */
-    public function lowPriority(): self
+    public function lowPriority(): static
     {
         $this->lowPriority = true;
         return $this;

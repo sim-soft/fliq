@@ -1,90 +1,288 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Drivers;
+namespace Simsoft\DB\Drivers;
 
 use PDO;
 use PDOException;
-use Simsoft\DB\MySQL\Interfaces\Executable;
+use PDOStatement;
+use Simsoft\DB\Interfaces\Executable;
 
 /**
- * @references https://phpdelusions.net/pdo_examples/connect_to_mysql
+ * PDO database driver.
+ *
+ * MySQL connection implementation using PHP PDO extension.
+ * Features: prepared statement caching, persistent connections.
  */
 class PDODriver extends Driver
 {
+    /** @var array<int, string> Required configuration keys */
     protected array $required = ['host', 'database', 'username', 'password'];
-    protected array $default = ['port' => 3306, 'charset' => 'utf8mb4', 'collation' => 'utf8mb4_unicode_ci'];
+
+    /** @var array<string, mixed> Default configuration values */
+    protected array $default = [
+        'port' => 3306,
+        'charset' => 'utf8mb4',
+        'collation' => 'utf8mb4_unicode_ci',
+        'persistent' => false,
+        'timeout' => 5,
+        'statement_cache' => true,
+        'statement_cache_size' => 100,
+    ];
+
+    /** @var PDO|null The PDO connection instance */
     protected ?PDO $connection = null;
 
-    /** {@inheritdoc } */
+    /** @var array<string, PDOStatement> Prepared statement cache */
+    private array $statementCache = [];
+
+    /** @var int Maximum cached statements before eviction */
+    private int $maxCacheSize = 100;
+
+    /** @var bool Whether statement caching is enabled */
+    private bool $cacheEnabled = true;
+
+    /**
+     * {@inheritdoc}
+     */
     protected function connect(): void
     {
         try {
+            $this->cacheEnabled = (bool)($this->config['statement_cache'] ?? true);
+            $this->maxCacheSize = (int)($this->config['statement_cache_size'] ?? 100);
+
+            $dsn = 'mysql:' . implode(';', [
+                'host=' . $this->config['host'],
+                'port=' . $this->config['port'],
+                'dbname=' . $this->config['database'],
+                'charset=' . $this->config['charset'],
+            ]);
+
+            $options = [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false,
+                PDO::ATTR_STRINGIFY_FETCHES => false,
+                PDO::ATTR_TIMEOUT => (int)$this->config['timeout'],
+                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES '{$this->config['charset']}' COLLATE '{$this->config['collation']}'",
+            ];
+
+            if (!empty($this->config['persistent'])) {
+                $options[PDO::ATTR_PERSISTENT] = true;
+            }
+
             $this->connection = new PDO(
-                'mysql:' .
-                implode(';', [
-                    'host=' . $this->config['host'],
-                    'port=' . $this->config['port'],
-                    'dbname=' . $this->config['database'],
-                    'charset=' . $this->config['charset'],
-                ]),
+                $dsn,
                 $this->config['username'],
                 $this->config['password'],
-                [
-                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                    PDO::ATTR_EMULATE_PREPARES => false,
-                    PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES '{$this->config['charset']}' COLLATE '{$this->config['collation']}'",
-                ]
+                $options
             );
-
         } catch (PDOException $exception) {
             $this->addError($exception->getMessage());
         }
     }
 
-    /** {@inheritdoc } */
-    public function execute(Executable $query): bool
+    /**
+     * Check if the connection is still alive.
+     *
+     * @return bool
+     */
+    public function ping(): bool
     {
-        $sql = $query->getSQL();
-        if ($query->getBinds() === null) {
-            $stmt = $this->connection->query($sql);
-            if ($stmt === false) {
-                return false;
-            }
-
-            return $stmt->fetchAll();
+        if ($this->connection === null) {
+            return false;
         }
 
-        $stmt = $this->connection->prepare($sql);
-        return $stmt->execute($query->getBinds());
+        try {
+            $stmt = $this->connection->query('SELECT 1');
+            return $stmt !== false;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
-    /** {@inheritdoc } */
+    /**
+     * Reconnect if the connection has been lost.
+     *
+     * @return void
+     */
+    public function reconnectIfNeeded(): void
+    {
+        if ($this->connection === null || !$this->ping()) {
+            $this->statementCache = [];
+            $this->connect();
+        }
+    }
+
+    /**
+     * Get the active PDO connection, throwing if null.
+     *
+     * @return PDO
+     * @throws \RuntimeException If the connection is not established.
+     */
+    private function requireConnection(): PDO
+    {
+        if ($this->connection === null) {
+            throw new \RuntimeException('Database connection failed');
+        }
+        return $this->connection;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function execute(Executable $query): bool
+    {
+        $this->reconnectIfNeeded();
+        $conn = $this->requireConnection();
+
+        $sql = $query->getSQL();
+        $binds = $query->getBinds();
+
+        if ($binds === null) {
+            return $conn->exec($sql) !== false;
+        }
+
+        $stmt = $this->prepareStatement($sql);
+        return $stmt->execute($binds);
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @return array<int, array<string, mixed>>
+     */
     public function query(Executable $query): array
     {
-        $stmt = $this->connection->prepare($query->getSQL());
-        if (!$stmt->execute($query->getBinds())) {
-            $this->addError($stmt->errorCode() . ': ' . json_encode($stmt->errorInfo()));
-        }
+        $this->reconnectIfNeeded();
+
+        $sql = $query->getSQL();
+        $binds = $query->getBinds();
+
+        $stmt = $this->prepareStatement($sql);
+        $stmt->execute($binds ?? []);
+
         return $stmt->fetchAll();
     }
 
-    /** {@inheritdoc } */
+    /**
+     * {@inheritdoc}
+     */
     public function lastInsertId(): false|string
     {
-        return $this->connection->lastInsertId();
+        return $this->requireConnection()->lastInsertId();
     }
 
-    /** {@inheritdoc } */
+    /**
+     * {@inheritdoc}
+     */
     public function transaction(callable $callback): bool
     {
-        if ($this->connection->beginTransaction()) {
+        $conn = $this->requireConnection();
+        $conn->beginTransaction();
+
+        try {
             if ($callback() === true) {
-                return $this->connection->commit();
+                return $conn->commit();
             }
-            $this->connection->rollBack();
+
+            $conn->rollBack();
+            return false;
+        } catch (\Throwable $e) {
+            $conn->rollBack();
+            throw $e;
         }
-        return false;
+    }
+
+    /**
+     * Get or create a cached prepared statement.
+     *
+     * When caching is disabled, always creates a fresh statement.
+     *
+     * @param string $sql The SQL to prepare.
+     * @return PDOStatement
+     */
+    private function prepareStatement(string $sql): PDOStatement
+    {
+        $conn = $this->requireConnection();
+
+        if (!$this->cacheEnabled) {
+            return $conn->prepare($sql);
+        }
+
+        if (isset($this->statementCache[$sql])) {
+            return $this->statementCache[$sql];
+        }
+
+        if (count($this->statementCache) >= $this->maxCacheSize) {
+            array_shift($this->statementCache);
+        }
+
+        $stmt = $conn->prepare($sql);
+        $this->statementCache[$sql] = $stmt;
+
+        return $stmt;
+    }
+
+    /**
+     * Clear the prepared statement cache.
+     *
+     * @return void
+     */
+    public function clearStatementCache(): void
+    {
+        $this->statementCache = [];
+    }
+
+    /**
+     * Enable statement caching.
+     *
+     * @return void
+     */
+    public function enableStatementCache(): void
+    {
+        $this->cacheEnabled = true;
+    }
+
+    /**
+     * Disable statement caching and clear existing cache.
+     *
+     * @return void
+     */
+    public function disableStatementCache(): void
+    {
+        $this->cacheEnabled = false;
+        $this->statementCache = [];
+    }
+
+    /**
+     * Check if statement caching is enabled.
+     *
+     * @return bool
+     */
+    public function isStatementCacheEnabled(): bool
+    {
+        return $this->cacheEnabled;
+    }
+
+    /**
+     * Set the maximum statement cache size.
+     *
+     * @param int $size Maximum number of cached statements.
+     * @return void
+     */
+    public function setStatementCacheSize(int $size): void
+    {
+        $this->maxCacheSize = $size;
+    }
+
+    /**
+     * Get the underlying PDO connection.
+     *
+     * @return PDO|null
+     */
+    public function getPdo(): ?PDO
+    {
+        return $this->connection;
     }
 
     /**
@@ -92,6 +290,7 @@ class PDODriver extends Driver
      */
     public function __destruct()
     {
+        $this->statementCache = [];
         $this->connection = null;
     }
 }

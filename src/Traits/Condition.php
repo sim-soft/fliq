@@ -1,9 +1,9 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Traits;
+namespace Simsoft\DB\Traits;
 
-use Simsoft\DB\MySQL\Builder\ActiveQuery;
-use Simsoft\DB\MySQL\Builder\Raw;
+use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Builder\Raw;
 
 /**
  * Condition trait.
@@ -18,10 +18,10 @@ trait Condition
     /**
      * Set query condition
      *
-     * @param string|ActiveQuery|Raw|null $condition
-     * return $this
+     * @param string|ActiveQuery|Raw|null $condition The query condition.
+     * @return static
      */
-    public function condition(string|ActiveQuery|Raw|null $condition): self
+    public function condition(string|ActiveQuery|Raw|null $condition): static
     {
         $this->condition = $condition;
         return $this;
@@ -34,7 +34,6 @@ trait Condition
      */
     public function getCondition(): ?string
     {
-        $condition = null;
         if ($this->condition instanceof ActiveQuery) {
             $condition = implode(' ', array_filter([
                 $this->condition->getWhereSQL(),
@@ -44,14 +43,21 @@ trait Condition
             if ($this->condition->getBinds()) {
                 $this->appendBinds($this->condition->getBinds());
             }
-        } elseif ($this->condition instanceof Raw) {
+            return $condition;
+        }
+
+        if ($this->condition instanceof Raw) {
             $condition = $this->condition->getSQL();
             if ($this->condition->getBinds()) {
                 $this->appendBinds($this->condition->getBinds());
             }
-        } elseif (is_string($this->condition) && $this->condition != '') {
-            $condition = 'WHERE ' . trim($this->condition);
+            return $condition;
         }
-        return $condition;
+
+        if (is_string($this->condition) && $this->condition !== '') {
+            return 'WHERE ' . trim($this->condition);
+        }
+
+        return null;
     }
 }

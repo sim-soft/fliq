@@ -1,6 +1,6 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Traits;
+namespace Simsoft\DB\Traits;
 
 /**
  * PlaceHolder Trait
@@ -15,9 +15,10 @@ trait PlaceHolder
     /**
      * Set placeholder
      *
-     * @param string $placeHolder The place holder value.
+     * @param string $placeHolder The placeholder value.
+     * @return static
      */
-    public function setPlaceHolder(string $placeHolder): self
+    public function setPlaceHolder(string $placeHolder): static
     {
         $this->placeHolder = $placeHolder;
         return $this;

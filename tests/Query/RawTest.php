@@ -2,12 +2,14 @@
 
 namespace Query;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use Simsoft\DB\MySQL\Builder\Raw;
+use Simsoft\DB\Builder\Raw;
 
 class RawTest extends TestCase
 {
-    public function dataProvider(): array
+    /** @return array<int, array<mixed>> */
+    public static function dataProvider(): array
     {
         return [
             [new Raw('SELECT * FROM users'), 'SELECT * FROM users', null],
@@ -19,9 +21,10 @@ class RawTest extends TestCase
     }
 
     /**
-     * @dataProvider dataProvider
+     * @param array<int, mixed>|null $expectedBinds
      */
-    public function testRaw(Raw $q, string $expected, ?array $expectedBinds)
+    #[DataProvider('dataProvider')]
+    public function testRaw(Raw $q, string $expected, ?array $expectedBinds): void
     {
         $this->assertEqualsIgnoringCase($expected, $q->getSQL());
         $this->assertEqualsIgnoringCase($expected, $q);

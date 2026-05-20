@@ -1,8 +1,8 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder\Clauses;
+namespace Simsoft\DB\Builder\Clauses;
 
-use Simsoft\DB\MySQL\Builder\Raw;
+use Simsoft\DB\Builder\Raw;
 
 /**
  * Class HavingClause

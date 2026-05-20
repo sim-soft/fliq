@@ -2,13 +2,15 @@
 
 namespace Query;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use Simsoft\DB\MySQL\Builder\{Raw};
-use Simsoft\DB\MySQL\Builder\ActiveQuery;
+use Simsoft\DB\Builder\{Raw};
+use Simsoft\DB\Builder\ActiveQuery;
 
 class SubQueryTest extends TestCase
 {
-    public function dataProvider(): array
+    /** @return array<string, array<mixed>> */
+    public static function dataProvider(): array
     {
         return [
             'QUERY FROM ActiveQuery TABLE' => [(new ActiveQuery())
@@ -87,9 +89,10 @@ class SubQueryTest extends TestCase
     }
 
     /**
-     * @dataProvider dataProvider
+     * @param array<int, mixed>|null $expectedBinds
      */
-    public function testRaw(ActiveQuery $query, string $expected, ?array $expectedBinds)
+    #[DataProvider('dataProvider')]
+    public function testRaw(ActiveQuery $query, string $expected, ?array $expectedBinds): void
     {
         $this->assertEqualsIgnoringCase($expected, (string)$query);
         $this->assertEquals($expectedBinds, $query->getBinds());

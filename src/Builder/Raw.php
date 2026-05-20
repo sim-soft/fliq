@@ -1,13 +1,14 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder;
+namespace Simsoft\DB\Builder;
 
-use Simsoft\DB\MySQL\Interfaces\Executable;
-use Simsoft\DB\MySQL\Traits\Execute;
+use Simsoft\DB\Interfaces\Executable;
+use Simsoft\DB\Traits\Execute;
 
 /**
- * Raw query class
+ * Raw query class.
  *
+ * Wraps a raw SQL expression with optional parameter bindings.
  */
 class Raw implements Executable
 {
@@ -17,7 +18,7 @@ class Raw implements Executable
      * Constructor.
      *
      * @param string $sql The SQL statement.
-     * @param array|null $binds The bind values for the SQL statement.
+     * @param array<int, mixed>|null $binds The bind values for the SQL statement.
      */
     public function __construct(
         protected string $sql,
@@ -27,7 +28,7 @@ class Raw implements Executable
     }
 
     /**
-     * {@inheritdoc }
+     * {@inheritdoc}
      */
     public function getSQL(): string
     {
@@ -35,15 +36,17 @@ class Raw implements Executable
     }
 
     /**
-     * {@inheritdoc }
+     * {@inheritdoc}
+     *
+     * @return array<int, mixed>|null
      */
     public function getBinds(): ?array
     {
-        return $this->binds === null ? [] : $this->binds;
+        return $this->binds;
     }
 
     /**
-     * Get default SQL statement.
+     * Get SQL statement as string.
      *
      * @return string
      */
@@ -52,14 +55,13 @@ class Raw implements Executable
         return $this->getSQL();
     }
 
-    public function __invoke(): bool|array
-    {
-        return $this->getBinds() === null ? $this->execute($this) : $this->get();
-    }
-
-    public function get(): array
+    /**
+     * Execute the raw query and return results.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function fetchAll(): array
     {
         return $this->query($this);
     }
-
 }

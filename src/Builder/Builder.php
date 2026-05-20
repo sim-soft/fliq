@@ -1,12 +1,12 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder;
+namespace Simsoft\DB\Builder;
 
-use Simsoft\DB\MySQL\Interfaces\Executable;
-use Simsoft\DB\MySQL\Traits\Binds;
-use Simsoft\DB\MySQL\Traits\Execute;
-use Simsoft\DB\MySQL\Traits\PlaceHolder;
-use Simsoft\DB\MySQL\Traits\Qualifier;
+use Simsoft\DB\Interfaces\Executable;
+use Simsoft\DB\Traits\Binds;
+use Simsoft\DB\Traits\Execute;
+use Simsoft\DB\Traits\PlaceHolder;
+use Simsoft\DB\Traits\Qualifier;
 
 /**
  * Query Class

@@ -1,6 +1,6 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder\Clauses;
+namespace Simsoft\DB\Builder\Clauses;
 
 /**
  * Class OrderByClause
@@ -11,7 +11,7 @@ class OrderByClause extends Clause
     /** @var string Default direction. Default ASC */
     protected string $defaultDirection = 'ASC';
 
-    /** @var array Allowed directions */
+    /** @var array<int, string> Allowed directions */
     protected array $allowedDirections = ['ASC', 'DESC'];
 
     /**

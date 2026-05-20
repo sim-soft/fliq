@@ -1,10 +1,10 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder;
+namespace Simsoft\DB\Builder;
 
-use Simsoft\DB\MySQL\Traits\Condition;
-use Simsoft\DB\MySQL\Traits\Ignore;
-use Simsoft\DB\MySQL\Traits\LowPriority;
+use Simsoft\DB\Traits\Condition;
+use Simsoft\DB\Traits\Ignore;
+use Simsoft\DB\Traits\LowPriority;
 
 /**
  * Update Query Builder Class
@@ -13,14 +13,14 @@ class Update extends Builder
 {
     use LowPriority, Ignore, Condition;
 
-    /** @var array */
+    /** @var array<int, string> */
     protected array $set = [];
 
     /**
      * Constructor
      *
      * @param string $table The table name.
-     * @param array $attributes The attributes => values to be updated.
+     * @param array<string, mixed> $attributes The attributes => values to be updated.
      * @param string|ActiveQuery|Raw|null $condition
      */
     public function __construct(
@@ -36,20 +36,26 @@ class Update extends Builder
     }
 
     /**
-     * Set counter
+     * Set counter.
      *
-     * @return $this
+     * @param string $attribute The attribute to increment/decrement.
+     * @param int|float $value The counter value.
+     * @return static
      */
     public function setCounter(string $attribute, int|float $value): static
     {
-        if ($value) {
-            $operator = $value > 0 ? '+' : '-';
-            $this->set[] = "`$attribute` = `$attribute` $operator {$this->getPlaceHolder()}";
-            $this->appendBinds(abs($value));
-        } else {
-            $this->set[] = "`$attribute` = {$this->getPlaceHolder()}";
+        $quoted = $this->quote($attribute);
+
+        if ($value == 0) {
+            $this->set[] = "$quoted = {$this->getPlaceHolder()}";
             $this->appendBinds($value);
+            return $this;
         }
+
+        $operator = $value > 0 ? '+' : '-';
+        $this->set[] = "$quoted = $quoted $operator {$this->getPlaceHolder()}";
+        $this->appendBinds(abs($value));
+
         return $this;
     }
 
@@ -60,7 +66,7 @@ class Update extends Builder
     {
         $data = [];
         foreach ($this->attributes as $attribute => $value) {
-            $data[] = "`$attribute` = {$this->getPlaceHolder()}";
+            $data[] = $this->quote($attribute) . " = {$this->getPlaceHolder()}";
             $this->appendBinds($value);
         }
 
@@ -70,7 +76,7 @@ class Update extends Builder
             'UPDATE',
             $this->lowPriorityModifier(),
             $this->ignoreModifier(),
-            "`$this->table`",
+            $this->quote($this->table),
             'SET ' . ($sets ? implode(', ', $sets) : '1 = 1'),
             $this->getCondition(),
         ]));

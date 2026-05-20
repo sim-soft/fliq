@@ -1,76 +1,110 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Traits;
+namespace Simsoft\DB\Traits;
 
-use Exception;
-use Simsoft\DB\MySQL\Connection;
-use Simsoft\DB\MySQL\Drivers\Driver;
-use Simsoft\DB\MySQL\Interfaces\Executable;
+use Simsoft\DB\Cache\QueryCache;
+use Simsoft\DB\Connection;
+use Simsoft\DB\Drivers\Driver;
+use Simsoft\DB\Exceptions\ConnectionException;
+use Simsoft\DB\Exceptions\QueryException;
+use Simsoft\DB\Interfaces\Executable;
+use Simsoft\DB\QueryLogger;
+use Simsoft\DB\QueryMonitor;
 use Throwable;
 
 /**
- * Execute trait
+ * Execute trait.
+ *
+ * Provides query execution capabilities to builder classes.
  */
 trait Execute
 {
-    /** @var null|string The database name */
+    /** @var null|string The database connection name */
     protected ?string $connection = null;
 
     /**
-     * Set database connection
+     * Set database connection.
      *
-     * @param string|null $connect The database connection name
+     * @param string|null $connect The database connection name.
+     * @return static
      */
-    public function setConnection(?string $connect = null): self
+    public function withConnection(?string $connect = null): static
     {
         $this->connection = $connect;
+
+        // Invalidate cached grammar when connection changes
+        if (property_exists($this, 'grammar')) {
+            $this->grammar = null;
+        }
+
         return $this;
     }
 
     /**
-     * Rendering full SQL statement if it is debug mode.
+     * Alias for withConnection().
      *
-     * @param string $error Query error.
-     * @param Executable $query Executable object.
-     * @return void
+     * @param string $connection The database connection name.
+     * @return static
      */
-    protected function renderSQLDebug(string $error, Executable $query): void
+    public function on(string $connection): static
     {
-        debug_print_backtrace();
-        echo "$error\n";
-        echo get_called_class() . ":'{$query->getSQL()}' \n";
-        echo '<== Bind values: ';
-        var_dump($query->getBinds());
+        return $this->withConnection($connection);
+    }
+
+    /**
+     * Get the connection name.
+     *
+     * @return string|null
+     */
+    public function getConnectionName(): ?string
+    {
+        return $this->connection;
     }
 
     /**
      * Get connection's driver.
      *
-     * @return Driver|null
+     * @param string $type Connection type: 'read' or 'write'. Default: 'write'.
+     * @return Driver
+     * @throws ConnectionException
      */
-    protected function getConnection(): ?Driver
+    protected function getDriver(string $type = 'write'): Driver
     {
-        if (is_string($this->connection)) {
-            return Connection::get($this->connection);
-        }
-        return null;
+        $name = $this->connection ?? Connection::getDefaultName();
+        return Connection::get($name, $type);
     }
 
     /**
-     * Execute SQL statement.
+     * Execute SQL statement (INSERT, UPDATE, DELETE).
+     *
+     * Routes to the write connection when read/write splitting is configured.
      *
      * @param Executable|null $query The SQL query object.
-     * @return array|bool|null
+     * @return bool
+     * @throws QueryException
      */
-    public function execute(?Executable $query = null): array|bool|null
+    public function execute(?Executable $query = null): bool
     {
-        try {
-            return $this->getConnection()->execute($query ? clone $query : $this);
-        } catch (Throwable $exception) {
-            $this->renderSQLDebug($exception->getMessage(), $query ?? $this);
-        }
+        $target = $query ? clone $query : $this;
 
-        return false;
+        try {
+            if (QueryMonitor::isEnabled()) {
+                QueryMonitor::recordQuery($target->getSQL());
+            }
+
+            $startTime = QueryLogger::isEnabled() ? microtime(true) : 0.0;
+            $result = $this->getDriver('write')->execute($target);
+
+            if (QueryLogger::isEnabled()) {
+                QueryLogger::logQuery($target->getSQL(), $target->getBinds(), $startTime);
+            }
+
+            return $result;
+        } catch (ConnectionException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            throw QueryException::fromQuery($exception->getMessage(), $target);
+        }
     }
 
     /**
@@ -80,23 +114,96 @@ trait Execute
      */
     public function getLastInsertId(): ?string
     {
-        $id = $this->getConnection()->lastInsertId();
-        return $id === false ? null : $id;
+        $result = $this->getDriver('write')->lastInsertId();
+
+        return $result === false ? null : $result;
     }
 
     /**
-     * Execute SQL statement.
+     * Execute SQL query and return results (SELECT).
+     *
+     * When caching is enabled (cacheTtl > 0 and QueryCache driver is set),
+     * results are stored and retrieved from cache.
      *
      * @param Executable|null $query The SQL query object.
-     * @return array
+     * @return array<int, array<string, mixed>>
+     * @throws QueryException
      */
     public function query(?Executable $query = null): array
     {
-        try {
-            return (array)$this->getConnection()?->query($query ? clone $query : $this);
-        } catch (Throwable $exception) {
-            $this->renderSQLDebug($exception->getMessage(), $query ?? $this);
+        $target = $query ? clone $query : $this;
+
+        $cached = $this->getCachedResult($target);
+        if ($cached !== null) {
+            return $cached;
         }
-        return [];
+
+        try {
+            if (QueryMonitor::isEnabled()) {
+                QueryMonitor::recordQuery($target->getSQL());
+            }
+
+            $startTime = QueryLogger::isEnabled() ? microtime(true) : 0.0;
+            $result = $this->getDriver('read')->query($target);
+
+            if (QueryLogger::isEnabled()) {
+                QueryLogger::logQuery($target->getSQL(), $target->getBinds(), $startTime);
+            }
+
+            $this->storeCachedResult($target, $result);
+
+            return $result;
+        } catch (ConnectionException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            throw QueryException::fromQuery($exception->getMessage(), $target);
+        }
+    }
+
+    /**
+     * Attempt to retrieve a cached query result.
+     *
+     * @param Executable $target The query to check cache for.
+     * @return array<int, array<string, mixed>>|null Cached result or null if not cached.
+     */
+    private function getCachedResult(Executable $target): ?array
+    {
+        $cacheTtl = property_exists($target, 'cacheTtl') ? $target->cacheTtl : 0;
+        if ($cacheTtl <= 0 || !QueryCache::isEnabled()) {
+            return null;
+        }
+
+        $driver = QueryCache::getDriver();
+        if ($driver === null) {
+            return null;
+        }
+
+        $key = QueryCache::generateKey($target->getSQL(), $target->getBinds());
+        $cached = $driver->get($key);
+
+        return is_array($cached) ? $cached : null;
+    }
+
+    /**
+     * Store a query result in cache if caching is enabled.
+     *
+     * @param Executable $target The query that produced the result.
+     * @param array<int, array<string, mixed>> $result The query result to cache.
+     * @return void
+     */
+    private function storeCachedResult(Executable $target, array $result): void
+    {
+        $cacheTtl = property_exists($target, 'cacheTtl') ? $target->cacheTtl : 0;
+        if ($cacheTtl <= 0 || !QueryCache::isEnabled()) {
+            return;
+        }
+
+        $driver = QueryCache::getDriver();
+        if ($driver === null) {
+            return;
+        }
+
+        $key = QueryCache::generateKey($target->getSQL(), $target->getBinds());
+        $driver->set($key, $result, $cacheTtl);
     }
 }

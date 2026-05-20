@@ -1,21 +1,27 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Drivers;
+namespace Simsoft\DB\Drivers;
 
-use Simsoft\DB\MySQL\Interfaces\Executable;
-use Simsoft\DB\MySQL\Traits\Error;
+use InvalidArgumentException;
+use Simsoft\DB\Interfaces\Executable;
+use Simsoft\DB\Traits\Error;
 
+/**
+ * Abstract database driver.
+ *
+ * Base class for all database driver implementations.
+ */
 abstract class Driver
 {
     use Error;
 
     /**
-     * @var array Required config keys
+     * @var array<int, string> Required config keys
      */
     protected array $required = [];
 
     /**
-     * @var array Default config keys and values
+     * @var array<string, mixed> Default config keys and values
      */
     protected array $default = [];
 
@@ -27,7 +33,7 @@ abstract class Driver
     abstract protected function connect(): void;
 
     /**
-     * Execute SQL statement. Return bool only indicate whether operation is success.
+     * Execute SQL statement. Return bool only indicates whether the operation is a success.
      *
      * @param Executable $query The executable object.
      * @return bool
@@ -38,7 +44,7 @@ abstract class Driver
      * Execute SQL statement to get query result.
      *
      * @param Executable $query The executable object.
-     * @return array
+     * @return array<int, array<string, mixed>>
      */
     abstract public function query(Executable $query): array;
 
@@ -46,7 +52,7 @@ abstract class Driver
      * Perform query transaction.
      *
      * If callback MUST return a bool value.
-     * If callback returned TRUE, transaction will be committed, else will be rollback.
+     * If callback returned TRUE, the transaction will be committed, else will be rollback.
      *
      * @param callable $callback The callback to be executed.
      * @return bool
@@ -61,10 +67,10 @@ abstract class Driver
     abstract public function lastInsertId(): false|string;
 
     /**
-     * Constructor
+     * Constructor.
      *
-     * @param array $config Database config use for establish connection
-     * @throws \Exception
+     * @param array<string, mixed> $config Database config used to establish connection.
+     * @throws InvalidArgumentException If required config keys are missing.
      */
     public function __construct(
         protected array $config
@@ -76,10 +82,10 @@ abstract class Driver
     }
 
     /**
-     * Validate config
+     * Validate config.
      *
      * @return void
-     * @throws \Exception
+     * @throws InvalidArgumentException If required config keys are missing.
      */
     private function validate(): void
     {
@@ -91,11 +97,18 @@ abstract class Driver
         }
 
         if ($missing) {
-            throw new \Exception("Database: Missing required config keys: " . implode(', ', $missing));
+            throw new InvalidArgumentException(
+                "Database: Missing required config keys: " . implode(', ', $missing)
+            );
         }
     }
 
-    public function __wakeup()
+    /**
+     * Reconnect on wakeup (deserialization).
+     *
+     * @return void
+     */
+    public function __wakeup(): void
     {
         $this->connect();
     }

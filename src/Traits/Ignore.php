@@ -1,6 +1,6 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Traits;
+namespace Simsoft\DB\Traits;
 
 /**
  * Ignore modifier trait.
@@ -12,8 +12,10 @@ trait Ignore
 
     /**
      * Enable IGNORE modifier
+     *
+     * @return static
      */
-    public function ignore(): self
+    public function ignore(): static
     {
         $this->ignore = true;
         return $this;

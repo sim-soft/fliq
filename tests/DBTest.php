@@ -1,13 +1,15 @@
 <?php
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use Simsoft\DB\MySQL\Builder\ActiveQuery;
-use Simsoft\DB\MySQL\DB;
-use Simsoft\DB\MySQL\Interfaces\Executable;
+use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\DB;
+use Simsoft\DB\Interfaces\Executable;
 
 class DBTest extends TestCase
 {
-    public function dataProvider(): array
+    /** @return array<string, array<mixed>> */
+    public static function dataProvider(): array
     {
         DB::sqlOnly();
 
@@ -65,7 +67,7 @@ class DBTest extends TestCase
                     ['name' => 'John', 'status' => 1],
                     (new ActiveQuery())
                         ->where('status', 0)
-                        ->orWhere('status', 9)
+                        ->orWhere('status', '=', 9)
                         ->where(function ($q) {
                             $q->where('gender', 'f')
                                 ->orWhere('gender', 'm');
@@ -118,7 +120,7 @@ class DBTest extends TestCase
                     'user',
                     (new ActiveQuery())
                         ->where('status', 0)
-                        ->orWhere('status', 9)
+                        ->orWhere('status', '=', 9)
                         ->where(function ($q) {
                             $q->where('gender', 'f')
                                 ->orWhere('gender', 'm');
@@ -133,9 +135,10 @@ class DBTest extends TestCase
     }
 
     /**
-     * @dataProvider dataProvider
+     * @param array<int, mixed> $expectedBinds
      */
-    public function testRaw(Executable $query, string $expected, array $expectedBinds)
+    #[DataProvider('dataProvider')]
+    public function testRaw(Executable $query, string $expected, array $expectedBinds): void
     {
         $this->assertEqualsIgnoringCase($expected, $query->getSQL());
         $this->assertEquals($expectedBinds, $query->getBinds());

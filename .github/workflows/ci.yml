@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4']
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ''
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: sample_db
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_DB: sample_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ''
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_mysql, pdo_pgsql, pdo_sqlite, mysqli
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-progress --prefer-dist
+
+      - name: Load MySQL schema
+        run: mysql -h 127.0.0.1 -u root < resources/sample_db.sql
+
+      - name: Load PostgreSQL schema
+        run: PGPASSWORD='' psql -h 127.0.0.1 -U postgres -d sample_db -f resources/sample_db_postgres.sql
+
+      - name: Load SQLite schema
+        run: sqlite3 /tmp/sample_db.sqlite < resources/sample_db_sqlite.sql
+
+      - name: PSR-12 Check
+        run: vendor/bin/phpcs --standard=PSR12 src
+
+      - name: PHPStan
+        run: vendor/bin/phpstan analyse --memory-limit=512M
+
+      - name: PHPMD
+        run: vendor/bin/phpmd src text phpmd.xml
+
+      - name: PHPUnit
+        env:
+          DB_HOST: 127.0.0.1
+          DB_DATABASE: sample_db
+          DB_USERNAME: root
+          DB_PASSWORD: ''
+          PG_HOST: 127.0.0.1
+          PG_DATABASE: sample_db
+          PG_USERNAME: postgres
+          PG_PASSWORD: ''
+        run: vendor/bin/phpunit tests

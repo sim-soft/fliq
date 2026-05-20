@@ -1,9 +1,8 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder\Conditions;
+namespace Simsoft\DB\Builder\Conditions;
 
-use Simsoft\DB\MySQL\Builder\Clauses\Clause;
-use Simsoft\DB\MySQL\Builder\Raw;
+use Simsoft\DB\Builder\Clauses\Clause;
 
 /**
  * Class BetweenDateCondition
@@ -61,26 +60,63 @@ class BetweenDateCondition extends Clause
         $attribute = $this->queryAttribute($this->attribute);
 
         if ($startDate && $endDate) {
-            $this->appendBinds([$startDate, $endDate]);
-            return $this->is
-                ? "$attribute >= {$this->getPlaceHolder()} AND $attribute <= {$this->getPlaceHolder()}"
-                : "$attribute < {$this->getPlaceHolder()} AND $attribute > {$this->getPlaceHolder()}";
+            return $this->buildBothDatesSQL($attribute, $startDate, $endDate);
         }
 
-        if ($startDate && $endDate === null) {
-            $this->appendBinds($startDate);
-            return $this->is
-                ? "$attribute >= {$this->getPlaceHolder()}"
-                : "$attribute < {$this->getPlaceHolder()}";
+        if ($startDate) {
+            return $this->buildStartOnlySQL($attribute, $startDate);
         }
 
-        if ($startDate === null && $endDate) {
-            $this->appendBinds($endDate);
-            return $this->is
-                ? "$attribute <= {$this->getPlaceHolder()}"
-                : "$attribute > {$this->getPlaceHolder()}";
+        if ($endDate) {
+            return $this->buildEndOnlySQL($attribute, $endDate);
         }
 
         return '';
+    }
+
+    /**
+     * Build SQL when both start and end dates are provided.
+     *
+     * @param string $attribute The quoted attribute expression.
+     * @param string $startDate The start date value.
+     * @param string $endDate The end date value.
+     * @return string
+     */
+    private function buildBothDatesSQL(string $attribute, string $startDate, string $endDate): string
+    {
+        $this->appendBinds([$startDate, $endDate]);
+        return $this->is
+            ? "$attribute >= {$this->getPlaceHolder()} AND $attribute <= {$this->getPlaceHolder()}"
+            : "$attribute < {$this->getPlaceHolder()} AND $attribute > {$this->getPlaceHolder()}";
+    }
+
+    /**
+     * Build SQL when only the start date is provided.
+     *
+     * @param string $attribute The quoted attribute expression.
+     * @param string $startDate The start date value.
+     * @return string
+     */
+    private function buildStartOnlySQL(string $attribute, string $startDate): string
+    {
+        $this->appendBinds($startDate);
+        return $this->is
+            ? "$attribute >= {$this->getPlaceHolder()}"
+            : "$attribute < {$this->getPlaceHolder()}";
+    }
+
+    /**
+     * Build SQL when only the end date is provided.
+     *
+     * @param string $attribute The quoted attribute expression.
+     * @param string $endDate The end date value.
+     * @return string
+     */
+    private function buildEndOnlySQL(string $attribute, string $endDate): string
+    {
+        $this->appendBinds($endDate);
+        return $this->is
+            ? "$attribute <= {$this->getPlaceHolder()}"
+            : "$attribute > {$this->getPlaceHolder()}";
     }
 }

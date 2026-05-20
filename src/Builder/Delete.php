@@ -1,10 +1,10 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder;
+namespace Simsoft\DB\Builder;
 
-use Simsoft\DB\MySQL\Traits\Condition;
-use Simsoft\DB\MySQL\Traits\Ignore;
-use Simsoft\DB\MySQL\Traits\LowPriority;
+use Simsoft\DB\Traits\Condition;
+use Simsoft\DB\Traits\Ignore;
+use Simsoft\DB\Traits\LowPriority;
 
 /**
  * Delete Query Builder Class.
@@ -51,7 +51,7 @@ class Delete extends Builder
             $this->lowPriorityModifier(),
             $this->quick ? 'QUICK' : null,
             $this->ignoreModifier(),
-            "FROM `$this->table`",
+            'FROM ' . $this->quote($this->table),
             $this->getCondition(),
         ]));
 

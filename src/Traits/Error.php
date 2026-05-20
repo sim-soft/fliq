@@ -1,6 +1,6 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Traits;
+namespace Simsoft\DB\Traits;
 
 /**
  * Trait Error
@@ -8,11 +8,11 @@ namespace Simsoft\DB\MySQL\Traits;
  */
 trait Error
 {
-    /** @var array The errors storage */
+    /** @var array<int, string> The errors storage */
     protected array $errors = [];
 
     /**
-     * Add error message.
+     * Add an error message.
      *
      * @param string $message The error message.
      * @return void
@@ -23,9 +23,9 @@ trait Error
     }
 
     /**
-     * Add array of error messages.
+     * Add an array of error messages.
      *
-     * @param array $messages Array of error messages.
+     * @param array<int, string> $messages Array of error messages.
      * @return void
      */
     public function addErrors(array $messages = []): void
@@ -58,7 +58,7 @@ trait Error
     /**
      * Get all errors
      *
-     * @return array Array of error messages.
+     * @return array<int, string> Array of error messages.
      */
     public function getErrors(): array
     {

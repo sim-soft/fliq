@@ -1,13 +1,15 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Traits;
+namespace Simsoft\DB\Traits;
 
 /**
- * Binds trait
+ * Binds trait.
+ *
+ * Manages parameter bind values for prepared statements.
  */
 trait Binds
 {
-    /** @var array Bind values */
+    /** @var array<int, mixed> Bind values */
     private array $binds = [];
 
     /**
@@ -19,20 +21,23 @@ trait Binds
     public function appendBinds(mixed $value): void
     {
         if (is_array($value)) {
-            $this->binds = [...$this->binds, ...$value];
-        } else {
-            $this->binds[] = $value;
+            foreach ($value as $val) {
+                $this->binds[] = $val;
+            }
+            return;
         }
+
+        $this->binds[] = $value;
     }
 
     /**
-     * Get bound values
+     * Get bound values.
      *
-     * @return array|null
+     * @return array<int, mixed>|null Null when no binds exist.
      */
     public function getBinds(): ?array
     {
-        return $this->binds ?: null;
+        return $this->binds !== [] ? $this->binds : null;
     }
 
     /**

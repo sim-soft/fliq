@@ -1,6 +1,6 @@
 <?php
 
-namespace Simsoft\DB\MySQL\Builder;
+namespace Simsoft\DB\Builder;
 
 /**
  * Select Query Builder Class.
@@ -17,7 +17,7 @@ class Select extends Builder
      * Constructor.
      *
      * @param string $table The table name.
-     * @param array $selects The select fields.
+     * @param array<int, string> $selects The select fields.
      * @param string|ActiveQuery|Raw $condition
      */
     public function __construct(
@@ -32,19 +32,18 @@ class Select extends Builder
     /**
      * Enable select distinct.
      *
-     * @param bool $enable Enable distinct.
      * @return $this
      */
-    public function distinct(bool $enable = true): self
+    public function distinct(): self
     {
-        $this->distinct = $enable;
+        $this->distinct = true;
         return $this;
     }
 
     /**
-     * Set update condition
+     * Set query condition.
      *
-     * @param string|ActiveQuery|Raw $query
+     * @param string|ActiveQuery|Raw $query The condition source.
      * @return $this
      */
     public function condition(string|ActiveQuery|Raw $query): self
@@ -59,12 +58,22 @@ class Select extends Builder
                 $query->getLimitSQL(),
             ]));
             $this->appendBinds($query->getBinds());
-        } elseif ($query instanceof Raw) {
+            return $this;
+        }
+
+        if ($query instanceof Raw) {
             $this->condition = "WHERE $query";
             $this->appendBinds($query->getBinds());
-        } else {
-            $this->condition = 'WHERE ' . trim($query);
+            return $this;
         }
+
+        $trimmed = trim($query);
+        if ($trimmed !== '') {
+            $this->condition = str_starts_with(strtoupper($trimmed), 'WHERE ')
+                ? $trimmed
+                : 'WHERE ' . $trimmed;
+        }
+
         return $this;
     }
 
