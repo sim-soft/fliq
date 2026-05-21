@@ -174,14 +174,17 @@ User::transaction(function () {
 
 ## Developer Tools
 
-| Task               | Code                                         |
-|--------------------|----------------------------------------------|
-| N+1 detection      | `QueryMonitor::enable()`                     |
-| Query logging      | `QueryLogger::enable()`                      |
-| Get logged queries | `QueryLogger::getQueries()`                  |
-| Slowest query      | `QueryLogger::getSlowestQuery()`             |
-| Query cache        | `User::find()->where(...)->cache(60)->get()` |
-| Index suggestions  | `IndexAdvisor::suggestSQL()`                 |
+| Task               | Code                                                   |
+|--------------------|--------------------------------------------------------|
+| N+1 detection      | `QueryMonitor::enable()`                               |
+| Query logging      | `QueryLogger::enable()`                                |
+| Get logged queries | `QueryLogger::getQueries()`                            |
+| Slowest query      | `QueryLogger::getSlowestQuery()`                       |
+| Query cache        | `User::find()->where(...)->cache(60)->get()`           |
+| Index suggestions  | `IndexAdvisor::suggestSQL()`                           |
+| Dump and die       | `->dd()`                                               |
+| Dump (continue)    | `->dump()`                                             |
+| Tap (inspect)      | `->tap(fn($query) => error_log($query->getFullSQL()))` |
 
 ## Connection
 

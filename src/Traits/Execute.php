@@ -52,6 +52,44 @@ trait Execute
     }
 
     /**
+     * Dump the SQL and binds to output (does not stop execution).
+     *
+     * Outputs the full SQL with bind values interpolated for readability.
+     *
+     * @return static
+     */
+    public function dump(): static
+    {
+        $sql = $this->getSQL();
+        $binds = $this->getBinds();
+
+        if ($binds !== null && method_exists($this, 'getReadableSQL')) {
+            echo $this->getReadableSQL($sql, $binds) . PHP_EOL;
+            return $this;
+        }
+
+        if ($binds !== null) {
+            echo $sql . PHP_EOL;
+            echo "Binds: " . json_encode($binds) . PHP_EOL;
+            return $this;
+        }
+
+        echo $sql . PHP_EOL;
+        return $this;
+    }
+
+    /**
+     * Dump the SQL and binds, then stop execution (dump and die).
+     *
+     * @return never
+     */
+    public function dd(): never
+    {
+        $this->dump();
+        exit(1); // @phpcs:ignore -- intentional exit for debug method
+    }
+
+    /**
      * Get the connection name.
      *
      * @return string|null
