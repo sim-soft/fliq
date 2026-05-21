@@ -674,6 +674,63 @@ class User extends Model
 }
 ```
 
+### Scenario with Conditional Queries
+
+Encapsulate scenario-aware queries inside the model. The model decides what
+conditions to apply based on its current scenario:
+
+```php
+use Simsoft\DB\Model;
+use Simsoft\DB\Traits\Scenario;
+use Simsoft\DB\Collection;
+
+class Order extends Model
+{
+    use Scenario;
+
+    public const SCENARIO_REFUND = 'refund';
+    public const SCENARIO_CANCEL = 'cancel';
+    public const SCENARIO_ADMIN = 'admin';
+
+    protected string $table = 'order';
+    protected array $fillable = ['user_id', 'total', 'status'];
+
+    /**
+     * Find orders based on the current scenario.
+     */
+    public function findByCondition(): Collection
+    {
+        return static::find()
+            ->when($this->isScenario(self::SCENARIO_REFUND), fn($query) => $query->where('status', 'paid'))
+            ->when($this->isScenario(self::SCENARIO_CANCEL), fn($query) => $query->where('status', '!=', 'shipped'))
+            ->when($this->isScenario(self::SCENARIO_ADMIN), fn($query) => $query->orderByDesc('total'))
+            ->unless($this->isScenario(self::SCENARIO_ADMIN), fn($query) => $query->where('user_id', $this->user_id))
+            ->orderByDesc('created_at')
+            ->get();
+    }
+}
+```
+
+Usage — set the scenario, then call the query method:
+
+```php
+/* Refund scenario: SELECT `order`.* FROM `order`
+   WHERE `order`.`status` = ? AND `order`.`user_id` = ?
+   ORDER BY `order`.`created_at` DESC */
+$orders = (new Order())
+    ->withScenario(Order::SCENARIO_REFUND)
+    ->findByCondition();
+
+/* Admin scenario: SELECT `order`.* FROM `order`
+   ORDER BY `order`.`total` DESC, `order`.`created_at` DESC */
+$orders = (new Order())
+    ->withScenario(Order::SCENARIO_ADMIN)
+    ->findByCondition();
+```
+
+This keeps query logic inside the model — the controller only sets the scenario
+and calls the method.
+
 ### API Summary
 
 | Method | Returns | Purpose |
@@ -686,7 +743,13 @@ class User extends Model
 
 ## Scopes
 
-Define reusable query fragments by extending `ActiveQuery` with custom methods. This is the recommended pattern — it gives you full IDE autocomplete and type safety:
+Scopes are reusable query conditions. FLIQ offers several patterns depending on
+your needs.
+
+### Custom Query Class (Recommended)
+
+Extend `ActiveQuery` with named methods. This gives full IDE autocomplete, type
+safety, and the cleanest call syntax:
 
 ```php
 use Simsoft\DB\Builder\ActiveQuery;
@@ -742,9 +805,74 @@ $users = User::find()
     ->get();
 ```
 
-### Inline Scopes (Alternative)
+### Shared Scopes via Trait
 
-For one-off scope logic without creating a custom query class, use `scope()`:
+When multiple models share the same scope logic (e.g., `active()`,
+`createdAfter()`), extract them into traits and mix into each model's query
+class:
+
+```php
+trait HasActiveScope
+{
+    public function active(): self
+    {
+        return $this->where('status', 'active');
+    }
+
+    public function inactive(): self
+    {
+        return $this->where('status', 'inactive');
+    }
+}
+
+trait HasDateScopes
+{
+    public function createdAfter(string $date): self
+    {
+        return $this->where('created_at', '>', $date);
+    }
+
+    public function createdBetween(string $from, string $to): self
+    {
+        return $this->betweenDate('created_at', $from, $to);
+    }
+}
+```
+
+Mix into query classes:
+
+```php
+class UserQuery extends ActiveQuery
+{
+    use HasActiveScope, HasDateScopes;
+
+    public function admins(): self
+    {
+        return $this->where('role', 'admin');
+    }
+}
+
+class OrderQuery extends ActiveQuery
+{
+    use HasActiveScope, HasDateScopes;
+
+    public function paid(): self
+    {
+        return $this->where('payment_status', 'paid');
+    }
+}
+```
+
+Usage — same clean syntax, shared logic:
+
+```php
+$users = User::find()->active()->createdAfter('2024-01-01')->admins()->get();
+$orders = Order::find()->active()->paid()->createdBetween('2024-01-01', '2024-12-31')->get();
+```
+
+### Inline Scopes
+
+For one-off conditions without creating a class, use `scope()` with a closure:
 
 ```php
 $users = User::find()
@@ -753,25 +881,62 @@ $users = User::find()
     ->get();
 ```
 
-Or define reusable closures:
+### Reusable Scope Class
+
+For scopes shared across models without modifying query classes, define a static
+helper class. Each method returns a closure that `scope()` can use:
 
 ```php
-$active = fn($query) => $query->where('status', 'active');
-$verified = fn($query) => $query->whereNotNull('verified_at');
+use Closure;
 
+class Scopes
+{
+    public static function active(): Closure
+    {
+        return fn($query) => $query->where('status', 'active');
+    }
+
+    public static function createdAfter(string $date): Closure
+    {
+        return fn($query) => $query->where('created_at', '>', $date);
+    }
+
+    public static function inCountry(string $code): Closure
+    {
+        return fn($query) => $query->where('country', $code);
+    }
+
+    public static function priceBetween(float $min, float $max): Closure
+    {
+        return fn($query) => $query->between('price', $min, $max);
+    }
+}
+```
+
+Usage — pass the returned closure to `scope()`:
+
+```php
 $users = User::find()
-    ->scope($active)
-    ->scope($verified)
+    ->scope(Scopes::active())
+    ->scope(Scopes::createdAfter('2024-01-01'))
+    ->scope(Scopes::inCountry('MY'))
+    ->get();
+
+$products = Product::find()
+    ->scope(Scopes::active())
+    ->scope(Scopes::priceBetween(10, 100))
     ->get();
 ```
 
 ### When to Use Which
 
-| Use case | Recommended approach |
-|----------|---------------------|
-| Reusable named scopes for a model | Custom `ActiveQuery` subclass |
-| One-off conditional logic | `->scope(fn($query) => ...)` |
-| Always-applied conditions | [Global scopes](05-ADVANCED-FEATURES.md#global-scopes) |
+| Use case                                   | Pattern                                                | Call syntax                     |
+|--------------------------------------------|--------------------------------------------------------|---------------------------------|
+| Named scopes for one model                 | Custom `ActiveQuery` subclass                          | `->active()->admins()`          |
+| Shared scopes across models (clean syntax) | Traits on query classes                                | `->active()->createdAfter(...)` |
+| Shared scopes (no query class needed)      | Static scope class                                     | `->scope(Scopes::active())`     |
+| One-off condition                          | Inline closure                                         | `->scope(fn($query) => ...)`    |
+| Always-applied conditions                  | [Global scopes](05-ADVANCED-FEATURES.md#global-scopes) | Automatic on every `find()`     |
 
 ## Conditional Queries
 
