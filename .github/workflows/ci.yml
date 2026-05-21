@@ -55,7 +55,7 @@ jobs:
           coverage: none
 
       - name: Install dependencies
-        run: composer install --no-progress --prefer-dist
+        run: composer update --no-progress --prefer-dist
 
       - name: Load MySQL schema
         run: mysql -h 127.0.0.1 -u root < resources/sample_db.sql
