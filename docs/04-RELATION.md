@@ -98,7 +98,7 @@ Related records are loaded lazily when accessed as properties:
 ```php
 $user = User::findByPk(1);
 
-// hasOne: returns a single Model or null
+/* hasOne: returns a single Model or null */
 echo $user->profile->title;
 
 // hasMany: returns a Collection
@@ -247,7 +247,7 @@ User::find()->with('posts.comments')->get(); // 'posts' is loaded implicitly
 Filter or sort the eager-loaded relations using a callback:
 
 ```php
-// Load only active posts, ordered by date
+/* Load only active posts, ordered by date */
 $users = User::find()
     ->with(['posts' => fn($query) => $query->where('status', 'active')->orderBy('created_at', 'DESC')])
     ->get();
@@ -260,7 +260,7 @@ $users = User::find()
     ])
     ->get();
 
-// Mix constrained and simple
+/* Mix constrained and simple */
 $users = User::find()
     ->with(['posts' => fn($query) => $query->where('status', 'active')], 'profile')
     ->get();
@@ -274,7 +274,7 @@ The callback receives the `ActiveQuery` for the related model — use any query 
 
 ```php
 // Users who have at least one post
-// WHERE EXISTS (SELECT 1 FROM post WHERE post.user_id = user.id)
+/* WHERE EXISTS (SELECT 1 FROM post WHERE post.user_id = user.id) */
 $users = User::find()->has('posts')->get();
 ```
 
@@ -358,10 +358,10 @@ $user = User::findByPk(1);
 // Create a new post (array → auto-creates model, sets user_id = 1)
 $post = $user->posts()->save(['title' => 'New Post', 'body' => 'Content']);
 
-// Create from model instance
+/* Create from model instance */
 $post = $user->posts()->save(new Post(['title' => 'Another', 'body' => '...']));
 
-// Update an existing related model
+/* Update an existing related model */
 $post = Post::findByPk(5);
 $post->title = 'Updated Title';
 $user->posts()->save($post); // saves with user_id = 1
@@ -380,7 +380,7 @@ $user = User::findByPk(1);
 $existingPost = Post::findByPk(3);
 $existingPost->title = 'Modified title';
 
-// Save all at once — mix of create and update
+/* Save all at once — mix of create and update */
 $posts = $user->posts()->saveMany([
     ['id' => 5, 'title' => 'Updated Title'],           // UPDATE — array has 'id', loads from DB
     ['id' => 8, 'body' => 'New body content'],         // UPDATE — array has 'id', loads from DB
@@ -415,7 +415,7 @@ $post = Post::findByPk(1);
 
 // Attach tags by ID
 $post->tags()->attach([1, 2, 3]);
-// INSERT INTO post_tag (post_id, tag_id) VALUES (1,1), (1,2), (1,3)
+/* INSERT INTO post_tag (post_id, tag_id) VALUES (1,1), (1,2), (1,3) */
 ```
 
 ### `detach()` — Remove pivot table entries (M:N only)
@@ -425,11 +425,11 @@ $post = Post::findByPk(1);
 
 // Detach specific tags
 $post->tags()->detach([2, 3]);
-// DELETE FROM post_tag WHERE post_id = 1 AND tag_id IN (2, 3)
+/* DELETE FROM post_tag WHERE post_id = 1 AND tag_id IN (2, 3) */
 
-// Detach ALL tags for this post
+/* Detach ALL tags for this post */
 $post->tags()->detach();
-// DELETE FROM post_tag WHERE post_id = 1
+/* DELETE FROM post_tag WHERE post_id = 1 */
 ```
 
 ### `sync()` — Make pivot match exactly the given IDs
@@ -474,7 +474,7 @@ $user->saveTogether([
         ['title' => 'Second Post', 'slug' => 'second', 'body' => 'More', 'category_id' => 1, 'status_code' => 1],
     ],
 ]);
-// User, profile, and 2 posts all saved in one transaction
+/* User, profile, and 2 posts all saved in one transaction */
 ```
 
 **Update an existing model with relations (mix of insert/update):**
@@ -523,7 +523,7 @@ $user->saveTogether([
         ],
     ],
 ]);
-// Creates: user → post → 2 comments (all FKs set automatically)
+/* Creates: user → post → 2 comments (all FKs set automatically) */
 ```
 
 **How it decides INSERT vs UPDATE:**

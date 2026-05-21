@@ -41,7 +41,7 @@ foreach ($collection as $user) {
     echo $user->name;
 }
 
-// Total count (runs SELECT COUNT(*) — cached)
+/* Total count (runs SELECT COUNT(*) — cached) */
 $total = $collection->count();
 
 // Use with PHP's count() function
@@ -51,10 +51,10 @@ $total = count($collection);
 $collection->isEmpty();
 $collection->isNotEmpty();
 
-// Get first record (or null)
+/* Get first record (or null) */
 $first = $collection->first();
 
-// Eager load into array (use with caution on large datasets)
+/* Eager load into array (use with caution on large datasets) */
 $array = $collection->all();
 ```
 
@@ -110,7 +110,7 @@ $names = $collection->map(fn($user) => $user->name);
 // Build DTO objects
 $dtos = $collection->map(fn($user) => new UserDto($user->id, $user->name, $user->email));
 
-// Format for API response
+/* Format for API response */
 $apiData = $collection->map(fn($user) => [
     'id' => $user->id,
     'name' => $user->name,
@@ -194,7 +194,7 @@ Group records into buckets:
 ```php
 $collection = User::find()->get();
 
-// Group users by role
+/* Group users by role */
 $byRole = $collection->groupBy('role');
 // ['admin' => [User, User, ...], 'editor' => [...], 'member' => [...]]
 
@@ -202,7 +202,7 @@ foreach ($byRole as $role => $usersInGroup) {
     echo "$role: " . count($usersInGroup) . " users\n";
 }
 
-// Group by callback (custom key)
+/* Group by callback (custom key) */
 $byScoreRange = $collection->groupBy(fn($user) => match (true) {
     $user->score >= 90 => 'top',
     $user->score >= 50 => 'middle',
@@ -244,7 +244,7 @@ $collection = User::find()->orderBy('name')->get();
 $page1 = $collection->page(1, 25); // page 1, 25 per page
 $page2 = $collection->page(2, 25);
 
-// With filter and map applied
+/* With filter and map applied */
 $page = User::find()->orderBy('name')->get()
     ->filter(fn($user) => $user->status === 'active')
     ->map(fn($user) => $user->name)

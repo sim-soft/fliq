@@ -10,17 +10,17 @@ Cache query results to avoid repeated database hits for identical queries.
 use Simsoft\DB\Cache\ArrayCache;
 use Simsoft\DB\Cache\QueryCache;
 
-// Set a cache driver (use ArrayCache for testing, or implement CacheInterface for Redis/Memcached)
+/* Set a cache driver (use ArrayCache for testing, or implement CacheInterface for Redis/Memcached) */
 QueryCache::setDriver(new ArrayCache());
 ```
 
 ### Usage
 
 ```php
-// Cache results for 60 seconds (default)
+/* Cache results for 60 seconds (default) */
 $users = User::find()->where('status', 1)->cache()->all();
 
-// Cache for 300 seconds
+/* Cache for 300 seconds */
 $posts = Post::find()->where('published', true)->cache(300)->all();
 
 // Works with first() too
@@ -94,14 +94,14 @@ count($paginator); // number of items on current page
 
 ```php
 $paginator->toArray();
-// Returns:
+/* Returns: */
 // [
 //   'data' => [...],
 //   'total' => 100,
 //   'per_page' => 15,
 //   'current_page' => 1,
 //   'last_page' => 7,
-//   'from' => 1,
+/* 'from' => 1, */
 //   'to' => 15,
 //   'has_more_pages' => true,
 // ]
@@ -130,12 +130,12 @@ Automatically apply conditions to every query for a model.
 ### Register a Scope
 
 ```php
-// In a service provider or bootstrap file
+/* In a service provider or bootstrap file */
 User::addGlobalScope('active', function (ActiveQuery $query): void {
     $query->where('status', 'active');
 });
 
-// Now every User::find() automatically includes WHERE status = 'active'
+/* Now every User::find() automatically includes WHERE status = 'active' */
 $users = User::find()->all(); // includes active scope
 ```
 
@@ -160,12 +160,12 @@ $users = User::withoutGlobalScope('active')->all();
 Global scopes are applied alongside the soft delete scope:
 
 ```php
-// Model with SoftDeletes trait
+/* Model with SoftDeletes trait */
 Post::addGlobalScope('published', function (ActiveQuery $query): void {
     $query->where('published', true);
 });
 
-// find() applies both: WHERE deleted_at IS NULL AND published = true
+/* find() applies both: WHERE deleted_at IS NULL AND published = true */
 $posts = Post::find()->all();
 ```
 
@@ -184,11 +184,11 @@ $records = [
     ['name' => 'Charlie', 'email' => 'charlie@example.com', 'status' => 0],
 ];
 
-// Insert all records (default chunk size: 500)
+/* Insert all records (default chunk size: 500) */
 $inserted = User::insertBatch($records);
-// Returns: 3
+/* Returns: 3 */
 
-// Custom chunk size for very large datasets
+/* Custom chunk size for very large datasets */
 $inserted = User::insertBatch($largeDataset, 1000);
 ```
 
@@ -203,14 +203,14 @@ Update multiple records with different values in a single query using `CASE WHEN
 ### Usage
 
 ```php
-// Update scores for multiple users in one query
+/* Update scores for multiple users in one query */
 User::updateBatch([
     ['id' => 1, 'score' => 100, 'status' => 1],
     ['id' => 2, 'score' => 85, 'status' => 1],
     ['id' => 3, 'score' => 0, 'status' => 0],
 ]);
-// Generates: UPDATE user SET score = CASE id WHEN 1 THEN 100 WHEN 2 THEN 85 WHEN 3 THEN 0 END, ...
-//            WHERE id IN (1, 2, 3)
+/* Generates: UPDATE user SET score = CASE id WHEN 1 THEN 100 WHEN 2 THEN 85 WHEN 3 THEN 0 END, ...
+   WHERE id IN (1, 2, 3) */
 
 // Custom key column (default is 'id')
 OrderItem::updateBatch([
@@ -244,7 +244,7 @@ $page2 = User::find()
     ->where('status', 1)
     ->cursorPaginate(perPage: 25, cursor: $page1->nextCursor);
 
-// Custom cursor column and direction
+/* Custom cursor column and direction */
 $page = Post::find()
     ->cursorPaginate(perPage: 10, cursor: $lastId, cursorColumn: 'created_at', direction: 'desc');
 ```
@@ -275,12 +275,12 @@ count($page1); // number of items in current page
 Fetch one row at a time without buffering the full result set. Ideal for processing millions of rows with constant memory.
 
 ```php
-// Iterates without loading all rows into memory
+/* Iterates without loading all rows into memory */
 foreach (User::find()->where('status', 1)->cursor() as $user) {
     processUser($user);
 }
 
-// Works with conditions, ordering, etc.
+/* Works with conditions, ordering, etc. */
 foreach (Order::find()->where('total', '>', 100)->orderBy('id')->cursor() as $order) {
     exportOrder($order);
 }
@@ -325,17 +325,17 @@ $posts = Post::find()->join('user', ['id' => 'post.user_id'])->get();
 // Get suggestions
 $suggestions = IndexAdvisor::suggest();
 // [
-//   ['table' => 'user', 'columns' => ['status', 'role'], 'reason' => 'Used in WHERE clause'],
-//   ['table' => 'post', 'columns' => ['user_id'], 'reason' => 'Used in JOIN condition'],
+/* ['table' => 'user', 'columns' => ['status', 'role'], 'reason' => 'Used in WHERE clause'],
+   ['table' => 'post', 'columns' => ['user_id'], 'reason' => 'Used in JOIN condition'], */
 // ]
 
 // Get as CREATE INDEX SQL statements
 $statements = IndexAdvisor::suggestSQL();
-// ['CREATE INDEX `idx_user_status_role` ON `user` (`status`, `role`); -- Used in WHERE clause']
+/* ['CREATE INDEX `idx_user_status_role` ON `user` (`status`, `role`); -- Used in WHERE clause'] */
 
-// For PostgreSQL quoting
+/* For PostgreSQL quoting */
 $statements = IndexAdvisor::suggestSQL('pgsql_connection');
-// ['CREATE INDEX "idx_user_status_role" ON "user" ("status", "role"); -- Used in WHERE clause']
+/* ['CREATE INDEX "idx_user_status_role" ON "user" ("status", "role"); -- Used in WHERE clause'] */
 ```
 
 ---
@@ -359,7 +359,7 @@ $clone->id;       // null (PK stripped)
 $clone->name;     // 'Alice' (copied)
 $clone->email;    // 'alice@example.com' (copied)
 
-// Exclude specific attributes from the copy
+/* Exclude specific attributes from the copy */
 $clone = $user->replicate(['email', 'api_token']);
 $clone->email; // null
 
@@ -377,9 +377,9 @@ Shorthand for common find patterns:
 // Find all by attribute conditions
 $activeAdmins = User::findAll(['status' => 1, 'role' => 'admin']);
 
-// Array values auto-use IN()
+/* Array values auto-use IN() */
 $users = User::findAll(['id' => [1, 2, 3]]);
 
-// Null values auto-use IS NULL
+/* Null values auto-use IS NULL */
 $users = User::findAll(['deleted_at' => null]);
 ```

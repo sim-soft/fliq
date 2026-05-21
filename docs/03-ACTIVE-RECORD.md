@@ -47,7 +47,7 @@ Get user by primary key:
 ```php
 use Models\User;
 
-// SELECT * FROM `user` WHERE `user`.`id` = ? LIMIT 1
+/* SELECT * FROM `user` WHERE `user`.`id` = ? LIMIT 1 */
 $user = User::findByPk(123);
 
 echo $user->first_name;
@@ -57,7 +57,7 @@ echo $user->last_name;
 Get all users:
 
 ```php
-// SELECT * FROM `user` LIMIT 10
+/* SELECT * FROM `user` LIMIT 10 */
 $users = User::find()->limit(10)->get();
 
 foreach ($users as $user) {
@@ -68,7 +68,7 @@ foreach ($users as $user) {
 Get first matching record:
 
 ```php
-// SELECT * FROM `user` WHERE `user`.`status` = ? LIMIT 1
+/* SELECT * FROM `user` WHERE `user`.`status` = ? LIMIT 1 */
 $user = User::find()->where('status', 1)->first();
 ```
 
@@ -91,8 +91,8 @@ $users = User::find()
         $query
             ->isNull('contact_number')
             ->orNotNull('mobile_number');
-            // Aliases also work: ->whereNull('contact_number')
-            //                     ->orWhereNotNull('mobile_number')
+            /* Aliases also work: ->whereNull('contact_number')
+               ->orWhereNotNull('mobile_number') */
     })
     ->in('country', ['MY', 'SG', 'ID'])
     ->orderBy('id', 'DESC')
@@ -183,10 +183,10 @@ $user->updateAttributes(['last_login' => date('Y-m-d H:i:s')]);
 ```php
 $user = new User();
 
-// Update all matching records
+/* Update all matching records */
 $user->updateAll(['status' => 0], User::find()->where('last_login', '<', '2024-01-01'));
 
-// Delete all matching records
+/* Delete all matching records */
 $user->deleteAll(User::find()->where('status', 0));
 ```
 
@@ -246,11 +246,11 @@ $item = new OrderItem([
 ]);
 $item->save();
 
-// Update — generates WHERE order_id = ? AND item_id = ?
+/* Update — generates WHERE order_id = ? AND item_id = ? */
 $item->quantity = 10;
 $item->save();
 
-// Delete — generates WHERE order_id = ? AND item_id = ?
+/* Delete — generates WHERE order_id = ? AND item_id = ? */
 $item->delete();
 ```
 
@@ -292,17 +292,17 @@ class User extends Model
 
     protected function afterFind(): void
     {
-        // Called after a record is loaded from DB
+        /* Called after a record is loaded from DB */
     }
 
     protected function beforeSave(): void
     {
-        // Called before insert or update
+        /* Called before insert or update */
     }
 
     protected function afterSave(): void
     {
-        // Called after successful insert or update
+        /* Called after successful insert or update */
     }
 
     public function validate(): bool
@@ -409,7 +409,7 @@ On `save()` (existing model):
 ### Remove Listeners
 
 ```php
-// Remove all listeners for a model
+/* Remove all listeners for a model */
 User::flushEvents();
 ```
 
@@ -509,13 +509,13 @@ $user->trashed();       // true
 $user->restore();       // sets deleted_at = NULL
 $user->forceDelete();   // permanently removes from database
 
-// Queries auto-exclude soft-deleted records
+/* Queries auto-exclude soft-deleted records */
 $users = User::find()->get(); // only non-deleted users
 
-// Include soft-deleted records
+/* Include soft-deleted records */
 $all = User::withTrashed()->get();
 
-// Only soft-deleted records
+/* Only soft-deleted records */
 $trashed = User::onlyTrashed()->get();
 ```
 
@@ -557,11 +557,11 @@ $post = new Post();
 $post->title = 'Hello';
 $post->save();
 // created_at = '2025-05-11 10:30:00'
-// updated_at = '2025-05-11 10:30:00'
+/* updated_at = '2025-05-11 10:30:00' */
 
 $post->title = 'Updated';
 $post->save();
-// updated_at = '2025-05-11 10:35:00' (auto-updated)
+/* updated_at = '2025-05-11 10:35:00' (auto-updated) */
 // created_at unchanged
 ```
 
@@ -614,7 +614,7 @@ class User extends Model
 
     protected function beforeSave(): void
     {
-        // Hash password only when registering or admin sets it
+        /* Hash password only when registering or admin sets it */
         if ($this->isAnyScenario(self::SCENARIO_REGISTER, self::SCENARIO_ADMIN)) {
             if (isset($this->dirtyAttributes['password'])) {
                 $this->password = password_hash($this->password, PASSWORD_BCRYPT);
@@ -635,13 +635,13 @@ class User extends Model
 $user = (new User($_POST))->withScenario(User::SCENARIO_REGISTER);
 $user->save(); // runs validateRegistration() + hashes password
 
-// Profile self-update
+/* Profile self-update */
 $user = User::findByPk($currentUserId)
     ->withScenario(User::SCENARIO_PROFILE_UPDATE);
 $user->fill($_POST);
 $user->save(); // runs validateProfile()
 
-// Admin update (allows role/status changes)
+/* Admin update (allows role/status changes) */
 $user = User::findByPk(5)->withScenario(User::SCENARIO_ADMIN);
 $user->fill($_POST);
 $user->save(); // runs validateAdminFields()
@@ -729,10 +729,10 @@ class User extends Model
 Usage — chain scope methods like any other query builder method:
 
 ```php
-// SELECT `user`.* FROM `user`
-// WHERE `user`.`status` = ? AND `user`.`role` = ?
-// AND `user`.`created_at` > ? AND `user`.`country` = ?
-// ORDER BY `user`.`name` ASC
+/* SELECT `user`.* FROM `user`
+   WHERE `user`.`status` = ? AND `user`.`role` = ?
+   AND `user`.`created_at` > ? AND `user`.`country` = ?
+   ORDER BY `user`.`name` ASC */
 $users = User::find()
     ->active()
     ->admins()
