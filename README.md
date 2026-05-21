@@ -4,6 +4,8 @@
 
 A high-performance Active Record / ORM for MySQL, MariaDB, PostgreSQL, and SQLite. Zero framework dependencies, minimal footprint, maximum speed.
 
+📖 [Documentation](https://sim-soft.github.io/fliq/) · [GitHub](https://github.com/sim-soft/fliq)
+
 ```php
 use Simsoft\DB\Model;
 
@@ -283,6 +285,8 @@ IndexAdvisor::suggestSQL();
 ```
 
 ## Documentation
+
+📖 **[Read the full documentation](https://sim-soft.github.io/fliq/)**
 
 1. [Getting Started](docs/01-GETTING-STARTED.md) — Connections, drivers, raw queries, DB facade, monitoring
 2. [Query Builder](docs/02-QUERY-BUILDER.md) — Fluent API, conditions, joins, JSON, aggregation, scopes, unions

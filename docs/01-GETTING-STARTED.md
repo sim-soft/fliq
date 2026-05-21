@@ -25,7 +25,7 @@ Connection::add('replica', ['driver' => 'mysql', 'host' => 'replica-host', ...])
 // Check if a connection exists
 Connection::has('mysql'); // true
 
-// Set the default connection
+/* Set the default connection */
 Connection::setDefault('mysql');
 
 // Disconnect (keeps config, closes connection)
@@ -37,7 +37,7 @@ Connection::reconnect('mysql');
 // Remove connection entirely (config + connection)
 Connection::remove('replica');
 
-// Reset all connections (useful for testing or long-running processes)
+/* Reset all connections (useful for testing or long-running processes) */
 Connection::reset();
 ```
 
@@ -193,7 +193,7 @@ foreach ($users as $user) {
 
 // Check detected patterns
 $patterns = QueryMonitor::getDetectedPatterns();
-// ['SELECT ... FROM `posts` WHERE `user_id` = ?' => ['count' => 50, 'origin' => 'app/Controller.php:42']]
+/* ['SELECT ... FROM `posts` WHERE `user_id` = ?' => ['count' => 50, 'origin' => 'app/Controller.php:42']] */
 
 // Custom handler instead of trigger_error
 QueryMonitor::setHandler(function (string $pattern, int $count, string $origin) {
@@ -203,7 +203,7 @@ QueryMonitor::setHandler(function (string $pattern, int $count, string $origin) 
 // Disable when done
 QueryMonitor::disable();
 
-// Reset counters
+/* Reset counters */
 QueryMonitor::reset();
 ```
 ### Query Logging
@@ -221,8 +221,8 @@ $posts = Post::find()->where('published', true)->get();
 // Get all logged queries with timing
 $queries = QueryLogger::getQueries();
 // [
-//   ['sql' => 'SELECT ...', 'binds' => [1], 'time' => 0.523],
-//   ['sql' => 'SELECT ...', 'binds' => [true], 'time' => 1.204],
+/* ['sql' => 'SELECT ...', 'binds' => [1], 'time' => 0.523],
+   ['sql' => 'SELECT ...', 'binds' => [true], 'time' => 1.204], */
 // ]
 
 // Summary
@@ -246,13 +246,17 @@ QueryLogger::disable();
 # Raw Query
 Interact with the database using raw queries.
 
+The `->on('connection_name')` method specifies which database connection to use.
+The name must match a connection registered via `Connection::add()`. If omitted
+when using the `DB` facade, the default connection is used automatically.
+
 ## Find All Records
 
 ```php
 use Simsoft\DB\Builder\Raw;
 
 $users = (new Raw('SELECT * FROM users WHERE status = ?', [1]))
-    ->on('mysql')
+    ->on('mysql') // use 'mysql' connection.
     ->fetchAll();
 
 foreach ($users as $user) {
@@ -283,17 +287,17 @@ if ($user) {
 ```php
 use Simsoft\DB\Builder\Raw;
 
-// Insert
+/* Insert */
 $status = (new Raw('INSERT INTO users (name, status) VALUES (?, ?)', ['John', 1]))
     ->on('mysql')
     ->execute();
 
-// Update
+/* Update */
 $status = (new Raw('UPDATE users SET name = ? WHERE id = ?', ['john doe', 1]))
     ->on('mysql')
     ->execute();
 
-// Delete
+/* Delete */
 $status = (new Raw('DELETE FROM users WHERE id = ?', [1]))
     ->on('mysql')
     ->execute();
@@ -301,13 +305,22 @@ $status = (new Raw('DELETE FROM users WHERE id = ?', [1]))
 
 ## Using the DB Facade
 
-The `DB` class provides a simpler interface for raw queries:
+The `DB` class provides a simpler interface for raw queries. It uses the default
+connection (`Connection::getDefaultName()`) automatically. Pass a connection
+name as the last parameter to target a specific connection.
 
 ```php
 use Simsoft\DB\DB;
 
-// Execute raw SQL
+// Execute raw SQL (uses default connection)
 DB::raw('INSERT INTO users (name, status) VALUES (?, ?)', ['John', 1]);
+
+/* SELECT query (uses default connection) */
+$users = DB::query('SELECT * FROM users WHERE status = ?', [1]);
+
+// Explicit connection as last parameter
+DB::raw('INSERT INTO logs (msg) VALUES (?)', ['hello'], 'pgsql');
+$rows = DB::query('SELECT * FROM logs', [], 'pgsql');
 
 // Query a table using the fluent builder
 $users = DB::table('users')
@@ -321,23 +334,22 @@ $users = DB::table('users')
 use Simsoft\DB\DB;
 use Simsoft\DB\Builder\ActiveQuery;
 
-// Insert
+/* Insert */
 DB::insert('users', ['name' => 'John', 'status' => 1]);
 
-// Insert ignore (skip on duplicate key)
+/* Insert ignore (skip on duplicate key) */
 DB::insertOrIgnore('users', ['name' => 'John', 'status' => 1]);
 
-// Update with condition
+/* Update with condition */
 DB::update('users', ['status' => 0], (new ActiveQuery())->where('id', 5));
 
-// Update ignore
+/* Update ignore */
 DB::updateIgnore('users', ['email' => 'new@test.com'], (new ActiveQuery())->where('id', 5));
 
-// Delete with condition
+/* Delete with condition */
 DB::delete('users', (new ActiveQuery())->where('status', 0));
 
-// Delete with modifiers
+/* Delete with modifiers */
 DB::deleteIgnore('users', (new ActiveQuery())->where('id', 99));
 DB::deleteQuick('users', (new ActiveQuery())->where('status', 0));
 ```
-

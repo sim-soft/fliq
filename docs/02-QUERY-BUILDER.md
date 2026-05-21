@@ -34,7 +34,7 @@ The query builder provides a fluent interface for building SQL queries without w
 use Simsoft\DB\Builder\ActiveQuery;
 use Simsoft\DB\Builder\Raw;
 
-// SELECT `user`.* FROM `user`
+/* SELECT `user`.* FROM `user` */
 $users = (new ActiveQuery())
     ->from('user')
     ->on('mysql')
@@ -48,7 +48,7 @@ foreach ($users as $user) {
 Get first record:
 
 ```php
-// SELECT `user`.* FROM `user` LIMIT 1
+/* SELECT `user`.* FROM `user` LIMIT 1 */
 $user = (new ActiveQuery())
     ->from('user')
     ->on('mysql')
@@ -63,7 +63,7 @@ echo $user['last_name'];
 Use a space-separated string to declare a table alias:
 
 ```php
-// SELECT `u`.* FROM `user` `u`
+/* SELECT `u`.* FROM `user` `u` */
 $users = (new ActiveQuery())
     ->from('user u')
     ->on('mysql')
@@ -75,7 +75,7 @@ $users = (new ActiveQuery())
 Basic select:
 
 ```php
-// SELECT `user`.`first_name`, `user`.`last_name` FROM `user`
+/* SELECT `user`.`first_name`, `user`.`last_name` FROM `user` */
 $users = (new ActiveQuery())
     ->from('user')
     ->select('first_name', 'last_name')
@@ -86,7 +86,7 @@ $users = (new ActiveQuery())
 Select with raw expression:
 
 ```php
-// SELECT `u`.`first_name`, `u`.`last_name`, COUNT(*) AS count, SUM(`u`.`age`) AS sum FROM `user` `u`
+/* SELECT `u`.`first_name`, `u`.`last_name`, COUNT(*) AS count, SUM(`u`.`age`) AS sum FROM `user` `u` */
 $users = (new ActiveQuery())
     ->from('user u')
     ->select('first_name', 'last_name', new Raw('COUNT(*) AS count, SUM({age}) AS sum'))
@@ -97,7 +97,7 @@ $users = (new ActiveQuery())
 Select distinct:
 
 ```php
-// SELECT DISTINCT `user`.`first_name`, `user`.`last_name` FROM `user`
+/* SELECT DISTINCT `user`.`first_name`, `user`.`last_name` FROM `user` */
 $users = (new ActiveQuery())
     ->from('user')
     ->selectDistinct('first_name', 'last_name')
@@ -112,8 +112,8 @@ Methods: `where()`, `orWhere()`, `not()`, `orNot()`
 Aliases: `whereNot()`, `orWhereNot()`
 
 ```php
-// SELECT `user`.`first_name`, `user`.`last_name`, `user`.`email` FROM `user`
-// WHERE `user`.`age` > ? AND `user`.`status` = ?
+/* SELECT `user`.`first_name`, `user`.`last_name`, `user`.`email` FROM `user`
+   WHERE `user`.`age` > ? AND `user`.`status` = ? */
 $users = (new ActiveQuery())
     ->from('user')
     ->select('first_name', 'last_name', 'email')
@@ -131,10 +131,10 @@ foreach ($users as $user) {
 Complex conditions with grouping:
 
 ```php
-// WHERE `t`.`status` = ? AND `t`.`gender` != ?
-// AND `t`.`height` >= ? AND `t`.`weight` < ?
-// AND `t`.`salary` >= ?
-// AND ( `t`.`age` > ? OR `t`.`age` <= ? )
+/* WHERE `t`.`status` = ? AND `t`.`gender` != ?
+   AND `t`.`height` >= ? AND `t`.`weight` < ?
+   AND `t`.`salary` >= ?
+   AND ( `t`.`age` > ? OR `t`.`age` <= ? ) */
 $users = (new ActiveQuery())
     ->from('user t')
     ->where('status', 1)
@@ -159,7 +159,7 @@ Methods: `isNull()`, `orIsNull()`, `notNull()`, `orNotNull()`
 Aliases (Eloquent-style): `whereNull()`, `orWhereNull()`, `whereNotNull()`, `orWhereNotNull()`
 
 ```php
-// WHERE `t`.`last_name` IS NULL OR `t`.`email` IS NOT NULL
+/* WHERE `t`.`last_name` IS NULL OR `t`.`email` IS NOT NULL */
 $users = (new ActiveQuery())
     ->from('user t')
     ->isNull('last_name')
@@ -179,14 +179,14 @@ $users = (new ActiveQuery())
 The `where()` method also handles null values automatically:
 
 ```php
-// where('col', null) produces: WHERE col IS NULL
+/* where('col', null) produces: WHERE col IS NULL */
 $users = (new ActiveQuery())
     ->from('user')
     ->where('deleted_at', null)
     ->on('mysql')
     ->get();
 
-// where('col', '!=', null) produces: WHERE col IS NOT NULL
+/* where('col', '!=', null) produces: WHERE col IS NOT NULL */
 $users = (new ActiveQuery())
     ->from('user')
     ->where('email', '!=', null)
@@ -201,7 +201,7 @@ Methods: `in()`, `notIn()`, `orIn()`, `orNotIn()`
 Aliases: `whereIn()`, `whereNotIn()`, `orWhereIn()`, `orWhereNotIn()`
 
 ```php
-// WHERE `user`.`role` IN (?,?,?) AND `user`.`status` NOT IN (?,?,?,?)
+/* WHERE `user`.`role` IN (?,?,?) AND `user`.`status` NOT IN (?,?,?,?) */
 $users = (new ActiveQuery())
     ->from('user')
     ->in('role', [1, 2, 3])
@@ -215,7 +215,7 @@ $users = (new ActiveQuery())
 Methods: `between()`, `notBetween()`, `orBetween()`, `orNotBetween()`
 
 ```php
-// WHERE `t`.`height` BETWEEN ? AND ? OR `t`.`birth_day` NOT BETWEEN ? AND ?
+/* WHERE `t`.`height` BETWEEN ? AND ? OR `t`.`birth_day` NOT BETWEEN ? AND ? */
 $users = (new ActiveQuery())
     ->from('user t')
     ->between('height', 150, 200)
@@ -231,21 +231,21 @@ Methods: `betweenDate()`, `notBetweenDate()`, `orBetweenDate()`, `orNotBetweenDa
 Handles open-ended date ranges (null start or end):
 
 ```php
-// WHERE created_at >= ? AND created_at <= ?
+/* WHERE created_at >= ? AND created_at <= ? */
 $users = (new ActiveQuery())
     ->from('user')
     ->betweenDate('created_at', '2024-01-01', '2024-12-31')
     ->on('mysql')
     ->get();
 
-// Open-ended: only start date (created_at >= ?)
+/* WHERE created_at >= ? */
 $users = (new ActiveQuery())
     ->from('user')
     ->betweenDate('created_at', '2024-01-01', null)
     ->on('mysql')
     ->get();
 
-// Open-ended: only end date (created_at <= ?)
+/* WHERE created_at <= ? */
 $users = (new ActiveQuery())
     ->from('user')
     ->betweenDate('created_at', null, '2024-12-31')
@@ -258,7 +258,7 @@ $users = (new ActiveQuery())
 Methods: `betweenDateInterval()`, `notBetweenDateInterval()`, `orBetweenDateInterval()`
 
 ```php
-// WHERE created_at >= ? AND created_at < ? + INTERVAL 7 DAY
+/* WHERE created_at >= ? AND created_at < ? + INTERVAL 7 DAY */
 $users = (new ActiveQuery())
     ->from('user')
     ->betweenDateInterval('created_at', '2024-01-01', 7)
@@ -271,11 +271,11 @@ $users = (new ActiveQuery())
 Methods: `exists()`, `notExists()`, `orExists()`, `orNotExists()`
 
 ```php
-// WHERE EXISTS (SELECT * FROM orders WHERE orders.user_id = user.id)
+/* WHERE EXISTS (SELECT * FROM orders WHERE orders.user_id = user.id) */
 $users = (new ActiveQuery())
     ->from('user')
     ->exists(
-        (new ActiveQuery())->from('orders')->whereRaw('{user_id} = {!user.id}')
+        (new ActiveQuery())->from('orders')->whereRaw('{user_id} = {user.id}')
     )
     ->on('mysql')
     ->get();
@@ -286,14 +286,14 @@ $users = (new ActiveQuery())
 Methods: `regex()`, `notRegex()`, `orRegex()`, `orNotRegex()`, `containsWords()`, `orContainsWords()`
 
 ```php
-// WHERE name REGEXP '\\bJohn\\b'
+/* WHERE `user`.`name` REGEXP ? */
 $users = (new ActiveQuery())
     ->from('user')
     ->regex('name', '\\bJohn\\b')
     ->on('mysql')
     ->get();
 
-// Search for whole words
+/* WHERE `user`.`bio` REGEXP '[[:<:]]php[[:>:]]' AND `user`.`bio` REGEXP '[[:<:]]mysql[[:>:]]' */
 $users = (new ActiveQuery())
     ->from('user')
     ->containsWords('bio', ['php', 'mysql'])
@@ -306,6 +306,7 @@ $users = (new ActiveQuery())
 ```php
 use Simsoft\DB\Builder\Conditions\MatchAgainst;
 
+/* WHERE MATCH(`articles`.`title`, `articles`.`body`) AGAINST ('+php +mysql -java' IN BOOLEAN MODE) */
 $results = (new ActiveQuery())
     ->from('articles')
     ->where(
@@ -344,51 +345,59 @@ $baseQuery->orMerge($extraQuery);
 
 ## Union Queries
 
-Combine results from multiple SELECT queries.
+Combine results from multiple SELECT queries. Only the main query (the one you
+call `get()` on) needs `->on()` — sub-queries are just SQL fragments.
 
 ### `union()` — Removes duplicates
 
 ```php
+/* (SELECT `user`.`name`, `user`.`email` FROM `user` WHERE `user`.`status` = ?)
+   UNION
+   (SELECT `user`.`name`, `user`.`email` FROM `user` WHERE `user`.`created_at` > ?) */
 $activeUsers = (new ActiveQuery())
     ->from('user')
     ->select('name', 'email')
-    ->where('status', 'active')
-    ->on('mysql');
+    ->where('status', 'active');
 
 $recentUsers = (new ActiveQuery())
     ->from('user')
     ->select('name', 'email')
-    ->where('created_at', '>', '2025-01-01')
-    ->on('mysql');
+    ->where('created_at', '>', '2025-01-01');
 
-// (SELECT ... WHERE status = ?) UNION (SELECT ... WHERE created_at > ?)
-$results = $activeUsers->union($recentUsers)->get();
+$results = $activeUsers->union($recentUsers)->on('mysql')->get();
 ```
 
 ### `unionAll()` — Keeps duplicates
 
 ```php
-$results = $activeUsers->unionAll($recentUsers)->get();
-// (SELECT ...) UNION ALL (SELECT ...)
+/* (SELECT ...) UNION ALL (SELECT ...) */
+$results = $activeUsers->unionAll($recentUsers)->on('mysql')->get();
 ```
 
 ### `unionDistinct()` — Explicit UNION DISTINCT
 
 ```php
-$results = $activeUsers->unionDistinct($recentUsers)->get();
-// (SELECT ...) UNION DISTINCT (SELECT ...)
+/* (SELECT ...) UNION DISTINCT (SELECT ...) */
+$results = $activeUsers->unionDistinct($recentUsers)->on('mysql')->get();
 ```
 
 ### Multiple unions
 
 ```php
-$admins = (new ActiveQuery())->from('user')->select('name')->where('role', 'admin')->on('mysql');
-$editors = (new ActiveQuery())->from('user')->select('name')->where('role', 'editor')->on('mysql');
-$authors = (new ActiveQuery())->from('user')->select('name')->where('role', 'author')->on('mysql');
+$admins = (new ActiveQuery())->from('user')->select('name')->where('role', 'admin');
+$editors = (new ActiveQuery())->from('user')->select('name')->where('role', 'editor');
+$authors = (new ActiveQuery())->from('user')->select('name')->where('role', 'author');
 
+/* (SELECT `user`.`name` FROM `user` WHERE `user`.`role` = ?)
+   UNION
+   (SELECT `user`.`name` FROM `user` WHERE `user`.`role` = ?)
+   UNION ALL
+   (SELECT `user`.`name` FROM `user` WHERE `user`.`role` = ?)
+   Binds: ['admin', 'editor', 'author'] */
 $all = $admins
     ->union($editors)
     ->unionAll($authors)
+    ->on('mysql')
     ->get();
 ```
 
@@ -401,16 +410,16 @@ Query JSON columns with database-specific syntax (works on MySQL, PostgreSQL, an
 The `->` notation in column names auto-generates JSON extraction in `where()`, `in()`, `orderBy()`, etc.:
 
 ```php
-// WHERE JSON_UNQUOTE(JSON_EXTRACT(`preferences`, '$.theme')) = ?
+/* WHERE JSON_UNQUOTE(JSON_EXTRACT(`preferences`, '$.theme')) = ? */
 User::find()->where('preferences->theme', 'dark')->get();
 
-// WHERE JSON_UNQUOTE(JSON_EXTRACT(`preferences`, '$.meal')) IN (?,?)
+/* WHERE JSON_UNQUOTE(JSON_EXTRACT(`preferences`, '$.meal')) IN (?,?) */
 User::find()->in('preferences->meal', ['pasta', 'salad'])->get();
 
-// ORDER BY JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.score')) DESC
+/* ORDER BY JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.score')) DESC */
 User::find()->orderBy('meta->score', 'DESC')->get();
 
-// Nested paths
+/* WHERE JSON_UNQUOTE(JSON_EXTRACT(`user`.`meta`, '$.address.city')) = ? */
 User::find()->where('meta->address.city', '=', 'Kuala Lumpur')->get();
 ```
 
@@ -426,47 +435,47 @@ Use `->` to separate column from path, and `.` for nested keys:
 ### `jsonContains()` — Check if JSON array contains a value
 
 ```php
-// MySQL:      WHERE JSON_CONTAINS(`user`.`tags`, ?, '$')
-// PostgreSQL: WHERE "user"."tags" @> ?::jsonb
-// SQLite:     WHERE EXISTS (SELECT 1 FROM json_each("user"."tags") WHERE json_each.value = ?)
+/* MySQL:      WHERE JSON_CONTAINS(`user`.`tags`, ?, '$')
+   PostgreSQL: WHERE "user"."tags" @> ?::jsonb
+   SQLite:     WHERE EXISTS (SELECT 1 FROM json_each("user"."tags") WHERE json_each.value = ?) */
 User::find()->jsonContains('tags', 'php')->get();
 
 // Nested path
-// MySQL: WHERE JSON_CONTAINS(`user`.`meta`, ?, '$.skills')
+/* MySQL: WHERE JSON_CONTAINS(`user`.`meta`, ?, '$.skills') */
 User::find()->jsonContains('meta->skills', 'docker')->get();
 ```
 
 ### `jsonNotContains()` — Value NOT in JSON array
 
 ```php
-// MySQL: WHERE NOT JSON_CONTAINS(`user`.`tags`, ?, '$')
+/* MySQL: WHERE NOT JSON_CONTAINS(`user`.`tags`, ?, '$') */
 User::find()->jsonNotContains('tags', 'spam')->get();
 ```
 
 ### `jsonHas()` — JSON path exists
 
 ```php
-// MySQL:      WHERE JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.address')
-// PostgreSQL: WHERE "user"."meta" -> 'address' IS NOT NULL
+/* MySQL:      WHERE JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.address')
+   PostgreSQL: WHERE "user"."meta" -> 'address' IS NOT NULL */
 User::find()->jsonHas('meta->address')->get();
 ```
 
 ### `jsonMissing()` — JSON path does not exist
 
 ```php
-// MySQL: WHERE NOT JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.phone')
+/* MySQL: WHERE NOT JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.phone') */
 User::find()->jsonMissing('meta->phone')->get();
 ```
 
 ### `jsonLength()` — Check JSON array length
 
 ```php
-// MySQL:      WHERE JSON_LENGTH(`user`.`meta`, '$.tags') > ?
-// PostgreSQL: WHERE jsonb_array_length("user"."meta" -> 'tags') > ?
-// SQLite:     WHERE json_array_length("user"."meta", '$.tags') > ?
+/* MySQL:      WHERE JSON_LENGTH(`user`.`meta`, '$.tags') > ?
+   PostgreSQL: WHERE jsonb_array_length("user"."meta" -> 'tags') > ?
+   SQLite:     WHERE json_array_length("user"."meta", '$.tags') > ? */
 User::find()->jsonLength('meta->tags', '>', 3)->get();
 
-// Exact length
+/* MySQL: WHERE JSON_LENGTH(`user`.`meta`, '$.tags') = ? */
 User::find()->jsonLength('tags', '=', 2)->get();
 ```
 
@@ -475,7 +484,7 @@ User::find()->jsonLength('tags', '=', 2)->get();
 Use `where()` with `->` notation for comparisons, or the explicit `whereJson()` method:
 
 ```php
-// These are equivalent:
+/* WHERE JSON_UNQUOTE(JSON_EXTRACT(`user`.`meta`, '$.age')) > ? */
 User::find()->where('meta->age', '>', 25)->get();
 User::find()->whereJson('meta->age', '>', 25)->get();
 ```
@@ -485,16 +494,20 @@ User::find()->whereJson('meta->age', '>', 25)->get();
 Each method has an `or` variant:
 
 ```php
+/* WHERE JSON_CONTAINS(`user`.`tags`, ?, '$') OR JSON_CONTAINS(`user`.`tags`, ?, '$') */
 User::find()
     ->jsonContains('tags', 'php')
     ->orJsonContains('tags', 'python')
     ->get();
 
+/* WHERE JSON_UNQUOTE(JSON_EXTRACT(`user`.`meta`, '$.role')) = ?
+   OR JSON_UNQUOTE(JSON_EXTRACT(`user`.`meta`, '$.role')) = ? */
 User::find()
     ->where('meta->role', '=', 'admin')
-    ->orJson('meta->role', '=', 'editor')
+    ->orWhereJson('meta->role', '=', 'editor')
     ->get();
 
+/* WHERE JSON_LENGTH(`user`.`tags`, '$') > ? OR JSON_LENGTH(`user`.`skills`, '$') > ? */
 User::find()
     ->jsonLength('tags', '>', 3)
     ->orWhereJsonLength('skills', '>', 5)
@@ -519,31 +532,31 @@ JSON methods support dot notation for referencing columns on joined tables (usin
 
 ```php
 // JSON on the main table (auto-prefixed with table alias)
-// WHERE JSON_CONTAINS(`u`.`meta`, ?, '$.tags')
+/* WHERE JSON_CONTAINS(`u`.`meta`, ?, '$.tags') */
 $users = (new ActiveQuery())
     ->from('user u')
     ->join('profile p', ['user_id' => 'id'])
     ->jsonContains('meta->tags', 'php')
     ->get();
 
-// JSON on a joined table via alias (s.column->path)
-// WHERE JSON_CONTAINS(`s`.`metadata`, ?, '$.tags')
+/* JSON on a joined table via alias (s.column->path)
+   WHERE JSON_CONTAINS(`s`.`metadata`, ?, '$.tags') */
 $users = (new ActiveQuery())
     ->from('user u')
     ->join('setting s', ['user_id' => 'id'])
     ->jsonContains('s.metadata->tags', 'core')
     ->get();
 
-// JSON on a joined table via full table name
-// WHERE JSON_CONTAINS(`setting`.`metadata`, ?, '$.tags')
+/* JSON on a joined table via full table name
+   WHERE JSON_CONTAINS(`setting`.`metadata`, ?, '$.tags') */
 $users = (new ActiveQuery())
     ->from('user u')
     ->join('setting s', ['user_id' => 'id'])
     ->jsonContains('setting.metadata->tags', 'core')
     ->get();
 
-// whereJson on aliased table
-// WHERE JSON_UNQUOTE(JSON_EXTRACT(`p`.`metadata`, '$.verified')) = ?
+/* whereJson on aliased table
+   WHERE JSON_UNQUOTE(JSON_EXTRACT(`p`.`metadata`, '$.verified')) = ? */
 $users = (new ActiveQuery())
     ->from('user u')
     ->join('profile p', ['user_id' => 'id'])
@@ -551,7 +564,7 @@ $users = (new ActiveQuery())
     ->get();
 
 // jsonHas on aliased table
-// WHERE JSON_CONTAINS_PATH(`s`.`metadata`, 'one', '$.priority')
+/* WHERE JSON_CONTAINS_PATH(`s`.`metadata`, 'one', '$.priority') */
 $users = (new ActiveQuery())
     ->from('user u')
     ->join('setting s', ['user_id' => 'id'])
@@ -559,9 +572,9 @@ $users = (new ActiveQuery())
     ->get();
 
 // Multiple JSON conditions across multiple aliased tables
-// WHERE JSON_CONTAINS(`u`.`meta`, ?, '$.tags')
-//   AND JSON_CONTAINS(`p`.`preferences`, ?, '$.theme')
-//   AND JSON_CONTAINS_PATH(`s`.`metadata`, 'one', '$.priority')
+/* WHERE JSON_CONTAINS(`u`.`meta`, ?, '$.tags')
+   AND JSON_CONTAINS(`p`.`preferences`, ?, '$.theme')
+   AND JSON_CONTAINS_PATH(`s`.`metadata`, 'one', '$.priority') */
 $users = (new ActiveQuery())
     ->from('user u')
     ->join('profile p', ['user_id' => 'id'])
@@ -583,21 +596,21 @@ $users = (new ActiveQuery())
 ### `whereAny()` — Any column matches (OR)
 
 ```php
-// WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ?)
+/* WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ?) */
 User::find()->whereAny(['name', 'email', 'phone'], 'like', '%john%')->get();
 ```
 
 ### `whereAll()` — All columns match (AND)
 
 ```php
-// WHERE (title LIKE ? AND body LIKE ?)
+/* WHERE (title LIKE ? AND body LIKE ?) */
 Post::find()->whereAll(['title', 'body'], 'like', '%php%')->get();
 ```
 
 ### `whereNone()` — No column matches (NOT OR)
 
 ```php
-// WHERE NOT (title LIKE ? OR body LIKE ?)
+/* WHERE NOT (title LIKE ? OR body LIKE ?) */
 Post::find()->whereNone(['title', 'body'], 'like', '%spam%')->get();
 ```
 
@@ -606,10 +619,12 @@ Post::find()->whereNone(['title', 'body'], 'like', '%spam%')->get();
 JSON `->` notation works in all multi-column methods:
 
 ```php
-// Search across regular columns AND JSON paths
+/* WHERE (`user`.`username` LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(`user`.`meta`, '$.nickname')) LIKE ?
+   OR JSON_UNQUOTE(JSON_EXTRACT(`user`.`meta`, '$.email')) LIKE ?) */
 User::find()->whereAny(['username', 'meta->nickname', 'meta->email'], 'like', '%john%')->get();
 
-// All JSON paths must match
+/* WHERE (JSON_UNQUOTE(JSON_EXTRACT(`post`.`meta`, '$.lang')) = ?
+   AND JSON_UNQUOTE(JSON_EXTRACT(`post`.`meta`, '$.region')) = ?) */
 Post::find()->whereAll(['meta->lang', 'meta->region'], '=', 'en')->get();
 ```
 
@@ -618,7 +633,7 @@ Post::find()->whereAll(['meta->lang', 'meta->region'], '=', 'en')->get();
 Methods: `like()`, `notLike()`, `orLike()`, `orNotLike()`
 
 ```php
-// WHERE `t`.`name` LIKE ? AND ( `t`.`name` NOT LIKE ? OR `t`.`name` NOT LIKE ? )
+/* WHERE `t`.`name` LIKE ? AND ( `t`.`name` NOT LIKE ? OR `t`.`name` NOT LIKE ? ) */
 $users = (new ActiveQuery())
     ->from('user t')
     ->like('name', '%john%')
@@ -633,11 +648,11 @@ $users = (new ActiveQuery())
 ## Ordering, Grouping, Limit & Offset
 
 ```php
-// SELECT `t`.`first_name`, `t`.`last_name`, COUNT(*) AS count FROM `user` `t`
-// GROUP BY `t`.`first_name`, `t`.`last_name`
-// HAVING `count` > ?
-// ORDER BY `t`.`first_name` ASC, `t`.`last_name` DESC
-// LIMIT 30, 20
+/* SELECT `t`.`first_name`, `t`.`last_name`, COUNT(*) AS count FROM `user` `t`
+   GROUP BY `t`.`first_name`, `t`.`last_name`
+   HAVING `count` > ?
+   ORDER BY `t`.`first_name` ASC, `t`.`last_name` DESC
+   LIMIT 30, 20 */
 $users = (new ActiveQuery())
     ->from('user t')
     ->select('first_name', 'last_name', new Raw('COUNT(*) AS count'))
@@ -649,7 +664,7 @@ $users = (new ActiveQuery())
     ->on('mysql')
     ->get();
 
-// SELECT `user`.* FROM `user` ORDER BY `user`.`first_name` ASC, `user`.`last_name` DESC
+/* SELECT `user`.* FROM `user` ORDER BY `user`.`first_name` ASC, `user`.`last_name` DESC */
 $users = (new ActiveQuery())
     ->from('user')
     ->orderBy([
@@ -659,7 +674,14 @@ $users = (new ActiveQuery())
     ->on('mysql')
     ->get();
 
-// SELECT `user`.* FROM `user` LIMIT 0, 50
+/* SELECT `user`.* FROM `user` ORDER BY `user`.`created_at` DESC */
+$users = (new ActiveQuery())
+    ->from('user')
+    ->orderByDesc('created_at')
+    ->on('mysql')
+    ->get();
+
+/* SELECT `user`.* FROM `user` LIMIT 0, 50 */
 $users = (new ActiveQuery())
     ->from('user')
     ->page(1, 50)  // page 1, 50 per page
@@ -679,21 +701,21 @@ The `join()` array parameter is `['joined_table_column' => 'reference_column']`:
 
 ### Attribute Resolution
 
-| Syntax | Resolves to | Use case |
-|--------|-------------|----------|
-| `'column'` | `\`main_table\`.\`column\`` | Column on the main (FROM) table |
-| `'table.column'` | `\`table\`.\`column\`` | Explicit table reference |
-| `'table.*'` | `\`table\`.*` | All columns from a table |
-| `'{column}'` | Deferred resolution | Used inside Raw expressions |
+| Syntax           | Resolves to                 | Use case                        |
+|------------------|-----------------------------|---------------------------------|
+| `'column'`       | `` `main_table`.`column` `` | Column on the main (FROM) table |
+| `'table.column'` | `` `table`.`column` ``      | Explicit table reference        |
+| `'table.*'`      | `` `table`.* ``             | All columns from a table        |
+| `'{column}'`     | Deferred resolution         | Used inside Raw expressions     |
 
 This applies to `select()`, `where()`, `orderBy()`, `groupBy()`, `having()`, `in()`, `between()`, `like()`, `isNull()`, and join ON values.
 
 ### Examples
 
 ```php
-// SELECT `u`.`first_name`, `u`.`last_name`, `profile`.`email` FROM `user` `u`
-// INNER JOIN `profile` ON `profile`.`user_id` = `u`.`id`
-// WHERE `u`.`status` = ?
+/* SELECT `u`.`first_name`, `u`.`last_name`, `profile`.`email` FROM `user` `u`
+   INNER JOIN `profile` ON `profile`.`user_id` = `u`.`id`
+   WHERE `u`.`status` = ? */
 $users = (new ActiveQuery())
     ->from('user u')
     ->select('first_name', 'last_name', 'profile.email')
@@ -702,18 +724,18 @@ $users = (new ActiveQuery())
     ->on('mysql')
     ->get();
 
-// SELECT `u`.* FROM `user` `u`
-// LEFT JOIN `profile` AS `p` ON `p`.`user_id` = `u`.`id`
+/* SELECT `u`.* FROM `user` `u`
+   LEFT JOIN `profile` AS `p` ON `p`.`user_id` = `u`.`id` */
 $users = (new ActiveQuery())
     ->from('user u')
     ->leftJoin('profile p', ['user_id' => 'id'])
     ->on('mysql')
     ->get();
 
-// Multiple joins — use dot notation to reference specific tables
-// SELECT `post`.`title`, `user`.`username`, `category`.`name` FROM `post`
-// INNER JOIN `user` ON `user`.`id` = `post`.`user_id`
-// INNER JOIN `category` ON `category`.`id` = `post`.`category_id`
+/* Multiple joins — use dot notation to reference specific tables
+   SELECT `post`.`title`, `user`.`username`, `category`.`name` FROM `post`
+   INNER JOIN `user` ON `user`.`id` = `post`.`user_id`
+   INNER JOIN `category` ON `category`.`id` = `post`.`category_id` */
 $posts = (new ActiveQuery())
     ->from('post')
     ->select('post.title', 'user.username', 'category.name')
@@ -730,9 +752,9 @@ Use `{attribute}` placeholders inside `Raw` expressions — they resolve to the 
 ```php
 use Simsoft\DB\Builder\Raw;
 
-// SELECT `u`.*, `profile`.`bio` FROM `user` `u`
-// INNER JOIN `profile` ON `profile`.`user_id` = `u`.`id`
-// WHERE `profile`.`verified` = ?
+/* SELECT `u`.*, `profile`.`bio` FROM `user` `u`
+   INNER JOIN `profile` ON `profile`.`user_id` = `u`.`id`
+   WHERE `profile`.`verified` = ? */
 $users = (new ActiveQuery())
     ->from('user u')
     ->select('*', 'profile.bio')
@@ -742,8 +764,8 @@ $users = (new ActiveQuery())
     ->get();
 
 // {id} resolves to `u`.`id` (the main table alias)
-// SELECT `u`.*, `log`.`action` FROM `user` `u`
-// WHERE `log`.`user_id` = `u`.`id` AND `log`.`created_at` > ?
+/* SELECT `u`.*, `log`.`action` FROM `user` `u`
+   WHERE `log`.`user_id` = `u`.`id` AND `log`.`created_at` > ? */
 $users = (new ActiveQuery())
     ->from('user u')
     ->selectRaw('`u`.*, `log`.`action`')
@@ -763,37 +785,37 @@ Each also has a `Distinct` variant: `countDistinct()`, `sumDistinct()`, etc.
 ```php
 $query = User::find()->where('status', 1);
 
-// SELECT COUNT(*) FROM `user` WHERE `user`.`status` = ?
+/* SELECT COUNT(*) FROM `user` WHERE `user`.`status` = ? */
 $total = $query->count();
 
-// SELECT COUNT(`user`.`email`) FROM `user` WHERE `user`.`status` = ?
+/* SELECT COUNT(`user`.`email`) FROM `user` WHERE `user`.`status` = ? */
 $emailCount = $query->count('email');
 
-// SELECT COUNT(DISTINCT `user`.`role`) FROM `user` WHERE `user`.`status` = ?
+/* SELECT COUNT(DISTINCT `user`.`role`) FROM `user` WHERE `user`.`status` = ? */
 $roles = $query->countDistinct('role');
 
-// SELECT AVG(`user`.`age`) FROM `user` WHERE `user`.`status` = ?
+/* SELECT AVG(`user`.`age`) FROM `user` WHERE `user`.`status` = ? */
 $avgAge = $query->avg('age');
 
-// SELECT SUM(`user`.`salary`) FROM `user` WHERE `user`.`status` = ?
+/* SELECT SUM(`user`.`salary`) FROM `user` WHERE `user`.`status` = ? */
 $totalSalary = $query->sum('salary');
 
-// SELECT MIN(`user`.`age`) FROM `user` WHERE `user`.`status` = ?
+/* SELECT MIN(`user`.`age`) FROM `user` WHERE `user`.`status` = ? */
 $minAge = $query->min('age');
 
-// SELECT MAX(`user`.`salary`) FROM `user` WHERE `user`.`status` = ?
+/* SELECT MAX(`user`.`salary`) FROM `user` WHERE `user`.`status` = ? */
 $maxSalary = $query->max('salary');
 
-// SELECT SUM(DISTINCT `user`.`score`) FROM `user` WHERE `user`.`status` = ?
+/* SELECT SUM(DISTINCT `user`.`score`) FROM `user` WHERE `user`.`status` = ? */
 $uniqueScoreSum = $query->sumDistinct('score');
 ```
 
 Aggregations respect all conditions (WHERE, JOIN, GROUP BY) on the query:
 
 ```php
-// SELECT SUM(`order`.`total`) FROM `order`
-// INNER JOIN `user` ON `user`.`id` = `order`.`user_id`
-// WHERE `user`.`role` = ?
+/* SELECT SUM(`order`.`total`) FROM `order`
+   INNER JOIN `user` ON `user`.`id` = `order`.`user_id`
+   WHERE `user`.`role` = ? */
 $vipTotal = Order::find()
     ->join('user', ['id' => 'order.user_id'])
     ->where('user.role', 'vip')
@@ -805,7 +827,7 @@ $vipTotal = Order::find()
 Use an array with alias as key for sub-query FROM:
 
 ```php
-// FROM (SELECT ... FROM `user` `t` WHERE `t`.`id` > ?) `u` WHERE `u`.`age` > ?
+/* FROM (SELECT ... FROM `user` `t` WHERE `t`.`id` > ?) `u` WHERE `u`.`age` > ? */
 $users = (new ActiveQuery())
     ->from(['u' => (new ActiveQuery())
         ->from('user t')
@@ -844,7 +866,7 @@ Use raw SQL fragments within the fluent builder for expressions that can't be bu
 ### `selectRaw()` — Raw SELECT expression
 
 ```php
-// SELECT `user`.`name`, COUNT(*) AS total FROM `user` GROUP BY `user`.`department_id`
+/* SELECT `user`.`name`, COUNT(*) AS total FROM `user` GROUP BY `user`.`department_id` */
 $users = User::find()
     ->select('name')
     ->selectRaw('COUNT(*) AS total')
@@ -855,7 +877,7 @@ $users = User::find()
 ### `orderByRaw()` — Raw ORDER BY expression
 
 ```php
-// SELECT `user`.* FROM `user` ORDER BY FIELD(status, 3, 1, 2)
+/* SELECT `user`.* FROM `user` ORDER BY FIELD(status, 3, 1, 2) */
 $users = User::find()
     ->orderByRaw('FIELD(status, 3, 1, 2)')
     ->get();
@@ -864,7 +886,7 @@ $users = User::find()
 ### `groupByRaw()` — Raw GROUP BY expression
 
 ```php
-// SELECT YEAR(created_at) AS year, COUNT(*) AS total FROM `user` GROUP BY YEAR(created_at)
+/* SELECT YEAR(created_at) AS year, COUNT(*) AS total FROM `user` GROUP BY YEAR(created_at) */
 $stats = User::find()
     ->selectRaw('YEAR(created_at) AS year, COUNT(*) AS total')
     ->groupByRaw('YEAR(created_at)')
@@ -874,8 +896,8 @@ $stats = User::find()
 ### `havingRaw()` — Raw HAVING expression
 
 ```php
-// SELECT `user`.`department_id`, COUNT(*) AS cnt FROM `user`
-// GROUP BY `user`.`department_id` HAVING COUNT(*) > ?
+/* SELECT `user`.`department_id`, COUNT(*) AS cnt FROM `user`
+   GROUP BY `user`.`department_id` HAVING COUNT(*) > ? */
 $departments = User::find()
     ->select('department_id')
     ->selectRaw('COUNT(*) AS cnt')
@@ -887,7 +909,7 @@ $departments = User::find()
 ### `whereRaw()` — Raw WHERE expression
 
 ```php
-// SELECT `user`.* FROM `user` WHERE `user`.`salary` * 12 > ?
+/* SELECT `user`.* FROM `user` WHERE `user`.`salary` * 12 > ? */
 $users = User::find()
     ->whereRaw('{salary} * 12 > ?', [100000])
     ->get();
@@ -896,7 +918,7 @@ $users = User::find()
 ### `whereColumn()` — Compare two columns
 
 ```php
-// SELECT `user`.* FROM `user` WHERE `user`.`updated_at` > `user`.`created_at`
+/* SELECT `user`.* FROM `user` WHERE `user`.`updated_at` > `user`.`created_at` */
 $users = User::find()
     ->whereColumn('updated_at', '>', 'created_at')
     ->get();
@@ -911,9 +933,9 @@ Filter by date parts using database-specific extraction functions. Works on MySQ
 ### `whereDate()` — Filter by date (ignores time)
 
 ```php
-// MySQL:      WHERE DATE(`order`.`ordered_at`) = ?
-// PostgreSQL: WHERE "order"."ordered_at"::date = ?
-// SQLite:     WHERE date("order"."ordered_at") = ?
+/* MySQL:      WHERE DATE(`order`.`ordered_at`) = ?
+   PostgreSQL: WHERE "order"."ordered_at"::date = ?
+   SQLite:     WHERE date("order"."ordered_at") = ? */
 $orders = Order::find()->whereDate('ordered_at', '=', '2024-01-05')->get();
 $orders = Order::find()->whereDate('ordered_at', '>', '2024-06-01')->get();
 ```
@@ -921,27 +943,27 @@ $orders = Order::find()->whereDate('ordered_at', '>', '2024-06-01')->get();
 ### `whereMonth()` — Filter by month number (1-12)
 
 ```php
-// MySQL:      WHERE MONTH(`order`.`ordered_at`) = ?
-// PostgreSQL: WHERE EXTRACT(MONTH FROM "order"."ordered_at") = ?
-// SQLite:     WHERE CAST(strftime('%m', "order"."ordered_at") AS INTEGER) = ?
+/* MySQL:      WHERE MONTH(`order`.`ordered_at`) = ?
+   PostgreSQL: WHERE EXTRACT(MONTH FROM "order"."ordered_at") = ?
+   SQLite:     WHERE CAST(strftime('%m', "order"."ordered_at") AS INTEGER) = ? */
 $orders = Order::find()->whereMonth('ordered_at', '=', 1)->get();
 ```
 
 ### `whereYear()` — Filter by year
 
 ```php
-// MySQL:      WHERE YEAR(`order`.`ordered_at`) = ?
-// PostgreSQL: WHERE EXTRACT(YEAR FROM "order"."ordered_at") = ?
-// SQLite:     WHERE CAST(strftime('%Y', "order"."ordered_at") AS INTEGER) = ?
+/* MySQL:      WHERE YEAR(`order`.`ordered_at`) = ?
+   PostgreSQL: WHERE EXTRACT(YEAR FROM "order"."ordered_at") = ?
+   SQLite:     WHERE CAST(strftime('%Y', "order"."ordered_at") AS INTEGER) = ? */
 $orders = Order::find()->whereYear('ordered_at', '=', 2024)->get();
 ```
 
 ### `whereTime()` — Filter by time (ignores date)
 
 ```php
-// MySQL:      WHERE TIME(`order`.`ordered_at`) = ?
-// PostgreSQL: WHERE "order"."ordered_at"::time = ?
-// SQLite:     WHERE time("order"."ordered_at") = ?
+/* MySQL:      WHERE TIME(`order`.`ordered_at`) = ?
+   PostgreSQL: WHERE "order"."ordered_at"::time = ?
+   SQLite:     WHERE time("order"."ordered_at") = ? */
 $orders = Order::find()->whereTime('ordered_at', '=', '10:00:00')->get();
 $orders = Order::find()->whereTime('ordered_at', '>', '17:00:00')->get();
 ```
@@ -955,7 +977,7 @@ The recommended pattern is to extend `ActiveQuery` with custom methods on a per-
 For one-off conditional logic without a custom query class, use `scope()`:
 
 ```php
-// Define reusable scopes as closures or functions
+/* Define reusable scopes as closures or functions */
 $active = function ($query) {
     $query->where('status', 'active');
 };
@@ -1026,7 +1048,7 @@ $users = User::find()
     ->when($filters['role'] !== null, fn($query) => $query->where('role', $filters['role']))
     ->get();
 
-// Produces: WHERE country = ? AND age >= ?
+/* Produces: WHERE country = ? AND age >= ? */
 // The role condition is skipped because it's null
 ```
 

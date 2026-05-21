@@ -33,26 +33,27 @@ User::find()->active()->admins()->get();
 
 ## Query Builder
 
-| Task             | Code                                                |
-|------------------|-----------------------------------------------------|
-| Select columns   | `User::find()->select('id', 'name')->get()`         |
-| Eager load       | `User::find()->with('posts.comments')->get()`       |
-| Conditional      | `->when($filter, fn($query) => $query->where(...))`         |
-| Scope            | `->scope(fn($query) => $query->where('active', 1))`        |
-| Count            | `User::find()->where('status', 1)->count()`         |
-| Paginate         | `User::find()->page(2, 25)->get()`                  |
-| Cursor paginate  | `User::find()->cursorPaginate(25, $cursor)`         |
-| Pluck column     | `User::find()->pluck('email')`                      |
-| Raw SQL          | `DB::raw('SELECT ...', [...])`                      |
-| Upsert           | `DB::upsert('users', [...], ['email'])`             |
-| Select raw       | `->selectRaw('COUNT(*) AS total')`                  |
-| Order by raw     | `->orderByRaw('FIELD(status, 3, 1, 2)')`           |
-| Group by raw     | `->groupByRaw('YEAR(created_at)')`                  |
-| Having raw       | `->havingRaw('COUNT(*) > ?', [5])`                  |
-| Where raw        | `->whereRaw('{salary} * 12 > ?', [100000])`        |
-| Where column     | `->whereColumn('updated_at', '>', 'created_at')`    |
-| Cursor           | `User::find()->cursor()`                            |
-| Chunk by ID      | `->chunkById(100, fn($batch) => ...)`               |
+| Task            | Code                                                |
+|-----------------|-----------------------------------------------------|
+| Select columns  | `User::find()->select('id', 'name')->get()`         |
+| Eager load      | `User::find()->with('posts.comments')->get()`       |
+| Conditional     | `->when($filter, fn($query) => $query->where(...))` |
+| Scope           | `->scope(fn($query) => $query->where('active', 1))` |
+| Count           | `User::find()->where('status', 1)->count()`         |
+| Paginate        | `User::find()->page(2, 25)->get()`                  |
+| Cursor paginate | `User::find()->cursorPaginate(25, $cursor)`         |
+| Pluck column    | `User::find()->pluck('email')`                      |
+| Raw SQL         | `DB::raw('SELECT ...', [...])`                      |
+| Upsert          | `DB::upsert('users', [...], ['email'])`             |
+| Select raw      | `->selectRaw('COUNT(*) AS total')`                  |
+| Order by raw    | `->orderByRaw('FIELD(status, 3, 1, 2)')`            |
+| Order by desc   | `->orderByDesc('created_at')`                       |
+| Group by raw    | `->groupByRaw('YEAR(created_at)')`                  |
+| Having raw      | `->havingRaw('COUNT(*) > ?', [5])`                  |
+| Where raw       | `->whereRaw('{salary} * 12 > ?', [100000])`         |
+| Where column    | `->whereColumn('updated_at', '>', 'created_at')`    |
+| Cursor          | `User::find()->cursor()`                            |
+| Chunk by ID     | `->chunkById(100, fn($batch) => ...)`               |
 
 ## Conditions
 

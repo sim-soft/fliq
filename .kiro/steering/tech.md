@@ -30,6 +30,14 @@ composer qc-fix     # phpcbf (PSR-12)
 
 4-space indent, LF endings, UTF-8, final newline, trim trailing whitespace.
 
+## Documentation Code Examples
+
+- Multi-line SQL comments use `/* */` block style, not `//` per line
+- No single-character variables (`$q`, `$u`) — use descriptive names (`$query`,
+  `$user`)
+- Avoid `!attribute` pattern in examples — use dot notation (`table.column`)
+- Show actual SQL output above the code when possible
+
 ## Quality Gates
 
 All code must pass before presenting: `composer qc` + `composer test`.
