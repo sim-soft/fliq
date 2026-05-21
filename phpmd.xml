@@ -74,7 +74,7 @@
     <rule ref="rulesets/controversial.xml/CamelCaseMethodName"/>
     <rule ref="rulesets/controversial.xml/CamelCaseParameterName"/>
     <rule ref="rulesets/controversial.xml/CamelCaseVariableName"/>
-    <rule ref="rulesets/design.xml/ExitExpression"/>
+    <!--<rule ref="rulesets/design.xml/ExitExpression"/>--> <!-- dd() is the only intentional exit -->
     <rule ref="rulesets/design.xml/EvalExpression"/>
     <rule ref="rulesets/design.xml/GotoStatement"/>
     <rule ref="rulesets/design.xml/NumberOfChildren"/>
@@ -94,7 +94,7 @@
     <rule ref="rulesets/naming.xml/ShortMethodName">
         <properties>
             <property name="minimum" value="3"/>
-            <property name="exceptions" value="in,on,to"/>
+            <property name="exceptions" value="in,on,to,dd"/>
         </properties>
     </rule>
     <rule ref="rulesets/naming.xml/ConstructorWithNameAsEnclosingClass"/>

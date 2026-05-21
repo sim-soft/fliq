@@ -65,13 +65,16 @@ trait Execute
 
         if ($binds !== null && method_exists($this, 'getReadableSQL')) {
             echo $this->getReadableSQL($sql, $binds) . PHP_EOL;
-        } elseif ($binds !== null) {
-            echo $sql . PHP_EOL;
-            echo "Binds: " . json_encode($binds) . PHP_EOL;
-        } else {
-            echo $sql . PHP_EOL;
+            return $this;
         }
 
+        if ($binds !== null) {
+            echo $sql . PHP_EOL;
+            echo "Binds: " . json_encode($binds) . PHP_EOL;
+            return $this;
+        }
+
+        echo $sql . PHP_EOL;
         return $this;
     }
 
@@ -83,7 +86,7 @@ trait Execute
     public function dd(): never
     {
         $this->dump();
-        exit(1);
+        exit(1); // @phpcs:ignore -- intentional exit for debug method
     }
 
     /**
