@@ -45,7 +45,7 @@ foreach ($users as $user) {
 }
 ```
 
-Get first record:
+Get the first record:
 
 ```php
 /* SELECT `user`.* FROM `user` LIMIT 1 */
@@ -83,7 +83,7 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
-Select with raw expression:
+Select with a raw expression:
 
 ```php
 /* SELECT `u`.`first_name`, `u`.`last_name`, COUNT(*) AS count, SUM(`u`.`age`) AS sum FROM `user` `u` */
@@ -427,9 +427,9 @@ User::find()->where('meta->address.city', '=', 'Kuala Lumpur')->get();
 
 Use `->` to separate column from path, and `.` for nested keys:
 
-| Expression | MySQL path | PostgreSQL |
-|-----------|-----------|-----------|
-| `meta->age` | `$.age` | `'age'` |
+| Expression           | MySQL path       | PostgreSQL                |
+|----------------------|------------------|---------------------------|
+| `meta->age`          | `$.age`          | `'age'`                   |
 | `meta->address.city` | `$.address.city` | `-> 'address' ->> 'city'` |
 
 ### `jsonContains()` — Check if JSON array contains a value
@@ -518,13 +518,13 @@ User::find()
 
 For users who prefer the verbose naming:
 
-| Primary (recommended) | Alias |
-|-----------------------|-------|
-| `jsonContains()` | `whereJsonContains()` |
-| `jsonNotContains()` | `whereJsonDoesntContain()` |
-| `jsonHas()` | `whereJsonContainsKey()` |
-| `jsonMissing()` | `whereJsonDoesntContainKey()` |
-| `jsonLength()` | `whereJsonLength()` |
+| Primary (recommended) | Alias                         |
+|-----------------------|-------------------------------|
+| `jsonContains()`      | `whereJsonContains()`         |
+| `jsonNotContains()`   | `whereJsonDoesntContain()`    |
+| `jsonHas()`           | `whereJsonContainsKey()`      |
+| `jsonMissing()`       | `whereJsonDoesntContainKey()` |
+| `jsonLength()`        | `whereJsonLength()`           |
 
 ### JSON with Joins
 
@@ -1106,3 +1106,42 @@ $users = User::find()
 ```
 
 The return value of the callback is ignored — the query continues unchanged.
+
+### `dd()` — Dump and Die
+
+Outputs the full SQL with values interpolated, then stops execution:
+
+```php
+User::find()
+    ->where('status', 'active')
+    ->orderBy('name')
+    ->dd();
+
+// Output:
+// SELECT `user`.* FROM `user` WHERE `user`.`status` = 'active' ORDER BY `user`.`name` ASC
+// (script exits)
+```
+
+Works on any builder — ActiveQuery, Raw, Insert, Update, Delete:
+
+```php
+DB::table('orders')
+    ->where('total', '>', 100)
+    ->join('user', ['id' => 'orders.user_id'])
+    ->dd();
+```
+
+### `dump()` — Dump Without Stopping
+
+Same as `dd()` but continues execution. Chainable:
+
+```php
+$users = User::find()
+    ->where('status', 'active')
+    ->dump()  // prints full SQL, then continues
+    ->orderBy('name')
+    ->get();
+
+// Output:
+// SELECT `user`.* FROM `user` WHERE `user`.`status` = 'active'
+```
