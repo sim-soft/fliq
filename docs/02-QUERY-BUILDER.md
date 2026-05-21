@@ -701,12 +701,12 @@ The `join()` array parameter is `['joined_table_column' => 'reference_column']`:
 
 ### Attribute Resolution
 
-| Syntax | Resolves to | Use case |
-|--------|-------------|----------|
-| `'column'` | `\`main_table\`.\`column\`` | Column on the main (FROM) table |
-| `'table.column'` | `\`table\`.\`column\`` | Explicit table reference |
-| `'table.*'` | `\`table\`.*` | All columns from a table |
-| `'{column}'` | Deferred resolution | Used inside Raw expressions |
+| Syntax           | Resolves to                 | Use case                        |
+|------------------|-----------------------------|---------------------------------|
+| `'column'`       | `` `main_table`.`column` `` | Column on the main (FROM) table |
+| `'table.column'` | `` `table`.`column` ``      | Explicit table reference        |
+| `'table.*'`      | `` `table`.* ``             | All columns from a table        |
+| `'{column}'`     | Deferred resolution         | Used inside Raw expressions     |
 
 This applies to `select()`, `where()`, `orderBy()`, `groupBy()`, `having()`, `in()`, `between()`, `like()`, `isNull()`, and join ON values.
 
