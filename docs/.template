@@ -1,0 +1,78 @@
+### Docsify
+npx docsify-cli serve docs
+
+
+### index.html
+
+# SEO
+- Add SEO Meta Tags
+- Add Open Graph Meta Tags
+- Add Twitter Meta Tags
+- Add Sitemap
+- Add sitemap.xml
+- Add Structured Data
+
+# Put to header
+<style>
+.logo-text { color: inherit !important; }
+</style>
+
+
+# Put to body after <div id="app"></div>
+<script>
+    window.$docsify = {
+        name: 'Simsoft DataFlow',
+        nameLink: 'https://sim-soft.github.io/http-client/',
+        repo: 'https://github.com/sim-soft/http-client',
+        loadSidebar: true,
+        subMaxLevel: 3,
+        auto2top: true,
+        search: {
+            placeholder: 'Search documentation',
+            noData: 'No results found',
+            depth: 3
+        },
+        darklightTheme: {
+            defaultTheme: 'light',
+            siteFont: 'Source Sans Pro, Helvetica Neue, Arial, sans-serif',
+            codeFontFamily: 'JetBrains Mono, Roboto Mono, Monaco, courier, monospace',
+            dark: {
+                accent: '#E8960C',
+                toogleBackground: '#1a1a2e',
+                background: '#1a1a2e',
+                textColor: '#e0e0e0',
+                codeBackgroundColor: '#0d1117',
+            },
+            light: {
+                accent: '#C47A08',
+                toogleBackground: '#fff',
+                background: '#fff',
+                textColor: '#1a1a1a',
+                codeBackgroundColor: '#f6f8fa',
+            },
+        }
+    };
+</script>
+
+# Put at the bottom of the body tag.
+<!-- Title prefix plugin -->
+<script>
+window.$docsify.plugins = (window.$docsify.plugins || []).concat(function(hook) {
+  hook.doneEach(function() {
+    var title = document.querySelector('.markdown-section h1');
+    document.title = 'Simsoft DataFlow' + (title ? ' - ' + title.textContent : '');
+  });
+});
+</script>
+
+
+### _sidebar.md
+
+# Put at the botton of the file
+
+<div style="text-align:center;margin:20px 0">
+    <a href="https://github.com/sim-soft" target="_blank" style="text-decoration:none">
+        <img src="img/logo/simsoft.webp" alt="Simsoft" width="100">
+        <p class="logo-text" style="margin-top:8px;font-size:0.85em;text-decoration:none">by Simsoft</p>
+    </a>
+</div>
