@@ -2,13 +2,55 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>FLIQ — Fast, Lightweight, Independent Query Builder</title>
-    <meta name="description" content="High-performance PHP Active Record / ORM for MySQL, PostgreSQL, and SQLite.">
+    <title>FLIQ — Fast, Lightweight, Independent Query Builder for PHP</title>
+    <meta name="description"
+          content="FLIQ is a high-performance PHP Active Record ORM for MySQL, PostgreSQL, and SQLite. Zero dependencies, fluent query builder, nested eager loading, JSON queries, and N+1 detection built-in.">
+    <meta name="keywords"
+          content="PHP ORM, Active Record, query builder, MySQL, PostgreSQL, SQLite, fluent API, eager loading, PHP database, lightweight ORM, FLIQ">
+    <meta name="author" content="Simsoft">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify-darklight-theme@3/dist/style.min.css">
+
+    <!-- Open Graph / Social -->
+    <meta property="og:title" content="FLIQ — Fast, Lightweight, Independent Query Builder for PHP">
+    <meta property="og:description"
+          content="High-performance PHP ORM with zero dependencies. Fluent query builder, nested eager loading, JSON queries, soft deletes, and N+1 detection.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://sim-soft.github.io/fliq/">
+    <meta property="og:image" content="https://sim-soft.github.io/fliq/img/simsoft.webp">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="FLIQ — PHP Active Record ORM">
+    <meta name="twitter:description" content="Zero-dependency PHP ORM. Faster than Eloquent, simpler than Doctrine.">
+
+    <!-- Canonical -->
+    <link rel="canonical" href="https://sim-soft.github.io/fliq/">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "SoftwareSourceCode",
+            "name": "FLIQ",
+            "description": "Fast, Lightweight, Independent Query Builder — a high-performance PHP Active Record ORM for MySQL, PostgreSQL, and SQLite.",
+            "url": "https://github.com/sim-soft/fliq",
+            "codeRepository": "https://github.com/sim-soft/fliq",
+            "programmingLanguage": "PHP",
+            "license": "https://opensource.org/licenses/MIT",
+            "author": {
+                "@type": "Organization",
+                "name": "Simsoft",
+                "url": "https://github.com/sim-soft"
+            }
+        }
+    </script>
+
+    <!-- Theme -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify-darklight-theme@latest/dist/style.min.css"
+          title="docsify-darklight-theme" type="text/css">
     <style>
-        :root {
-            --sidebar-width: 280px;
+        .logo-text {
+            color: inherit !important;
         }
     </style>
 </head>
@@ -16,43 +58,52 @@
 <div id="app"></div>
 <script>
     window.$docsify = {
-        name: '<img src="img/simsoft.webp" alt="FLIQ" width="120"><br><small>by Simsoft</small>',
-        nameLink: 'https://github.com/sim-soft',
+        name: 'Simsoft FLIQ',
+        nameLink: 'https://sim-soft.github.io/fliq',
         repo: 'https://github.com/sim-soft/fliq',
         loadSidebar: true,
         subMaxLevel: 3,
         auto2top: true,
-        darklightTheme: {
-            defaultTheme: 'light'
-        },
         search: {
-            placeholder: 'Search docs...',
-            noData: 'No results.',
-            paths: 'auto'
+            placeholder: 'Search documentation',
+            noData: 'No results found',
+            depth: 3
         },
-        copyCode: {
-            buttonText: 'Copy',
-            successText: 'Copied!'
-        },
-        pagination: {
-            previousText: '← Previous',
-            nextText: 'Next →',
-            crossChapter: true
+        darklightTheme: {
+            defaultTheme: 'light',
+            siteFont: 'Source Sans Pro, Helvetica Neue, Arial, sans-serif',
+            codeFontFamily: 'JetBrains Mono, Roboto Mono, Monaco, courier, monospace',
+            dark: {
+                accent: '#E8960C',
+                toogleBackground: '#1a1a2e',
+                background: '#1a1a2e',
+                textColor: '#e0e0e0',
+                codeBackgroundColor: '#0d1117'
+            },
+            light: {
+                accent: '#C47A08',
+                toogleBackground: '#fff',
+                background: '#fff',
+                textColor: '#1a1a1a',
+                codeBackgroundColor: '#f6f8fa'
+            }
         }
     };
 </script>
-<!-- Docsify core -->
 <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
-<!-- Dark/Light toggle -->
-<script src="https://cdn.jsdelivr.net/npm/docsify-darklight-theme@3/dist/index.min.js"></script>
-<!-- Plugins -->
+<script src="https://cdn.jsdelivr.net/npm/docsify-darklight-theme@latest/dist/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/docsify-copy-code@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/docsify-pagination@2/dist/docsify-pagination.min.js"></script>
-<!-- Syntax highlighting -->
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-php.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-sql.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docsify-copy-code@2/dist/docsify-copy-code.min.js"></script>
+<script>
+    window.$docsify.plugins = (window.$docsify.plugins || []).concat(function (hook) {
+        hook.doneEach(function () {
+            var title = document.querySelector('.markdown-section h1');
+            document.title = 'Simsoft FLIQ' + (title ? ' - ' + title.textContent : '');
+        });
+    });
+</script>
 </body>
 </html>

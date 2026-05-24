@@ -1,5 +1,5 @@
 - **Introduction**
-    - [Home](/)
+    - [About](/)
 
 - **Getting Started**
     - [Connections & Drivers](01-GETTING-STARTED.md)
@@ -24,3 +24,10 @@
 
 - **Quick Reference**
     - [Cheatsheet](08-CHEATSHEET.md)
+
+<div style="text-align:center;margin:20px 0">
+    <a href="https://github.com/sim-soft" target="_blank" style="text-decoration:none">
+        <img src="img/logo/simsoft.webp" alt="Simsoft" width="100">
+        <p class="logo-text" style="margin-top:8px;font-size:0.85em;text-decoration:none">by Simsoft</p>
+    </a>
+</div>
