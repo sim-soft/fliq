@@ -11,6 +11,9 @@ The `validate()` method on Model is called automatically before `save()`. Return
 - [Validating in the Controller](#validating-in-the-controller)
 - [Reusable Validator Class](#reusable-validator-class)
 - [Which Pattern Should I Use?](#which-pattern-should-i-use)
+- [Available Constraints](#available-constraints)
+- [Custom Rules](#custom-rules)
+- [Conditional and Optional Rules](#conditional-and-optional-rules)
 
 ## Install
 
@@ -411,3 +414,206 @@ Start simple. Move to more complex patterns only when you need them:
 | Multiple controllers share the same rules               | [Reusable Validator Class](#reusable-validator-class)            |
 
 **For most projects, Basic Usage is all you need.**
+
+## Available Constraints
+
+The examples above use `NotBlank`, `Email`, and `Length` — but there are many
+more. Each constraint is a class you import from
+`Symfony\Component\Validator\Constraints`:
+
+```php
+use Symfony\Component\Validator\Constraints\NotBlank;
+use Symfony\Component\Validator\Constraints\Email;
+use Symfony\Component\Validator\Constraints\Length;
+use Symfony\Component\Validator\Constraints\Url;
+use Symfony\Component\Validator\Constraints\Regex;
+use Symfony\Component\Validator\Constraints\Range;
+use Symfony\Component\Validator\Constraints\Choice;
+// ... and many more
+```
+
+Here are the most commonly used ones:
+
+| Constraint | What it checks        | Example                                                  |
+|------------|-----------------------|----------------------------------------------------------|
+| `NotBlank` | Not null/empty        | `new NotBlank(message: 'Required')`                      |
+| `Length`   | String min/max length | `new Length(min: 2, max: 100)`                           |
+| `Email`    | Valid email format    | `new Email(message: 'Invalid email')`                    |
+| `Url`      | Valid URL             | `new Url(message: 'Invalid URL')`                        |
+| `Regex`    | Matches a pattern     | `new Regex(pattern: '/^\d+$/', message: 'Numbers only')` |
+| `Range`    | Number within range   | `new Range(min: 1, max: 100)`                            |
+| `Choice`   | Value in allowed list | `new Choice(choices: ['active', 'inactive'])`            |
+| `Type`     | PHP type check        | `new Type(type: 'integer')`                              |
+| `Positive` | Greater than zero     | `new Positive()`                                         |
+| `Date`     | Valid date string     | `new Date()`                                             |
+
+Every constraint accepts a `message` parameter to customize the error text, and
+a `groups` parameter for [Validation Groups](#validation-groups-scenarios).
+
+For the full list of 70+ constraints (numbers, strings, dates, files,
+comparison, etc.), see
+the [Symfony Constraints Reference](https://symfony.com/doc/current/validation.html#basic-constraints).
+
+## Custom Rules
+
+When built-in constraints aren't enough, create your own.
+
+### Inline with Rule::make()
+
+The quickest way — a closure that receives the value and a `$fail` callback:
+
+```php
+use Simsoft\Validator\Rule;
+
+$validator = Validator::make($_POST, [
+    'username' => Rule::make(function (mixed $value, Closure $fail) {
+        if (str_contains($value, ' ')) {
+            $fail('Username cannot contain spaces');
+        }
+
+        if (preg_match('/[^a-z0-9_]/', $value)) {
+            $fail('Username can only contain lowercase letters, numbers, and underscores');
+        }
+    }),
+]);
+```
+
+If validation passes, do nothing. If it fails, call `$fail('error message')`.
+
+### Reusable Constraint Class
+
+For rules, you use it in multiple places, extend `ValidationRule`:
+
+```php
+namespace App\Validators\Rules;
+
+use Closure;
+use Simsoft\Validator\Constraints\ValidationRule;
+
+class NoDisposableEmail extends ValidationRule
+{
+    public string $message = 'Disposable email addresses are not allowed';
+
+    private array $blocklist = ['mailinator.com', 'tempmail.com', 'throwaway.email'];
+
+    public function validate(mixed $value, Closure $fail): void
+    {
+        if (!is_string($value) || $value === '') {
+            return; // let NotBlank handle empty values
+        }
+
+        $domain = strtolower(substr(strrchr($value, '@') ?: '', 1));
+
+        if (in_array($domain, $this->blocklist, true)) {
+            $fail($this->message);
+        }
+    }
+}
+```
+
+Use it like any other constraint:
+
+```php
+use App\Validators\Rules\NoDisposableEmail;
+
+$validator = Validator::make($_POST, [
+    'email' => Rule::bail([
+        new NotBlank(message: 'Email is required'),
+        new Email(message: 'Invalid email'),
+        new NoDisposableEmail(),
+    ]),
+]);
+```
+
+> 📖 For more patterns (constructor parameters, groups support, etc.),
+> see [Custom Rules](https://sim-soft.github.io/validator/#/custom-rules) in the
+> full validator docs.
+
+## Conditional and Optional Rules
+
+Sometimes a field should only be validated under certain conditions. The
+validator provides helpers for this.
+
+### Rule::requiredIf() — Required only when a condition is true
+
+In a model's `validate()` method, reference the model's own attributes:
+
+```php
+public function validate(): bool
+{
+    $validator = Validator::make($this->getAttributes(), [
+        'company' => Rule::requiredIf(
+            $this->type === 'business',
+            message: 'Company name is required for business accounts'
+        ),
+    ]);
+
+    if ($validator->fails()) {
+        $this->addValidationErrors($validator->errors());
+        return false;
+    }
+
+    return true;
+}
+```
+
+The `company` field is only required when `type` is `'business'`. If the
+condition is false, the field is skipped entirely.
+
+In a controller, pass the condition from the input data:
+
+```php
+$data = $_POST;
+
+$validator = Validator::make($data, [
+    'company' => Rule::requiredIf(
+        ($data['type'] ?? '') === 'business',
+        message: 'Company name is required for business accounts'
+    ),
+]);
+```
+
+### Rule::sometimes() — Only validate when the value is present
+
+```php
+use Simsoft\Validator\Rule;
+
+$validator = Validator::make($this->getAttributes(), [
+    'website' => Rule::sometimes(function (mixed $value, Closure $fail) {
+        if (!filter_var($value, FILTER_VALIDATE_URL)) {
+            $fail('Invalid website URL');
+        }
+    }),
+]);
+```
+
+If `website` is `null` (not provided), validation is skipped. If it has a value,
+the rule runs. Useful for optional fields like profile URLs or social links.
+
+### $validator→sometimes() — Add rules based on other input
+
+Use this when a rule depends on another field's value. The condition closure
+receives the full input array:
+
+```php
+use Symfony\Component\Validator\Constraints\NotBlank;
+
+$validator = Validator::make($this->getAttributes(), [
+    'email' => new NotBlank(message: 'Email is required'),
+]);
+
+// 'phone' is only required if 'contact_method' is 'phone'
+$validator->sometimes(
+    'phone',
+    new NotBlank(message: 'Phone is required when contact method is phone'),
+    fn(array $input) => ($input['contact_method'] ?? '') === 'phone'
+);
+```
+
+This works in any context — model `validate()`, controller, or reusable
+validator class — because the closure inspects the input data that was passed to
+`Validator::make()`.
+
+> 📖 For more advanced patterns,
+> see [Conditional Rules](https://sim-soft.github.io/validator/#/conditional-rules)
+> in the full validator docs.

@@ -5,13 +5,23 @@ A compact cheatsheet for common operations.
 ## Custom Query Class (Recommended for Scopes)
 
 ```php
-class UserQuery extends ActiveQuery {
-    public function active(): self { return $this->where('status', 'active'); }
-    public function admins(): self { return $this->where('role', 'admin'); }
+class UserQuery extends ActiveQuery
+{
+    public function active(): self
+    {
+        return $this->where('status', 'active');
+    }
+
+    public function admins(): self
+    {
+        return $this->where('role', 'admin');
+    }
 }
 
-class User extends Model {
-    public static function find(): UserQuery {
+class User extends Model
+{
+    public static function find(): UserQuery
+    {
         return new UserQuery(get_called_class());
     }
 }
@@ -71,16 +81,12 @@ User::find()->active()->admins()->get();
 
 ## Date Filters
 
-| Task              | Code                                               |
-|-------------------|----------------------------------------------------|
-| By date           | `->whereDate('created_at', '=', '2024-01-05')`     |
-| By month          | `->whereMonth('created_at', '=', 1)`               |
-| By year           | `->whereYear('created_at', '=', 2024)`             |
-| By time           | `->whereTime('created_at', '>', '17:00:00')`       |
-| Not null          | `->where('email', '!=', null)`                     |
-| Multi-column any  | `->whereAny(['name', 'email'], 'like', '%john%')`  |
-| Multi-column all  | `->whereAll(['title', 'body'], 'like', '%php%')`   |
-| Multi-column none | `->whereNone(['title', 'body'], 'like', '%spam%')` |
+| Task     | Code                                           |
+|----------|------------------------------------------------|
+| By date  | `->whereDate('created_at', '=', '2024-01-05')` |
+| By month | `->whereMonth('created_at', '=', 1)`           |
+| By year  | `->whereYear('created_at', '=', 2024)`         |
+| By time  | `->whereTime('created_at', '>', '17:00:00')`   |
 
 ## JSON Queries
 
@@ -278,4 +284,3 @@ User::transaction(function () {
 | Disconnect       | `Connection::disconnect('mysql')`                                    |
 | Reconnect        | `Connection::reconnect('mysql')`                                     |
 | Reset all        | `Connection::reset()`                                                |
-| Read/write split | `Connection::add('mysql', [..., 'read' => [...], 'write' => [...]])` |
