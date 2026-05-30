@@ -393,7 +393,7 @@ class ValidationTest extends TestCase
 
         // Verify profile was saved
         $profile = Profile::find()->where('user_id', $user->id)->first();
-        $this->assertNotNull($profile);
+        $this->assertInstanceOf(Profile::class, $profile);
         $this->assertSame('Hello world', $profile->bio);
     }
 
