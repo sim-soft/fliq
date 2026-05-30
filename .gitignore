@@ -6,6 +6,7 @@
 vendor/
 tests/bootstrap.php
 composer.lock
+index.php
 
 # Node artifact files
 node_modules/
@@ -80,3 +81,4 @@ nbproject/
 .kiro/temp/
 .kiro/sessions/
 .kiro/history/
+/.vscode/settings.json

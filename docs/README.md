@@ -2,6 +2,8 @@
 
 > **F**ast, **L**ightweight, **I**ndependent **Q**uery Builder
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sim-soft/fliq/blob/main/LICENSE)
+
 A high-performance PHP Active Record / ORM for MySQL, MariaDB, PostgreSQL, and
 SQLite. Zero framework dependencies, minimal footprint, maximum speed. An
 alternative to Eloquent and Doctrine for developers who want speed without
@@ -69,7 +71,7 @@ $users = User::find()
 composer require simsoft/fliq
 ```
 
-Requires PHP 8.1+ with `ext-pdo`.
+Requires PHP 8.4+ with `ext-pdo`.
 
 ## Features
 
@@ -89,7 +91,7 @@ Requires PHP 8.1+ with `ext-pdo`.
 
 - CRUD with automatic dirty tracking
 - Mass assignment protection (fillable/guarded)
-- Attribute casting (int, bool, float, string, array, json)
+- Attribute casting (int, bool, float, string, array, JSON)
 - Composite primary keys
 - Lifecycle hooks and model events/observers
 - Soft deletes and automatic timestamps
@@ -144,7 +146,7 @@ and other ORMs.
 
 ## Requirements
 
-- PHP 8.1+
+- PHP 8.4+
 - MySQL 5.7+ / MariaDB 10.3+ / PostgreSQL 12+ / SQLite 3.39+
 - ext-pdo (required) or ext-mysqli (optional)
 

@@ -9,6 +9,7 @@
 
 - **Active Record**
     - [Models & CRUD](03-ACTIVE-RECORD.md)
+  - [Validation](09-VALIDATION.md)
 
 - **Relations**
     - [hasOne / hasMany / M:N](04-RELATION.md)

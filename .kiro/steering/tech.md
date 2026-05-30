@@ -2,7 +2,7 @@
 
 ## Runtime
 
-- PHP ^8.1 | Extensions: ext-pdo, ext-mysqli (optional)
+- PHP ^8.4 | Extensions: ext-pdo, ext-mysqli (optional)
 - Suggested: `simsoft/validator` ^1.0 (optional, for model validation)
 
 ## Dev Tools

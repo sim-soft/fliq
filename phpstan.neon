@@ -8,6 +8,3 @@ parameters:
         -
             identifier: trait.unused
             path: src/Traits/
-        -
-            identifier: function.alreadyNarrowedType
-            path: src/Traits/Execute.php
