@@ -732,13 +732,24 @@ abstract class Model implements ArrayAccess
     }
 
     /**
-     * Determine is model is dirty.
+     * Determine if the model (or specific attributes) is dirty.
      *
+     * @param string ...$attributes Attribute names to check. If empty, checks any.
      * @return bool
      */
-    public function isDirty(): bool
+    public function isDirty(string ...$attributes): bool
     {
-        return !empty($this->dirtyAttributes);
+        if (empty($attributes)) {
+            return !empty($this->dirtyAttributes);
+        }
+
+        foreach ($attributes as $attribute) {
+            if (isset($this->dirtyAttributes[$attribute])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1177,11 +1188,23 @@ abstract class Model implements ArrayAccess
      * Save the model and all nested relations in one transaction.
      *
      * @param array<string, mixed> $data Attributes and relation data.
+     * @param bool $validate Enable validation before saving.
      * @return bool
      * @throws QueryException
      */
-    public function saveTogether(array $data): bool
+    public function saveTogether(array $data, bool $validate = true): bool
     {
+        if ($validate) {
+            [$attributes] = $this->separateRelations($data);
+            if (!empty($attributes)) {
+                $this->fill($attributes);
+            }
+
+            if (!$this->validate()) {
+                return false;
+            }
+        }
+
         $exception = null;
 
         $result = static::transaction(function () use ($data, &$exception) {

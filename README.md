@@ -2,6 +2,9 @@
 
 **F**ast, **L**ightweight, **I**ndependent **Q**uery Builder
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sim-soft/fliq/blob/main/LICENSE)
+[![Docs](https://img.shields.io/badge/Docs-online-green.svg)](https://sim-soft.github.io/fliq/)
+
 A high-performance Active Record / ORM for MySQL, MariaDB, PostgreSQL, and SQLite. Zero framework dependencies, minimal footprint, maximum speed.
 
 📖 [Documentation](https://sim-soft.github.io/fliq/) · [GitHub](https://github.com/sim-soft/fliq)
@@ -47,7 +50,7 @@ For a detailed feature-by-feature comparison with Eloquent, Doctrine, Yii3, Cycl
 
 ## Requirements
 
-- PHP 8.1+
+- PHP 8.4+
 - MySQL 5.7+ / MariaDB 10.3+ / PostgreSQL 12+ / SQLite 3.39+
 - ext-pdo (required) or ext-mysqli (optional alternative for MySQL)
 

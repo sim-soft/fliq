@@ -10,7 +10,7 @@
         <properties>
             <property name="ignorepattern"
                       description="Ignore methods matching this regex. Example: /^(__construct|get.*Filtered)$/"
-                      value="/^(__construct|parse|formal|make|lookup|save|like|orLike|notLike|orNotLike|whereLike|orWhereLike|whereNotLike|orWhereNotLike|between|betweenDate|betweenDateInterval|matchAll|jsonExtract)$/"/>
+                      value="/^(__construct|parse|formal|make|lookup|save|saveTogether|like|orLike|notLike|orNotLike|whereLike|orWhereLike|whereNotLike|orWhereNotLike|between|betweenDate|betweenDateInterval|matchAll|jsonExtract)$/"/>
         </properties>
     </rule>
     <rule ref="rulesets/cleancode.xml/ElseExpression"/>

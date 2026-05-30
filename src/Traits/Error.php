@@ -2,6 +2,8 @@
 
 namespace Simsoft\DB\Traits;
 
+use Traversable;
+
 /**
  * Trait Error
  *
@@ -31,6 +33,22 @@ trait Error
     public function addErrors(array $messages = []): void
     {
         if ($messages) {
+            $this->errors = [...$this->errors, ...$messages];
+        }
+    }
+
+    /**
+     * Import errors from a Validator Errors object.
+     *
+     * Flattens the grouped error messages and appends them to this model's errors.
+     * Accepts any iterable where each value is an array of error message strings.
+     *
+     * @param Traversable<string, array<string>> $errors The validator errors object.
+     * @return void
+     */
+    public function addValidationErrors(Traversable $errors): void
+    {
+        foreach ($errors as $messages) {
             $this->errors = [...$this->errors, ...$messages];
         }
     }

@@ -8,6 +8,7 @@
 - [Composite Primary Keys](#composite-primary-keys)
 - [Attribute Casting](#attribute-casting)
 - [Lifecycle Hooks](#lifecycle-hooks)
+- [Validation](#validation)
 - [Model Events & Observers](#model-events--observers)
 - [Transactions](#transactions)
 - [Serialization](#serialization)
@@ -213,7 +214,7 @@ class User extends Model
     // Only these can be filled
     protected array $fillable = ['name', 'email', 'status'];
 
-    // These are always protected (in addition to primary key)
+    // These are always protected (in addition to a primary key)
     protected array $guarded = ['role', 'is_admin'];
 }
 ```
@@ -313,22 +314,30 @@ class User extends Model
 }
 ```
 
+## Validation
+
+The `validate()` method is called automatically before `save()`. Return `false`
+to prevent the save.
+
+For full validation guide with `simsoft/validator`,
+see [Validation](09-VALIDATION.md).
+
 ## Model Events & Observers
 
 Events let external code hook into model lifecycle moments without modifying the model class.
 
 ### Available Events
 
-| Event | When | Can cancel? |
-|-------|------|-------------|
-| `saving` | Before INSERT or UPDATE | Yes (return false) |
-| `creating` | Before INSERT | Yes |
-| `updating` | Before UPDATE | Yes |
-| `created` | After INSERT | No |
-| `updated` | After UPDATE | No |
-| `saved` | After INSERT or UPDATE | No |
-| `deleting` | Before DELETE | Yes |
-| `deleted` | After DELETE | No |
+| Event      | When                    | Can cancel?        |
+|------------|-------------------------|--------------------|
+| `saving`   | Before INSERT or UPDATE | Yes (return false) |
+| `creating` | Before INSERT           | Yes                |
+| `updating` | Before UPDATE           | Yes                |
+| `created`  | After INSERT            | No                 |
+| `updated`  | After UPDATE            | No                 |
+| `saved`    | After INSERT or UPDATE  | No                 |
+| `deleting` | Before DELETE           | Yes                |
+| `deleted`  | After DELETE            | No                 |
 
 ### Register Event Listeners
 
@@ -415,11 +424,11 @@ User::flushEvents();
 
 ### Events vs Lifecycle Hooks
 
-| | `beforeSave()`/`afterSave()` | Events/Observers |
-|---|---|---|
-| Where | Inside the model class | External (any file) |
-| Use case | Core model logic | Side effects (logging, notifications) |
-| Can cancel | No | Yes (before events) |
+|            | `beforeSave()`/`afterSave()` | Events/Observers                      |
+|------------|------------------------------|---------------------------------------|
+| Where      | Inside the model class       | External (any file)                   |
+| Use case   | Core model logic             | Side effects (logging, notifications) |
+| Can cancel | No                           | Yes (before events)                   |
 
 Use hooks for model internals. Use events for app-level concerns.
 
@@ -427,14 +436,14 @@ Use hooks for model internals. Use events for app-level concerns.
 
 > **Warning:** The following methods bypass the model lifecycle entirely. No events, hooks, or dirty tracking will run.
 
-| Method | What it does | Skips |
-|--------|-------------|-------|
-| `updateAttributes([...])` | Direct UPDATE on a single record | Events, hooks, dirty tracking, validation |
-| `updateAll([...], $query)` | Bulk UPDATE on multiple records | Events, hooks, dirty tracking, validation |
-| `updateCounter('col', 1)` | Atomic increment/decrement | Events, hooks, dirty tracking, validation |
-| `deleteAll($condition)` | Bulk DELETE | Events, hooks |
-| `insertBatch([...])` | Bulk INSERT | Events, hooks, dirty tracking, validation |
-| `updateBatch([...])` | Bulk CASE WHEN UPDATE | Events, hooks, dirty tracking, validation |
+| Method                     | What it does                     | Skips                                     |
+|----------------------------|----------------------------------|-------------------------------------------|
+| `updateAttributes([...])`  | Direct UPDATE on a single record | Events, hooks, dirty tracking, validation |
+| `updateAll([...], $query)` | Bulk UPDATE on multiple records  | Events, hooks, dirty tracking, validation |
+| `updateCounter('col', 1)`  | Atomic increment/decrement       | Events, hooks, dirty tracking, validation |
+| `deleteAll($condition)`    | Bulk DELETE                      | Events, hooks                             |
+| `insertBatch([...])`       | Bulk INSERT                      | Events, hooks, dirty tracking, validation |
+| `updateBatch([...])`       | Bulk CASE WHEN UPDATE            | Events, hooks, dirty tracking, validation |
 
 Only `save()` and `delete()` fire events. If you need events on bulk operations, iterate and call `save()`/`delete()` on each model individually (at the cost of performance).
 
@@ -507,7 +516,7 @@ $user = User::findByPk(1);
 $user->delete();        // sets deleted_at = current timestamp
 $user->trashed();       // true
 $user->restore();       // sets deleted_at = NULL
-$user->forceDelete();   // permanently removes from database
+$user->forceDelete();   // permanently removes from a database
 
 /* Queries auto-exclude soft-deleted records */
 $users = User::find()->get(); // only non-deleted users
@@ -586,7 +595,9 @@ class Post extends Model
 
 ## Scenarios
 
-The `Scenario` trait lets a model behave differently based on context — useful when the same model needs different validation rules, fillable attributes, or save logic for create vs update vs admin operations.
+The `Scenario` trait lets a model behave differently based on context — useful
+when the same model needs different validation rules, fillable attributes, or
+save logic for create vs. update vs. admin operations.
 
 ```php
 use Simsoft\DB\Model;
@@ -733,13 +744,13 @@ and calls the method.
 
 ### API Summary
 
-| Method | Returns | Purpose |
-|--------|---------|---------|
-| `withScenario(int\|string\|null $name)` | `static` | Set or clear the active scenario (chainable) |
-| `getScenario()` | `int\|string\|null` | Get the current scenario |
-| `hasScenario()` | `bool` | Check if any scenario is active |
-| `isScenario(int\|string $name)` | `bool` | Check if a specific scenario is active (strict comparison) |
-| `isAnyScenario(int\|string ...$names)` | `bool` | Check if the current scenario matches any of the given scenarios |
+| Method                                  | Returns             | Purpose                                                          |
+|-----------------------------------------|---------------------|------------------------------------------------------------------|
+| `withScenario(int\|string\|null $name)` | `static`            | Set or clear the active scenario (chainable)                     |
+| `getScenario()`                         | `int\|string\|null` | Get the current scenario                                         |
+| `hasScenario()`                         | `bool`              | Check if any scenario is active                                  |
+| `isScenario(int\|string $name)`         | `bool`              | Check if a specific scenario is active (strict comparison)       |
+| `isAnyScenario(int\|string ...$names)`  | `bool`              | Check if the current scenario matches any of the given scenarios |
 
 ## Scopes
 
@@ -1023,15 +1034,15 @@ $users = User::find()
 
 For users coming from Eloquent, these aliases are available:
 
-| Alias | Delegates to |
-|-------|-------------|
-| `whereNot()` | `not()` |
-| `orWhereNot()` | `orNot()` |
-| `whereNull()` | `isNull()` |
-| `orWhereNull()` | `orIsNull()` |
-| `whereNotNull()` | `notNull()` |
+| Alias              | Delegates to  |
+|--------------------|---------------|
+| `whereNot()`       | `not()`       |
+| `orWhereNot()`     | `orNot()`     |
+| `whereNull()`      | `isNull()`    |
+| `orWhereNull()`    | `orIsNull()`  |
+| `whereNotNull()`   | `notNull()`   |
 | `orWhereNotNull()` | `orNotNull()` |
-| `whereIn()` | `in()` |
-| `orWhereIn()` | `orIn()` |
-| `whereNotIn()` | `notIn()` |
-| `orWhereNotIn()` | `orNotIn()` |
+| `whereIn()`        | `in()`        |
+| `orWhereIn()`      | `orIn()`      |
+| `whereNotIn()`     | `notIn()`     |
+| `orWhereNotIn()`   | `orNotIn()`   |

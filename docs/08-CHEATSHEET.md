@@ -71,12 +71,12 @@ User::find()->active()->admins()->get();
 
 ## Date Filters
 
-| Task         | Code                                                  |
-|--------------|-------------------------------------------------------|
-| By date      | `->whereDate('created_at', '=', '2024-01-05')`       |
-| By month     | `->whereMonth('created_at', '=', 1)`                 |
-| By year      | `->whereYear('created_at', '=', 2024)`               |
-| By time      | `->whereTime('created_at', '>', '17:00:00')`         |
+| Task              | Code                                               |
+|-------------------|----------------------------------------------------|
+| By date           | `->whereDate('created_at', '=', '2024-01-05')`     |
+| By month          | `->whereMonth('created_at', '=', 1)`               |
+| By year           | `->whereYear('created_at', '=', 2024)`             |
+| By time           | `->whereTime('created_at', '>', '17:00:00')`       |
 | Not null          | `->where('email', '!=', null)`                     |
 | Multi-column any  | `->whereAny(['name', 'email'], 'like', '%john%')`  |
 | Multi-column all  | `->whereAll(['title', 'body'], 'like', '%php%')`   |
@@ -97,30 +97,30 @@ Aliases: `whereJsonContains`, `whereJsonDoesntContain`, `whereJsonContainsKey`, 
 
 ## Relations
 
-| Task            | Code                                                 |
-|-----------------|------------------------------------------------------|
-| Has one         | `$this->hasOne(Profile::class, ['user_id' => 'id'])` |
-| Has many        | `$this->hasMany(Post::class, ['user_id' => 'id'])`   |
-| Relation filter | `->whereHas('posts', fn($query) => $query->where(...))`      |
-| Doesn't have    | `->doesntHave('posts')`                              |
+| Task            | Code                                                    |
+|-----------------|---------------------------------------------------------|
+| Has one         | `$this->hasOne(Profile::class, ['user_id' => 'id'])`    |
+| Has many        | `$this->hasMany(Post::class, ['user_id' => 'id'])`      |
+| Relation filter | `->whereHas('posts', fn($query) => $query->where(...))` |
+| Doesn't have    | `->doesntHave('posts')`                                 |
 
 ## Collection
 
-| Task              | Code                                                         |
-|-------------------|--------------------------------------------------------------|
-| Iterate           | `foreach (User::find()->get() as $user) { ... }`             |
-| Count             | `count(User::find()->get())`                                 |
-| First             | `User::find()->get()->first()`                               |
-| All as array      | `User::find()->get()->all()`                                 |
-| Filter            | `->get()->filter(fn($user) => $user->active)`                      |
-| Map               | `->get()->map(fn($user) => $user->name)`                           |
-| Reduce            | `->get()->reduce(fn($carry, $user) => $carry + $user->score, 0)`           |
-| Index by attribute  | `->get()->indexBy('email')`                                    |
-| Group by          | `->get()->groupBy('role')`                                   |
-| Pluck             | `->get()->pluck('email')`                                    |
-| Page              | `->get()->page(2, 25)`                                       |
-| Batch process     | `foreach ($coll->batch(500) as $batch) { ... }`              |
-| Chunk size        | `->get()->chunk(50)`                                         |
+| Task               | Code                                                             |
+|--------------------|------------------------------------------------------------------|
+| Iterate            | `foreach (User::find()->get() as $user) { ... }`                 |
+| Count              | `count(User::find()->get())`                                     |
+| First              | `User::find()->get()->first()`                                   |
+| All as array       | `User::find()->get()->all()`                                     |
+| Filter             | `->get()->filter(fn($user) => $user->active)`                    |
+| Map                | `->get()->map(fn($user) => $user->name)`                         |
+| Reduce             | `->get()->reduce(fn($carry, $user) => $carry + $user->score, 0)` |
+| Index by attribute | `->get()->indexBy('email')`                                      |
+| Group by           | `->get()->groupBy('role')`                                       |
+| Pluck              | `->get()->pluck('email')`                                        |
+| Page               | `->get()->page(2, 25)`                                           |
+| Batch process      | `foreach ($coll->batch(500) as $batch) { ... }`                  |
+| Chunk size         | `->get()->chunk(50)`                                             |
 
 ## Aggregations
 
@@ -149,21 +149,104 @@ User::transaction(function () {
 
 ## Model Features
 
-| Task            | Code                                                               |
-|-----------------|--------------------------------------------------------------------|
-| Soft delete     | `$user->delete()` (sets deleted_at)                                |
-| Restore         | `$user->restore()`                                                 |
-| Force delete    | `$user->forceDelete()`                                             |
-| With trashed    | `User::withTrashed()->get()`                                       |
-| Only trashed    | `User::onlyTrashed()->get()`                                       |
-| Model events    | `User::on('creating', fn($user) => ...)`                              |
-| Observer        | `User::observe(new AuditObserver())`                               |
-| Global scope    | `User::addGlobalScope('active', fn($query) => $query->where('active', 1))` |
-| Replicate       | `$clone = $user->replicate()`                                      |
-| Increment       | `$post->increment('views')`                                        |
-| Decrement       | `$post->decrement('stock', 5)`                                     |
-| Refresh from DB | `$user->refresh()`                                                 |
-| Find all        | `User::findAll(['status' => 1, 'role' => 'admin'])`                |
+### Instance Methods
+
+| Method                                 | Description                                  |
+|----------------------------------------|----------------------------------------------|
+| `$model->isNew()`                      | True if never saved (will INSERT)            |
+| `$model->exists()`                     | True if loaded from DB (will UPDATE)         |
+| `$model->wasRecentlyCreated()`         | True if just created in this request         |
+| `$model->isDirty()`                    | True if has unsaved changes                  |
+| `$model->isDirty('email')`             | True if specific attribute changed           |
+| `$model->isDirty('name', 'email')`     | True if any of them changed                  |
+| `$model->getDirtyAttributes()`         | List of changed attribute names              |
+| `$model->getAttributes()`              | Get all attributes as array                  |
+| `$model->fill([...])`                  | Mass assign (respects guarded/fillable)      |
+| `$model->only(['name', 'email'])`      | Get only specified attributes                |
+| `$model->except(['password'])`         | Get all except specified attributes          |
+| `$model->toArray()`                    | Convert to array (includes loaded relations) |
+| `$model->toJson()`                     | Convert to JSON string                       |
+| `$model->getTable()`                   | Get table name                               |
+| `$model->getConnectionName()`          | Get connection name                          |
+| `$model->getPrimaryKeyFields()`        | Get PK field name(s)                         |
+| `$model->getKey()`                     | Get PK value                                 |
+| `$model->validate()`                   | Run validation (override in subclass)        |
+| `$model->save()`                       | Insert or update (runs validate + events)    |
+| `$model->save(validate: false)`        | Save without validation                      |
+| `$model->insert()`                     | Force INSERT                                 |
+| `$model->update([...])`                | Force UPDATE with optional extra attributes  |
+| `$model->updateAttributes([...])`      | Update specific columns directly             |
+| `$model->updateAll([...], $query)`     | Update all matching records                  |
+| `$model->updateCounter('views', 1)`    | Atomic increment/decrement                   |
+| `$model->increment('views')`           | Atomic increment                             |
+| `$model->decrement('stock', 5)`        | Atomic decrement                             |
+| `$model->delete()`                     | Delete record                                |
+| `$model->deleteAll($condition)`        | Delete all matching condition                |
+| `$model->refresh()`                    | Reload from database                         |
+| `$model->replicate()`                  | Clone as new unsaved instance                |
+| `$model->hasOne(Model::class, [...])`  | Define has-one relation                      |
+| `$model->hasMany(Model::class, [...])` | Define has-many relation                     |
+| `$model->setRelation('name', $val)`    | Inject preloaded relation                    |
+| `$model->relationLoaded('name')`       | Check if relation is loaded                  |
+| `$model->saveTogether([...])`          | Save model + nested relations in transaction |
+
+### Static Methods
+
+| Method                                         | Description                                  |
+|------------------------------------------------|----------------------------------------------|
+| `Model::find()`                                | New query builder (applies global scopes)    |
+| `Model::findByPk(1)`                           | Find by primary key                          |
+| `Model::findAll(['status' => 1])`              | Find all matching conditions                 |
+| `Model::hydrate($row)`                         | Create from DB row (fast, no dirty tracking) |
+| `Model::insertBatch($records, 500)`            | Bulk insert in chunks                        |
+| `Model::updateBatch($updates, 'id')`           | Bulk update with CASE WHEN                   |
+| `Model::transaction(fn() => ...)`              | Execute in transaction                       |
+| `Model::addGlobalScope('name', fn($q) => ...)` | Register global scope                        |
+| `Model::removeGlobalScope('name')`             | Remove global scope                          |
+| `Model::withoutGlobalScopes()`                 | Query without any scopes                     |
+| `Model::withoutGlobalScope('name')`            | Query without specific scope                 |
+| `Model::on('creating', fn($m) => ...)`         | Register event listener                      |
+| `Model::observe($observer)`                    | Register observer                            |
+| `Model::flushEvents()`                         | Remove all event listeners                   |
+
+### Error Trait (included by default)
+
+| Method                                              | Description           |
+|-----------------------------------------------------|-----------------------|
+| `$model->addError('msg')`                           | Add single error      |
+| `$model->addErrors(['msg1', ...])`                  | Add multiple errors   |
+| `$model->addValidationErrors($validator->errors())` | Import from Validator |
+| `$model->getErrors()`                               | Get all errors        |
+| `$model->hasError()`                                | True if errors exist  |
+| `$model->noError()`                                 | True if no errors     |
+
+### Scenario Trait (opt-in: `use Scenario`)
+
+| Method                             | Description                 |
+|------------------------------------|-----------------------------|
+| `$model->withScenario('register')` | Set active scenario         |
+| `$model->getScenario()`            | Get current scenario        |
+| `$model->isScenario('register')`   | Check if matches (strict)   |
+| `$model->hasScenario()`            | True if any scenario is set |
+| `$model->isAnyScenario('a', 'b')`  | True if matches any         |
+
+### SoftDeletes Trait (opt-in: `use SoftDeletes`)
+
+| Method                  | Description                   |
+|-------------------------|-------------------------------|
+| `$model->delete()`      | Soft delete (sets deleted_at) |
+| `$model->restore()`     | Restore soft-deleted record   |
+| `$model->forceDelete()` | Permanently delete            |
+| `$model->trashed()`     | True if soft-deleted          |
+| `Model::withTrashed()`  | Query including deleted       |
+| `Model::onlyTrashed()`  | Query only deleted            |
+
+### Timestamps Trait (opt-in: `use Timestamps`)
+
+| Method                         | Description                         |
+|--------------------------------|-------------------------------------|
+| `$model->getCreatedAtColumn()` | Column name (default: `created_at`) |
+| `$model->getUpdatedAtColumn()` | Column name (default: `updated_at`) |
 
 ## Batch Operations
 
