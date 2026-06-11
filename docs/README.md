@@ -3,6 +3,7 @@
 > **F**ast, **L**ightweight, **I**ndependent **Q**uery Builder
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sim-soft/fliq/blob/main/LICENSE)
+[![PHP 8.4+](https://img.shields.io/badge/PHP-8.4%2B-8892BF.svg)](https://www.php.net/releases/8.4/en.php)
 
 A high-performance PHP Active Record / ORM for MySQL, MariaDB, PostgreSQL, and
 SQLite. Zero framework dependencies, minimal footprint, maximum speed. An
@@ -33,7 +34,7 @@ use Simsoft\DB\Connection;
 use Simsoft\DB\Model;
 
 Connection::add('mysql', [
-    'driver' => 'mysql',
+    'driver' => 'mysqli',
     'host' => 'localhost',
     'database' => 'my_app',
     'username' => 'root',
@@ -42,6 +43,7 @@ Connection::add('mysql', [
 
 class User extends Model
 {
+    protected string $connection = 'mysql';
     protected string $table = 'user';
     protected array $fillable = ['name', 'email', 'status'];
 }

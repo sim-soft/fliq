@@ -449,6 +449,10 @@ Only `save()` and `delete()` fire events. If you need events on bulk operations,
 
 ## Transactions
 
+### Via Model class
+
+Uses the model's configured connection:
+
 ```php
 use Models\User;
 
@@ -465,6 +469,27 @@ User::transaction(function () {
     // return false; // rollback
 });
 ```
+
+### Via DB facade
+
+When you're not inside a model or need to specify the connection explicitly:
+
+```php
+use Simsoft\DB\DB;
+
+DB::transaction('mysql', function () {
+    $user = new User(['name' => 'John', 'email' => 'john@test.com']);
+    $user->save();
+
+    $profile = new Profile(['user_id' => $user->id, 'bio' => 'Hello']);
+    $profile->save();
+
+    return true; // commit
+});
+```
+
+Both approaches auto-rollback if an exception is thrown or if the callback
+returns `false` (or doesn't return `true`).
 
 ## Serialization
 
@@ -788,11 +813,21 @@ class UserQuery extends ActiveQuery
         return $this->where('country', $code);
     }
 }
+```
 
+Then override `find()` in your model to return your custom query class instead
+of the default `ActiveQuery`. This is what makes `User::find()->active()` work:
+
+```php
 class User extends Model
 {
     protected string $table = 'user';
 
+    /**
+     * Override find() to return UserQuery.
+     * Now User::find() returns UserQuery instead of ActiveQuery,
+     * giving you access to active(), admins(), etc.
+     */
     public static function find(): UserQuery
     {
         return new UserQuery(get_called_class());
@@ -1032,9 +1067,22 @@ $users = User::find()
 
 ### Method Aliases
 
-For users coming from Eloquent, these aliases are available:
+If you're coming from Laravel/Eloquent, you can use the familiar `where*()`
+style names — they're just aliases for FLIQ's shorter methods. Both do the exact
+same thing:
 
-| Alias              | Delegates to  |
+```php
+// These are identical — use whichever you prefer
+User::find()->whereNull('deleted_at');   // Eloquent style
+User::find()->isNull('deleted_at');      // FLIQ style (shorter)
+
+User::find()->whereIn('status', [1, 2]); // Eloquent style
+User::find()->in('status', [1, 2]);      // FLIQ style (shorter)
+```
+
+Full alias list:
+
+| Eloquent style     | FLIQ style    |
 |--------------------|---------------|
 | `whereNot()`       | `not()`       |
 | `orWhereNot()`     | `orNot()`     |

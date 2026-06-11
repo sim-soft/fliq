@@ -196,7 +196,10 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function merge(ActiveQuery $query, string $logicalOperator = 'AND'): static
     {
         if ($this->table !== $query->getTable()) {
-            return $this;
+            throw new \Simsoft\DB\Exceptions\QueryException(
+                "Cannot merge queries from different tables: '$this->table' and '{$query->getTable()}'",
+                ''
+            );
         }
 
         $this->mergeSelects($query->selects);

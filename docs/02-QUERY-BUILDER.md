@@ -303,6 +303,10 @@ $users = (new ActiveQuery())
 
 ## Full-Text Search (MATCH AGAINST)
 
+Requires a MySQL FULLTEXT index on the searched columns.
+
+### Boolean Mode (default)
+
 ```php
 use Simsoft\DB\Builder\Conditions\MatchAgainst;
 
@@ -319,28 +323,169 @@ $results = (new ActiveQuery())
     ->get();
 ```
 
-MatchAgainst methods:
-- `mustHave(array $words)` — words that must appear (+word)
-- `mustNot(array $words)` — words that must not appear (-word)
-- `optional(array $words)` — optional words
-- `wildcard(array $words)` — wildcard suffix (word*)
-- `contains(array $phrases)` — exact phrase match ("phrase")
-- `negation(array $words)` — reduce ranking (~word)
-- `booleanMode()` / `naturalLanguageMode()` / `queryExpansion()` — search modes
+### Natural Language Mode
+
+Let MySQL rank results by relevance without boolean operators:
+
+```php
+/* WHERE MATCH(`posts`.`title`, `posts`.`content`) AGAINST ('database optimization' IN NATURAL LANGUAGE MODE) */
+$results = (new ActiveQuery())
+    ->from('posts')
+    ->where(
+        (new MatchAgainst(['title', 'content']))
+            ->optional(['database', 'optimization'])
+            ->naturalLanguageMode()
+    )
+    ->on('mysql')
+    ->get();
+```
+
+### Wildcard Search
+
+Match words that start with a prefix:
+
+```php
+/* WHERE MATCH(`products`.`name`) AGAINST ('micro* soft*' IN BOOLEAN MODE) */
+$results = (new ActiveQuery())
+    ->from('products')
+    ->where(
+        (new MatchAgainst(['name']))
+            ->wildcard(['micro', 'soft'])
+            ->booleanMode()
+    )
+    ->on('mysql')
+    ->get();
+```
+
+### Exact Phrase Match
+
+Search for an exact phrase:
+
+```php
+/* WHERE MATCH(`articles`.`body`) AGAINST ('"dependency injection"' IN BOOLEAN MODE) */
+$results = (new ActiveQuery())
+    ->from('articles')
+    ->where(
+        (new MatchAgainst(['body']))
+            ->contains(['dependency injection'])
+            ->booleanMode()
+    )
+    ->on('mysql')
+    ->get();
+```
+
+### Combining Operators
+
+Mix required, excluded, wildcard, and phrase in one query:
+
+```php
+/*
+ * WHERE MATCH(`posts`.`title`, `posts`.`body`)
+ * AGAINST ('+laravel -wordpress "service container" php*' IN BOOLEAN MODE)
+ */
+$results = (new ActiveQuery())
+    ->from('posts')
+    ->where(
+        (new MatchAgainst(['title', 'body']))
+            ->mustHave(['laravel'])
+            ->mustNot(['wordpress'])
+            ->contains(['service container'])
+            ->wildcard(['php'])
+            ->booleanMode()
+    )
+    ->on('mysql')
+    ->get();
+```
+
+### MatchAgainst Methods
+
+| Method                       | Operator   | Description                              |
+|------------------------------|------------|------------------------------------------|
+| `search(string $expression)` | (as-is)    | Pass your own search expression directly |
+| `mustHave(array $words)`     | `+word`    | Words that must appear                   |
+| `mustNot(array $words)`      | `-word`    | Words that must not appear               |
+| `optional(array $words)`     | `word`     | Optional words (improve ranking)         |
+| `wildcard(array $words)`     | `word*`    | Wildcard prefix match                    |
+| `contains(array $phrases)`   | `"phrase"` | Exact phrase match                       |
+| `negation(array $words)`     | `~word`    | Reduce ranking (not exclude)             |
+| `booleanMode()`              | —          | IN BOOLEAN MODE (default)                |
+| `naturalLanguageMode()`      | —          | IN NATURAL LANGUAGE MODE                 |
+| `queryExpansion()`           | —          | WITH QUERY EXPANSION                     |
+
+### Custom Search Expression
+
+When you want full control over the boolean syntax, use `search()`:
+
+```php
+/* WHERE MATCH(`posts`.`title`, `posts`.`body`) AGAINST ('+laravel -wordpress "service container" php*' IN BOOLEAN MODE) */
+$results = (new ActiveQuery())
+    ->from('posts')
+    ->where(
+        (new MatchAgainst(['title', 'body']))
+            ->search('+laravel -wordpress "service container" php*')
+            ->booleanMode()
+    )
+    ->on('mysql')
+    ->get();
+```
 
 ## Merge Queries
 
-Combine two query objects:
+Combine conditions from two query objects targeting the same table. Useful when
+building queries dynamically from separate sources (e.g., filters from different
+form sections).
+
+Both queries **must target the same table** — otherwise the merge is silently
+skipped.
+
+### `merge()` — Combine with AND
 
 ```php
-$baseQuery = (new ActiveQuery())->from('user')->where('status', 1);
-$extraQuery = (new ActiveQuery())->from('user')->where('age', '>', 18);
+/* Build filters separately */
+$statusFilter = (new ActiveQuery())->from('user')->where('status', 'active');
+$ageFilter = (new ActiveQuery())->from('user')->where('age', '>', 18);
 
-// Merge with AND
-$baseQuery->merge($extraQuery);
+/*
+ * SELECT * FROM `user`
+ * WHERE `user`.`status` = ? AND `user`.`age` > ?
+ */
+$results = $statusFilter->merge($ageFilter)->on('mysql')->get();
+```
 
-// Merge with OR
-$baseQuery->orMerge($extraQuery);
+### `orMerge()` — Combine with OR
+
+```php
+$admins = (new ActiveQuery())->from('user')->where('role', 'admin');
+$verified = (new ActiveQuery())->from('user')->where('verified', 1);
+
+/*
+ * SELECT * FROM `user`
+ * WHERE `user`.`role` = ? OR `user`.`verified` = ?
+ */
+$results = $admins->orMerge($verified)->on('mysql')->get();
+```
+
+### What gets merged
+
+`merge()` combines: SELECT columns, WHERE conditions, HAVING clauses, GROUP BY,
+ORDER BY, JOINs, and bound parameters.
+
+### Practical example — dynamic filter builder
+
+```php
+$query = User::find()->where('status', 'active');
+
+if ($minAge = $_GET['min_age'] ?? null) {
+    $ageFilter = User::find()->where('age', '>=', (int) $minAge);
+    $query->merge($ageFilter);
+}
+
+if ($role = $_GET['role'] ?? null) {
+    $roleFilter = User::find()->where('role', $role);
+    $query->merge($roleFilter);
+}
+
+$users = $query->get();
 ```
 
 ## Union Queries
@@ -841,23 +986,24 @@ $users = (new ActiveQuery())
 
 ## Collections
 
-The `get()` method returns a `Collection` — a lazy iterator with chainable transformations like `map()`, `filter()`, `reduce()`, `indexBy()`, and `groupBy()`.
+`get()` returns a `Collection` object. You can loop through it directly or chain
+methods like `filter()`, `map()`, and `groupBy()`:
 
 ```php
 $users = User::find()->where('status', 1)->get();
 
-// Iterate (fetches in chunks of 100 internally)
+// Loop through results
 foreach ($users as $user) {
     echo $user->name;
 }
 
-// Chain transformations
+// Filter and transform
 $adminNames = User::find()->get()
     ->filter(fn($user) => $user->role === 'admin')
     ->map(fn($user) => $user->name);
 ```
 
-For comprehensive examples and the full method reference, see the [Collections guide](06-COLLECTIONS.md).
+For the full method reference, see the [Collections guide](06-COLLECTIONS.md).
 
 ## Raw Expressions
 
