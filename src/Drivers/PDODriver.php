@@ -57,7 +57,7 @@ class PDODriver extends Driver
                 'charset=' . $this->config['charset'],
             ]);
 
-            $options = [
+            $defaults = [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES => false,
@@ -67,8 +67,11 @@ class PDODriver extends Driver
             ];
 
             if (!empty($this->config['persistent'])) {
-                $options[PDO::ATTR_PERSISTENT] = true;
+                $defaults[PDO::ATTR_PERSISTENT] = true;
             }
+
+            // User options override defaults
+            $options = array_replace($defaults, (array)($this->config['options'] ?? []));
 
             $this->connection = new PDO(
                 $dsn,

@@ -18,6 +18,21 @@ class MatchAgainst extends Clause
     protected string $mode = 'IN BOOLEAN MODE';
 
     /**
+     * Set the search expression directly.
+     *
+     * Passes the string as-is without any operator prefixing.
+     * Use this when you want full control over the boolean syntax.
+     *
+     * @param string $expression The raw search expression.
+     * @return static
+     */
+    public function search(string $expression): static
+    {
+        $this->words = [$expression];
+        return $this;
+    }
+
+    /**
      * Add optional words (stripped of operators).
      *
      * @param array<int, string> $words Words to add as optional.

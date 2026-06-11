@@ -3,6 +3,7 @@
 **F**ast, **L**ightweight, **I**ndependent **Q**uery Builder
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sim-soft/fliq/blob/main/LICENSE)
+[![PHP 8.4+](https://img.shields.io/badge/PHP-8.4%2B-8892BF.svg)](https://www.php.net/releases/8.4/en.php)
 [![Docs](https://img.shields.io/badge/Docs-online-green.svg)](https://sim-soft.github.io/fliq/)
 
 A high-performance Active Record / ORM for MySQL, MariaDB, PostgreSQL, and SQLite. Zero framework dependencies, minimal footprint, maximum speed.
@@ -70,7 +71,7 @@ require "vendor/autoload.php";
 use Simsoft\DB\Connection;
 
 Connection::add('mysql', [
-    'driver' => 'mysql',
+    'driver' => 'mysqli',
     'host' => 'localhost',
     'database' => 'my_app',
     'username' => 'root',
@@ -264,7 +265,7 @@ $users = User::find()->where('active', 1)->cache(60)->get();
 
 ```php
 Connection::add('mysql', [
-    'driver' => 'mysql',
+    'driver' => 'mysqli',
     'database' => 'myapp',
     'read' => ['host' => 'replica.db.internal'],
     'write' => ['host' => 'primary.db.internal'],

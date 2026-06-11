@@ -4,7 +4,7 @@ namespace Integration;
 
 use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Connection;
-use Simsoft\DB\Drivers\PDODriver;
+use Simsoft\DB\Drivers\MySQLiDriver;
 
 /**
  * Integration tests for database connection and basic operations.
@@ -14,12 +14,12 @@ class ConnectionTest extends DatabaseTestCase
     public function testConnectionEstablished(): void
     {
         $driver = Connection::get('test');
-        $this->assertInstanceOf(PDODriver::class, $driver);
+        $this->assertInstanceOf(MySQLiDriver::class, $driver);
     }
 
     public function testPingReturnsTrue(): void
     {
-        /** @var \Simsoft\DB\Drivers\PDODriver $driver */
+        /** @var \Simsoft\DB\Drivers\MySQLiDriver $driver */
         $driver = Connection::get('test');
         $this->assertTrue($driver->ping());
     }

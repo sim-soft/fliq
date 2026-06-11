@@ -16,7 +16,12 @@ class MySQLiDriver extends Driver
     protected array $required = ['host', 'database', 'username', 'password'];
 
     /** @var array<string, mixed> Default configuration values */
-    protected array $default = ['port' => 3306, 'charset' => 'utf8mb4'];
+    protected array $default = [
+        'port' => 3306,
+        'charset' => 'utf8mb4',
+        'persistent' => false,
+        'timeout' => 5,
+    ];
 
     /** @var mysqli|null The MySQLi connection instance */
     protected ?mysqli $connection = null;
@@ -29,8 +34,31 @@ class MySQLiDriver extends Driver
         try {
             mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
-            $this->connection = new mysqli(
-                $this->config['host'],
+            $host = $this->config['host'];
+
+            // Persistent connection: prefix host with 'p:'
+            if (!empty($this->config['persistent'])) {
+                $host = 'p:' . $host;
+            }
+
+            $this->connection = new mysqli();
+
+            // Set timeout before connecting
+            $this->connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, (int)$this->config['timeout']);
+
+            // Set init command before connecting (joined with semicolons)
+            $initCommands = (array)($this->config['init_command'] ?? []);
+            if ($initCommands) {
+                $this->connection->options(MYSQLI_INIT_COMMAND, implode('; ', $initCommands));
+            }
+
+            // Apply user options before connecting
+            foreach ((array)($this->config['options'] ?? []) as $option => $value) {
+                $this->connection->options($option, $value);
+            }
+
+            $this->connection->real_connect(
+                $host,
                 $this->config['username'],
                 $this->config['password'],
                 $this->config['database'],

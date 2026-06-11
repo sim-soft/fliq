@@ -353,4 +353,21 @@ class DB
 
         return $builder->withConnection($connectionName)->execute();
     }
+
+    /**
+     * Execute a callback within a database transaction.
+     *
+     * @param string $connection The connection name.
+     * @param callable $callback Callback to execute. Return true to commit, false to roll back.
+     * @return bool
+     * @throws QueryException
+     */
+    public static function transaction(string $connection, callable $callback): bool
+    {
+        try {
+            return Connection::get($connection)->transaction($callback);
+        } catch (\Throwable $throwable) {
+            throw new QueryException($throwable->getMessage(), '', null, 0, $throwable);
+        }
+    }
 }

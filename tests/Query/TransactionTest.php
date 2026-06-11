@@ -5,7 +5,7 @@ namespace Query;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Simsoft\DB\Connection;
-use Simsoft\DB\Drivers\Driver;
+use Simsoft\DB\DB;
 
 /**
  * Tests transaction behavior including rollback on exception.
@@ -119,5 +119,50 @@ class TransactionTest extends TestCase
 
         $rows = $this->driver->query(new \Simsoft\DB\Builder\Raw('SELECT * FROM test_tx'));
         $this->assertCount(0, $rows);
+    }
+
+    #[Test]
+    public function dbTransactionCommits(): void
+    {
+        $result = DB::transaction('test', function () {
+            Connection::get('test')->execute(new \Simsoft\DB\Builder\Raw(
+                'INSERT INTO test_tx (id, name) VALUES (?, ?)',
+                [1, 'db_committed']
+            ));
+            return true;
+        });
+
+        $this->assertTrue($result);
+
+        $rows = $this->driver->query(new \Simsoft\DB\Builder\Raw('SELECT * FROM test_tx'));
+        $this->assertCount(1, $rows);
+        $this->assertSame('db_committed', $rows[0]['name']);
+    }
+
+    #[Test]
+    public function dbTransactionRollsBack(): void
+    {
+        $result = DB::transaction('test', function () {
+            Connection::get('test')->execute(new \Simsoft\DB\Builder\Raw(
+                'INSERT INTO test_tx (id, name) VALUES (?, ?)',
+                [1, 'db_rolled_back']
+            ));
+            return false;
+        });
+
+        $this->assertFalse($result);
+
+        $rows = $this->driver->query(new \Simsoft\DB\Builder\Raw('SELECT * FROM test_tx'));
+        $this->assertCount(0, $rows);
+    }
+
+    #[Test]
+    public function dbTransactionThrowsOnException(): void
+    {
+        $this->expectException(\Simsoft\DB\Exceptions\QueryException::class);
+
+        DB::transaction('test', function () {
+            throw new \RuntimeException('db error');
+        });
     }
 }
