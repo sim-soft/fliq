@@ -47,7 +47,7 @@ abstract class DatabaseTestCase extends TestCase
         // Register ORM connection
         Connection::reset();
         Connection::add('mysql', [
-            'driver' => 'mysql',
+            'driver' => 'mysqli',
             'host' => $host,
             'port' => (int) $port,
             'database' => $database,
@@ -59,7 +59,7 @@ abstract class DatabaseTestCase extends TestCase
 
         // Also register as 'test' for backward compatibility with older tests
         Connection::add('test', [
-            'driver' => 'mysql',
+            'driver' => 'mysqli',
             'host' => $host,
             'port' => (int) $port,
             'database' => $database,

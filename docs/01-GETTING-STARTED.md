@@ -2,15 +2,14 @@
 
 ## Table of Contents
 - [Connection Management](#connection-management)
-- [Persistent Connections](#persistent-connections)
-- [Statement Cache](#statement-cache)
-- [Read/Write Connection Splitting](#readwrite-connection-splitting)
 - [Database Drivers](#database-drivers)
+- [Read/Write Connection Splitting](#readwrite-connection-splitting)
 - [N+1 Query Detection](#n1-query-detection)
 - [Query Logging](#query-logging)
 - [Raw Query](#raw-query)
 - [DB Facade](#using-the-db-facade)
 - [DB Facade CRUD](#db-facade-crud-operations)
+- [DB Facade Transactions](#db-facade-transactions)
 
 ## Connection Management
 Setup database connections.
@@ -19,8 +18,8 @@ Setup database connections.
 use Simsoft\DB\Connection;
 
 // Add connections
-Connection::add('mysql', ['driver' => 'mysql', 'host' => 'localhost', ...]);
-Connection::add('replica', ['driver' => 'mysql', 'host' => 'replica-host', ...]);
+Connection::add('mysql', ['driver' => 'mysqli', 'host' => 'localhost', ...]);
+Connection::add('replica', ['driver' => 'mysqli', 'host' => 'replica-host', ...]);
 
 // Check if a connection exists
 Connection::has('mysql'); // true
@@ -41,73 +40,213 @@ Connection::remove('replica');
 Connection::reset();
 ```
 
-### Persistent Connections
+## Database Drivers
 
-Enable persistent connections to reuse TCP connections across requests:
+| Driver      | Config `driver` value | Extension required |
+|-------------|-----------------------|--------------------|
+| MySQLi      | `mysqli`              | ext-mysqli         |
+| MySQL (PDO) | `pdo_mysql`           | ext-pdo            |
+| PostgreSQL  | `pgsql`               | ext-pdo_pgsql      |
+| SQLite      | `sqlite`              | ext-pdo_sqlite     |
+
+> **Recommended:** Use `'driver' => 'mysqli'` for MySQL/MariaDB — it's faster
+> than PDO for this use case. Use `'driver' => 'pdo_mysql'` only if you need
+> PDO-specific features like statement caching.
+>
+> If `driver` is not specified, defaults to `mysqli`.
+
+### MySQL / MariaDB
 
 ```php
 Connection::add('mysql', [
-    'driver' => 'mysql',
+    'driver' => 'mysqli',
+    'host' => 'localhost',
+    'port' => 3306,             // default: 3306
+    'database' => 'mydb',
+    'username' => 'root',
+    'password' => '',
+    'charset' => 'utf8mb4',     // default: utf8mb4
+    'persistent' => false,      // default: false (reuse TCP across requests)
+    'timeout' => 5,             // default: 5 (connection timeout in seconds)
+    'init_command' => [         // SQL commands to run after connecting
+        "SET time_zone = '+08:00'",
+    ],
+]);
+```
+
+Pass `MYSQLI_OPT_*` constants via `options` for driver-level tuning:
+
+```php
+Connection::add('mysql', [
+    'driver' => 'mysqli',
     'host' => 'localhost',
     'database' => 'mydb',
-    'username' => 'user',
-    'password' => 'pass',
+    'username' => 'root',
+    'password' => '',
+    'options' => [
+        MYSQLI_OPT_CONNECT_TIMEOUT => 10,
+        MYSQLI_OPT_READ_TIMEOUT => 30,
+    ],
+]);
+```
+
+See [mysqli::options](https://www.php.net/manual/en/mysqli.options.php) for all
+available constants.
+
+### PostgreSQL
+
+```php
+Connection::add('pgsql', [
+    'driver' => 'pgsql',
+    'host' => 'localhost',
+    'port' => 5432,             // default: 5432
+    'database' => 'mydb',
+    'username' => 'postgres',
+    'password' => '',
+    'charset' => 'utf8',        // default: utf8
+    'schema' => 'public',       // default: public
+    'persistent' => false,      // default: false
+    'timeout' => 5,             // default: 5
+]);
+```
+
+Pass `PDO::ATTR_*` constants via `options`:
+
+```php
+Connection::add('pgsql', [
+    'driver' => 'pgsql',
+    'host' => 'localhost',
+    'database' => 'mydb',
+    'username' => 'postgres',
+    'password' => '',
+    'options' => [
+        PDO::ATTR_STRINGIFY_FETCHES => true,
+    ],
+]);
+```
+
+### SQLite
+
+```php
+// File-based
+Connection::add('sqlite', [
+    'driver' => 'sqlite',
+    'database' => __DIR__ . '/database.db',
+]);
+
+// In-memory (useful for testing)
+Connection::add('sqlite', [
+    'driver' => 'sqlite',
+    'database' => ':memory:',
+]);
+```
+
+Pass `PDO::ATTR_*` constants via `options`:
+
+```php
+Connection::add('sqlite', [
+    'driver' => 'sqlite',
+    'database' => __DIR__ . '/database.db',
+    'options' => [
+        PDO::ATTR_TIMEOUT => 10,
+    ],
+]);
+```
+
+### MySQL via PDO
+
+Only use this if you need PDO-specific features (e.g., statement caching):
+
+```php
+Connection::add('mysql', [
+    'driver' => 'pdo_mysql',
+    'host' => 'localhost',
+    'port' => 3306,
+    'database' => 'mydb',
+    'username' => 'root',
+    'password' => '',
     'charset' => 'utf8mb4',
-    'persistent' => true,  // reuses TCP connection
-    'timeout' => 5,        // connection timeout in seconds
+    'collation' => 'utf8mb4_unicode_ci',  // default: utf8mb4_unicode_ci
+    'statement_cache' => true,            // default: true
+    'statement_cache_size' => 100,        // default: 100
 ]);
 ```
 
-### Statement Cache
-
-The PDO driver caches prepared statements to avoid repeated `prepare()` calls for identical SQL. Enabled by default.
-
-**Configure via connection:**
+Pass `PDO::ATTR_*` or `PDO::MYSQL_ATTR_*` constants via `options` to override
+defaults:
 
 ```php
 Connection::add('mysql', [
-    'driver' => 'mysql',
+    'driver' => 'pdo_mysql',
     'host' => 'localhost',
     'database' => 'mydb',
-    'username' => 'user',
-    'password' => 'pass',
-    'statement_cache' => true,       // enable/disable (default: true)
-    'statement_cache_size' => 200,   // max cached statements (default: 100)
+    'username' => 'root',
+    'password' => '',
+    'options' => [
+        PDO::MYSQL_ATTR_FOUND_ROWS => true,
+        PDO::ATTR_TIMEOUT => 10,
+    ],
 ]);
 ```
 
-**Control at runtime:**
+See [PDO::setAttribute](https://www.php.net/manual/en/pdo.setattribute.php) for
+all available constants.
+
+PDO defaults (applied automatically, user options override):
+
+| Option                         | Default                  | Description                    |
+|--------------------------------|--------------------------|--------------------------------|
+| `PDO::ATTR_ERRMODE`            | `PDO::ERRMODE_EXCEPTION` | Throw exceptions on errors     |
+| `PDO::ATTR_DEFAULT_FETCH_MODE` | `PDO::FETCH_ASSOC`       | Return associative arrays      |
+| `PDO::ATTR_EMULATE_PREPARES`   | `false`                  | Use real prepared statements   |
+| `PDO::ATTR_STRINGIFY_FETCHES`  | `false`                  | Keep native PHP types          |
+| `PDO::ATTR_TIMEOUT`            | `5`                      | Connection timeout (seconds)   |
+| `PDO::ATTR_PERSISTENT`         | `false`                  | Set via `'persistent' => true` |
+
+**Statement Cache (PDO only):**
+
+The PDO driver caches prepared statements to avoid repeated `prepare()` calls.
+Enabled by default via `statement_cache` and `statement_cache_size` in the
+config above.
+
+Runtime control:
 
 ```php
-use Simsoft\DB\Connection;
-
 $driver = Connection::get('mysql');
 
-// Disable caching (clears existing cache)
-$driver->disableStatementCache();
-
-// Re-enable
-$driver->enableStatementCache();
-
-// Flush cache without disabling
-$driver->clearStatementCache();
-
-// Change max size
-$driver->setStatementCacheSize(50);
-
-// Check status
-$driver->isStatementCacheEnabled(); // true/false
+$driver->disableStatementCache();      // disable + clear cache
+$driver->enableStatementCache();       // re-enable
+$driver->clearStatementCache();        // flush without disabling
+$driver->setStatementCacheSize(50);    // change max size
+$driver->isStatementCacheEnabled();    // check status
 ```
 
-Disable caching when running many unique one-off queries (e.g., migrations, bulk imports with varying column counts) to avoid filling memory with unused statements.
+Disable when running many unique one-off queries (migrations, bulk imports) to
+avoid filling memory.
 
-### Read/Write Connection Splitting
+**Statement Cache** — the PDO driver caches prepared statements to avoid
+repeated `prepare()` calls. Enabled by default.
+
+```php
+$driver = Connection::get('mysql');
+
+$driver->disableStatementCache();      // disable + clear cache
+$driver->enableStatementCache();       // re-enable
+$driver->clearStatementCache();        // flush without disabling
+$driver->setStatementCacheSize(50);    // change max size
+$driver->isStatementCacheEnabled();    // check status
+```
+
+Disable caching when running many unique one-off queries (e.g., migrations, bulk
+imports) to avoid filling memory.
+
+## Read/Write Connection Splitting
 
 Route SELECT queries to a read replica and writes to the primary server:
 
 ```php
 Connection::add('mysql', [
-    'driver' => 'mysql',
+    'driver' => 'mysqli',
     'database' => 'myapp',
     'username' => 'root',
     'password' => '',
@@ -125,7 +264,7 @@ Connection::add('mysql', [
 
 ```php
 Connection::add('mysql', [
-    'driver' => 'mysql',
+    'driver' => 'mysqli',
     'host' => 'primary.db.internal',  // default for write
     'database' => 'myapp',
     'username' => 'app_user',
@@ -138,42 +277,6 @@ Connection::add('mysql', [
 ```
 
 Without `read`/`write` keys, all queries use the same connection (no behavior change).
-
-## Database Drivers
-
-| Driver | Config `driver` value | Extension required |
-|--------|----------------------|-------------------|
-| MySQL (PDO) | `mysql` | ext-pdo |
-| MySQLi | `mysqli` | ext-mysqli |
-| PostgreSQL | `pgsql` | ext-pdo_pgsql |
-| SQLite | `sqlite` | ext-pdo_sqlite |
-
-```php
-// MySQL
-Connection::add('mysql', [
-    'driver' => 'mysql',
-    'host' => 'localhost',
-    'database' => 'mydb',
-    'username' => 'user',
-    'password' => 'pass',
-    'charset' => 'utf8mb4',
-]);
-
-// PostgreSQL
-Connection::add('pgsql', [
-    'driver' => 'pgsql',
-    'host' => 'localhost',
-    'database' => 'mydb',
-    'username' => 'user',
-    'password' => 'pass',
-]);
-
-// SQLite
-Connection::add('sqlite', [
-    'driver' => 'sqlite',
-    'database' => __DIR__ . '/database.db', // or ':memory:'
-]);
-```
 
 ## N+1 Query Detection
 
@@ -353,3 +456,42 @@ DB::delete('users', (new ActiveQuery())->where('status', 0));
 DB::deleteIgnore('users', (new ActiveQuery())->where('id', 99));
 DB::deleteQuick('users', (new ActiveQuery())->where('status', 0));
 ```
+
+## DB Facade Transactions
+
+Run multiple operations atomically — if anything fails, everything rolls back:
+
+```php
+use Simsoft\DB\DB;
+
+DB::transaction('mysql', function () {
+    DB::insert('orders', ['user_id' => 1, 'total' => 99.90]);
+    DB::update('users', ['balance' => 0], (new ActiveQuery())->where('id', 1));
+
+    return true; // commit
+});
+```
+
+Rules:
+
+- Return `true` → commit
+- Return `false` (or don't return `true`) → rollback
+- Throw an exception → auto-rollback, exception re-thrown as `QueryException`
+
+```php
+/* Rollback example */
+DB::transaction('mysql', function () {
+    DB::insert('logs', ['action' => 'transfer']);
+
+    if ($insufficientFunds) {
+        return false; // rollback — nothing is saved
+    }
+
+    return true;
+});
+```
+
+> **Tip:** If you're working inside a model, use
+`User::transaction(fn() => ...)` instead — it automatically uses the model's
+> connection.
+> See [Transactions in Active Record](03-ACTIVE-RECORD.md#transactions).

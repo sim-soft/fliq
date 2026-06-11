@@ -52,11 +52,15 @@ class PostgresDriver extends Driver
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES => false,
                 PDO::ATTR_STRINGIFY_FETCHES => false,
+                PDO::ATTR_TIMEOUT => (int)$this->config['timeout'],
             ];
 
             if (!empty($this->config['persistent'])) {
                 $options[PDO::ATTR_PERSISTENT] = true;
             }
+
+            // User options override defaults
+            $options = array_replace($options, (array)($this->config['options'] ?? []));
 
             $this->connection = new PDO(
                 $dsn,

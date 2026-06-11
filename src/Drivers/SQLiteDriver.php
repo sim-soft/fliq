@@ -40,11 +40,11 @@ class SQLiteDriver extends Driver
         try {
             $dsn = 'sqlite:' . $this->config['database'];
 
-            $this->connection = new PDO($dsn, null, null, [
+            $this->connection = new PDO($dsn, null, null, array_replace([
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES => false,
-            ]);
+            ], (array)($this->config['options'] ?? [])));
 
             // Enable WAL mode for better concurrency (file-based only)
             if ($this->config['database'] !== ':memory:') {

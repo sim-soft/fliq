@@ -154,11 +154,11 @@ final class Connection
      */
     private static function createDriver(string $name, array $config): Driver
     {
-        $connection = match ($config['driver'] ?? 'mysql') {
+        $connection = match ($config['driver'] ?? 'mysqli') {
             'pgsql', 'postgres', 'postgresql' => new PostgresDriver($config),
             'sqlite' => new SQLiteDriver($config),
-            'mysqli' => new MySQLiDriver($config),
-            default => new PDODriver($config),
+            'pdo_mysql' => new PDODriver($config),
+            default => new MySQLiDriver($config),
         };
 
         if ($connection->hasError()) {
@@ -178,7 +178,7 @@ final class Connection
     {
         $name = $name ?? self::$defaultConnection;
         $config = self::$config[$name] ?? [];
-        $driver = $config['driver'] ?? 'mysql';
+        $driver = $config['driver'] ?? 'mysqli';
 
         return match ($driver) {
             'pgsql', 'postgres', 'postgresql' => new PostgresGrammar(),
