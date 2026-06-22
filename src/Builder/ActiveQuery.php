@@ -1753,7 +1753,19 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function getSQL(): string
     {
-        $segments = [$this->buildSelectClause(), "FROM $this->table"];
+        $from = "FROM $this->table";
+        $alias = $this->getAlias();
+        if ($alias !== null && $this->table !== null) {
+            $quotedAlias = $this->quote($alias);
+            if (!str_contains($this->table, $quotedAlias)) {
+                // Replace any existing alias or append new one
+                // a Table format is either `table` or `table` `old_alias`
+                $parts = explode(' ', $this->table, 2);
+                $from = "FROM " . $parts[0] . " " . $quotedAlias;
+            }
+        }
+
+        $segments = [$this->buildSelectClause(), $from];
 
         $clauses = [
             $this->getJoinSQL(),
