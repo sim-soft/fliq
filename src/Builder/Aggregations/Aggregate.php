@@ -66,7 +66,9 @@ abstract class Aggregate extends Builder
      */
     protected function buildSQL(): string
     {
-        $this->alias(trim($this->table, '`"'));
+        $conditionAlias = ($this->condition instanceof ActiveQuery) ? $this->condition->getAlias() : null;
+        $tableAlias = $conditionAlias ?? trim($this->table, '`"');
+        $this->alias($tableAlias);
 
         $select = $this->distinct
             ? "SELECT $this->functionName(DISTINCT {$this->queryAttribute($this->attribute)})"
@@ -74,10 +76,15 @@ abstract class Aggregate extends Builder
                 ? "SELECT $this->functionName($this->attribute)"
                 : "SELECT $this->functionName({$this->queryAttribute($this->attribute)})");
 
+        $from = "FROM " . $this->quote(trim($this->table, '`"'));
+        if ($conditionAlias !== null && $conditionAlias !== trim($this->table, '`"')) {
+            $from .= ' ' . $this->quote($conditionAlias);
+        }
+
         $sql = implode(' ', array_filter([
             $select,
             $this->as ? "AS " . $this->quote($this->as) : null,
-            "FROM $this->table",
+            $from,
             $this->getCondition(),
         ]));
 
