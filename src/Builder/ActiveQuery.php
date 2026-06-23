@@ -1655,6 +1655,16 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
+     * Check if a limit has been explicitly set.
+     *
+     * @return bool
+     */
+    public function hasLimit(): bool
+    {
+        return $this->limit > 0;
+    }
+
+    /**
      * Offset statement.
      *
      * @param int $value the offset value
