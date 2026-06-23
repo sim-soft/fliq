@@ -17,7 +17,11 @@ class ExistsCondition extends Clause
      */
     protected function buildSQL(): string
     {
-        $this->appendBinds($this->attribute->getBinds());
+        $subBinds = $this->attribute->getBinds();
+        if ($subBinds !== null) {
+            $this->appendBinds($subBinds);
+        }
+
         $prefix = $this->is ? '' : 'NOT ';
         $sql = $prefix . 'EXISTS (';
 
