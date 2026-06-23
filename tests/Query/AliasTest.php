@@ -112,4 +112,66 @@ class AliasTest extends TestCase
 
         $this->assertStringContainsString('SELECT `c`.`id`, `c`.`name`', $sql);
     }
+
+    #[Test]
+    public function countPreservesAlias(): void
+    {
+        $sub = (new ActiveQuery())
+            ->from('orders')
+            ->alias('o')
+            ->selectRaw('1')
+            ->whereRaw('{user_id} = {u.id}');
+
+        $query = (new ActiveQuery())
+            ->from('users')
+            ->alias('u')
+            ->where('status', 'active')
+            ->notExists($sub);
+
+        $countSql = (new \Simsoft\DB\Builder\Aggregations\Count($query->getTable() ?? '', '*', 'total'))
+            ->condition(clone $query)
+            ->getSQL();
+
+        $this->assertStringContainsString('FROM `users` `u`', $countSql);
+        $this->assertStringContainsString('`o`.`user_id` = `u`.`id`', $countSql);
+    }
+
+    #[Test]
+    public function countWithoutAliasUsesTableName(): void
+    {
+        $query = (new ActiveQuery())
+            ->from('users')
+            ->where('status', 'active');
+
+        $countSql = (new \Simsoft\DB\Builder\Aggregations\Count($query->getTable() ?? '', '*', 'total'))
+            ->condition(clone $query)
+            ->getSQL();
+
+        $this->assertStringContainsString('FROM `users`', $countSql);
+        $this->assertStringNotContainsString('FROM `users` `users`', $countSql);
+    }
+
+    #[Test]
+    public function existsSubqueryWithNoBindsDoesNotAddNull(): void
+    {
+        $sub = (new ActiveQuery())
+            ->from('orders')
+            ->alias('o')
+            ->selectRaw('1')
+            ->whereRaw('{user_id} = {u.id}')
+            ->isNull('deleted_at');
+
+        $query = (new ActiveQuery())
+            ->from('users')
+            ->alias('u')
+            ->where('status', 'active')
+            ->notExists($sub);
+
+        $binds = $query->getBinds();
+
+        // Only 1 bind ('active') — subquery has no ? placeholders
+        $this->assertNotNull($binds);
+        $this->assertCount(1, $binds);
+        $this->assertSame('active', $binds[0]);
+    }
 }

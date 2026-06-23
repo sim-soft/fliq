@@ -81,14 +81,14 @@ class Collection implements IteratorAggregate, Countable
     public function count(): int
     {
         if ($this->totalCount === null) {
-            $this->totalCount = $this->query->count('*');
+            $this->totalCount = $this->query->count();
         }
 
         return $this->totalCount;
     }
 
     /**
-     * Get total record count for a specific field.
+     * Get a total record count for a specific field.
      *
      * @param string $field Field to count.
      * @return int
@@ -119,6 +119,16 @@ class Collection implements IteratorAggregate, Countable
      */
     public function lazy(?int $size = null): Generator
     {
+        // If the query already has an explicit limit, execute as-is (don't paginate)
+        if ($this->query->hasLimit()) {
+            $results = iterator_to_array(
+                $this->asArray ? $this->query->getArray() : $this->query->all()
+            );
+
+            yield from $this->yieldResults($results);
+            return;
+        }
+
         $size = $size ?? $this->chunkSize;
         $page = 0;
 
@@ -134,23 +144,34 @@ class Collection implements IteratorAggregate, Countable
                 return;
             }
 
-            foreach ($results as $key => $record) {
-                $value = $this->resolveValue($record);
-
-                if ($this->filterCallback !== null && !($this->filterCallback)($value, $key)) {
-                    continue;
-                }
-
-                if ($this->mapCallback !== null) {
-                    $value = ($this->mapCallback)($value, $key);
-                }
-
-                yield $key => $value;
-            }
+            yield from $this->yieldResults($results);
 
             if (\count($results) < $size) {
                 return;
             }
+        }
+    }
+
+    /**
+     * Yield resolved, filtered, and mapped results.
+     *
+     * @param array<int|string, mixed> $results Raw query results.
+     * @return Generator
+     */
+    private function yieldResults(array $results): Generator
+    {
+        foreach ($results as $key => $record) {
+            $value = $this->resolveValue($record);
+
+            if ($this->filterCallback !== null && !($this->filterCallback)($value, $key)) {
+                continue;
+            }
+
+            if ($this->mapCallback !== null) {
+                $value = ($this->mapCallback)($value, $key);
+            }
+
+            yield $key => $value;
         }
     }
 
@@ -164,6 +185,23 @@ class Collection implements IteratorAggregate, Countable
      */
     public function batch(int $size = 100): Generator
     {
+        // If the query already has an explicit limit, execute as-is in one batch
+        if ($this->query->hasLimit()) {
+            $results = iterator_to_array(
+                $this->asArray ? $this->query->getArray() : $this->query->all()
+            );
+
+            if (empty($results)) {
+                return;
+            }
+
+            foreach (array_chunk($results, max(1, $size)) as $chunk) {
+                yield array_map(fn($record) => $this->resolveValue($record), $chunk);
+            }
+
+            return;
+        }
+
         $page = 0;
 
         while (true) {
@@ -217,22 +255,7 @@ class Collection implements IteratorAggregate, Countable
             $this->asArray ? $query->getArray() : $query->all()
         );
 
-        $output = [];
-        foreach ($results as $key => $record) {
-            $value = $this->resolveValue($record);
-
-            if ($this->filterCallback !== null && !($this->filterCallback)($value, $key)) {
-                continue;
-            }
-
-            if ($this->mapCallback !== null) {
-                $value = ($this->mapCallback)($value, $key);
-            }
-
-            $output[$key] = $value;
-        }
-
-        return $output;
+        return iterator_to_array($this->yieldResults($results));
     }
 
     /**

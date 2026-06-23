@@ -20,11 +20,11 @@ trait Aggregation
      *
      * @param string $attribute The attribute name.
      * @param string|null $alias The alias for the result.
-     * @return mixed
+     * @return float
      */
-    public function avg(string $attribute, ?string $alias = 'avg'): mixed
+    public function avg(string $attribute, ?string $alias = 'avg'): float
     {
-        return (new Avg($this->getTable() ?? '', $attribute, $alias))
+        return (float)(new Avg($this->getTable() ?? '', $attribute, $alias))
             ->withConnection($this->connection)
             ->condition($this)
             ->queryScalar();
@@ -35,11 +35,11 @@ trait Aggregation
      *
      * @param string $attribute The attribute name.
      * @param string|null $alias The alias for the result.
-     * @return mixed
+     * @return float
      */
-    public function avgDistinct(string $attribute, ?string $alias = 'avg'): mixed
+    public function avgDistinct(string $attribute, ?string $alias = 'avg'): float
     {
-        return (new Avg($this->getTable() ?? '', $attribute, $alias))
+        return (float)(new Avg($this->getTable() ?? '', $attribute, $alias))
             ->withConnection($this->connection)
             ->distinct()
             ->condition($this)
@@ -98,14 +98,16 @@ trait Aggregation
      *
      * @param string $attribute The attribute name.
      * @param string|null $alias The alias for the result.
-     * @return mixed
+     * @return int|float
      */
-    public function max(string $attribute, ?string $alias = 'max'): mixed
+    public function max(string $attribute, ?string $alias = 'max'): int|float
     {
-        return (new Max($this->getTable() ?? '', $attribute, $alias))
+        $value = (new Max($this->getTable() ?? '', $attribute, $alias))
             ->withConnection($this->connection)
             ->condition(clone $this)
             ->queryScalar();
+
+        return is_numeric($value) ? $value + 0 : 0;
     }
 
     /**
@@ -113,15 +115,17 @@ trait Aggregation
      *
      * @param string $attribute The attribute name.
      * @param string|null $alias The alias for the result.
-     * @return mixed
+     * @return int|float
      */
-    public function maxDistinct(string $attribute, ?string $alias = 'max'): mixed
+    public function maxDistinct(string $attribute, ?string $alias = 'max'): int|float
     {
-        return (new Max($this->getTable() ?? '', $attribute, $alias))
+        $value = (new Max($this->getTable() ?? '', $attribute, $alias))
             ->withConnection($this->connection)
             ->distinct()
             ->condition(clone $this)
             ->queryScalar();
+
+        return is_numeric($value) ? $value + 0 : 0;
     }
 
     /**
@@ -129,14 +133,16 @@ trait Aggregation
      *
      * @param string $attribute The attribute name.
      * @param string|null $alias The alias for the result.
-     * @return mixed
+     * @return int|float
      */
-    public function min(string $attribute, ?string $alias = 'min'): mixed
+    public function min(string $attribute, ?string $alias = 'min'): int|float
     {
-        return (new Min($this->getTable() ?? '', $attribute, $alias))
+        $value = (new Min($this->getTable() ?? '', $attribute, $alias))
             ->withConnection($this->connection)
             ->condition(clone $this)
             ->queryScalar();
+
+        return is_numeric($value) ? $value + 0 : 0;
     }
 
     /**
@@ -144,15 +150,17 @@ trait Aggregation
      *
      * @param string $attribute The attribute name.
      * @param string|null $alias The alias for the result.
-     * @return mixed
+     * @return int|float
      */
-    public function minDistinct(string $attribute, ?string $alias = 'min'): mixed
+    public function minDistinct(string $attribute, ?string $alias = 'min'): int|float
     {
-        return (new Min($this->getTable() ?? '', $attribute, $alias))
+        $value = (new Min($this->getTable() ?? '', $attribute, $alias))
             ->withConnection($this->connection)
             ->distinct()
             ->condition(clone $this)
             ->queryScalar();
+
+        return is_numeric($value) ? $value + 0 : 0;
     }
 
     /**
@@ -160,14 +168,16 @@ trait Aggregation
      *
      * @param string $attribute The attribute name.
      * @param string|null $alias The alias for the result.
-     * @return mixed
+     * @return int|float
      */
-    public function sum(string $attribute, ?string $alias = 'sum'): mixed
+    public function sum(string $attribute, ?string $alias = 'sum'): int|float
     {
-        return (new Sum($this->getTable() ?? '', $attribute, $alias))
+        $value = (new Sum($this->getTable() ?? '', $attribute, $alias))
             ->withConnection($this->connection)
             ->condition(clone $this)
             ->queryScalar();
+
+        return is_numeric($value) ? $value + 0 : 0;
     }
 
     /**
@@ -175,14 +185,16 @@ trait Aggregation
      *
      * @param string $attribute The attribute name.
      * @param string|null $alias The alias for the result.
-     * @return mixed
+     * @return int|float
      */
-    public function sumDistinct(string $attribute, ?string $alias = 'sum'): mixed
+    public function sumDistinct(string $attribute, ?string $alias = 'sum'): int|float
     {
-        return (new Sum($this->getTable() ?? '', $attribute, $alias))
+        $value = (new Sum($this->getTable() ?? '', $attribute, $alias))
             ->withConnection($this->connection)
             ->distinct()
             ->condition(clone $this)
             ->queryScalar();
+
+        return is_numeric($value) ? $value + 0 : 0;
     }
 }
