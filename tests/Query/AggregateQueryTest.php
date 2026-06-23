@@ -3,9 +3,11 @@
 namespace Query;
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Simsoft\DB\Builder\{Raw};
 use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Connection;
 
 class AggregateQueryTest extends TestCase
 {
@@ -66,9 +68,101 @@ class AggregateQueryTest extends TestCase
     public function testRaw(ActiveQuery $q, string $expected, ?array $expectedBinds): void
     {
         $this->assertEqualsIgnoringCase($expected, (string)$q);
-        //$this->assertEqualsIgnoringCase($expected, $q);
-        //var_dump($expectedBinds);
-        //var_dump($q->getBindValues());
         $this->assertEquals($expectedBinds, $q->getBinds());
+    }
+
+    private function setupDatabase(): void
+    {
+        Connection::reset();
+        Connection::add('agg_test', ['driver' => 'sqlite', 'database' => ':memory:']);
+
+        $driver = Connection::get('agg_test');
+        $driver->execute(new Raw('CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL, stock INTEGER)'));
+        $driver->execute(new Raw('INSERT INTO products VALUES (1, "Apple", 1.50, 100)'));
+        $driver->execute(new Raw('INSERT INTO products VALUES (2, "Banana", 0.75, 200)'));
+        $driver->execute(new Raw('INSERT INTO products VALUES (3, "Cherry", 3.00, 50)'));
+        $driver->execute(new Raw('INSERT INTO products VALUES (4, "Date", 5.00, 25)'));
+        $driver->execute(new Raw('INSERT INTO products VALUES (5, "Elderberry", 8.50, 10)'));
+    }
+
+    #[Test]
+    public function maxReturnsHighestValue(): void
+    {
+        $this->setupDatabase();
+
+        $query = (new ActiveQuery())->from('products')->withConnection('agg_test');
+        $this->assertEquals(5, $query->max('id'));
+        $this->assertEquals(8.50, $query->max('price'));
+        $this->assertEquals(200, $query->max('stock'));
+
+        Connection::reset();
+    }
+
+    #[Test]
+    public function minReturnsLowestValue(): void
+    {
+        $this->setupDatabase();
+
+        $query = (new ActiveQuery())->from('products')->withConnection('agg_test');
+        $this->assertEquals(1, $query->min('id'));
+        $this->assertEquals(0.75, $query->min('price'));
+        $this->assertEquals(10, $query->min('stock'));
+
+        Connection::reset();
+    }
+
+    #[Test]
+    public function sumReturnsTotalValue(): void
+    {
+        $this->setupDatabase();
+
+        $query = (new ActiveQuery())->from('products')->withConnection('agg_test');
+        $this->assertEquals(385, $query->sum('stock'));
+
+        Connection::reset();
+    }
+
+    #[Test]
+    public function avgReturnsAverageValue(): void
+    {
+        $this->setupDatabase();
+
+        $query = (new ActiveQuery())->from('products')->withConnection('agg_test');
+        $this->assertEquals(77, $query->avg('stock'));
+
+        Connection::reset();
+    }
+
+    #[Test]
+    public function countReturnsRowCount(): void
+    {
+        $this->setupDatabase();
+
+        $query = (new ActiveQuery())->from('products')->withConnection('agg_test');
+        $this->assertEquals(5, $query->count());
+
+        Connection::reset();
+    }
+
+    #[Test]
+    public function maxWithCondition(): void
+    {
+        $this->setupDatabase();
+
+        $query = (new ActiveQuery())->from('products')->where('stock', '>', 30)->withConnection('agg_test');
+        $this->assertEquals(3.00, $query->max('price'));
+
+        Connection::reset();
+    }
+
+    #[Test]
+    public function minWithCondition(): void
+    {
+        $this->setupDatabase();
+
+        $query = (new ActiveQuery())->from('products')->where('price', '>', 2)->withConnection('agg_test');
+        $this->assertEquals(3.00, $query->min('price'));
+
+        Connection::reset();
     }
 }

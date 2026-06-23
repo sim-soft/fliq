@@ -8,10 +8,12 @@ use Simsoft\DB\Builder\Conditions\BetweenDateCondition;
 use Simsoft\DB\Builder\Conditions\Condition;
 use Simsoft\DB\Builder\Conditions\ExistsCondition;
 use Simsoft\DB\Builder\Conditions\InCondition;
+use Simsoft\DB\Exceptions\QueryException;
 use Simsoft\DB\Interfaces\Deletable;
 use Simsoft\DB\Interfaces\Executable;
 use Simsoft\DB\Interfaces\Updatable;
 use Simsoft\DB\Model;
+use Simsoft\DB\Relation;
 use Simsoft\DB\Traits\Aggregation;
 use Simsoft\DB\Traits\Binds;
 use Simsoft\DB\Traits\Execute;
@@ -68,7 +70,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /** @var string|null Attribute to be plucked */
     protected ?string $pluckAttribute = null;
 
-    /** @var array<string> Relations to eager load */
+    /** @var array<string> Relations to an eager load */
     protected array $eagerLoad = [];
 
     /** @var array<string, callable> Eager load constraints keyed by relation name */
@@ -196,7 +198,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function merge(ActiveQuery $query, string $logicalOperator = 'AND'): static
     {
         if ($this->table !== $query->getTable()) {
-            throw new \Simsoft\DB\Exceptions\QueryException(
+            throw new QueryException(
                 "Cannot merge queries from different tables: '$this->table' and '{$query->getTable()}'",
                 ''
             );
@@ -514,7 +516,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Construct the query conditions.
      *
-     * @param string|array<mixed>|callable|Raw|Clause $attribute the attribute
+     * @param string|array<int, array<int, mixed>>|callable|Raw|Clause $attribute the attribute
      * @param mixed $operator the comparison operator or the attribute value
      * @param mixed $value the value for the attribute
      * @param string $logicalOperator The logical operator. Default: 'AND'.
@@ -535,7 +537,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
             return $this->onCondition($attribute->alias($this->getAlias()), $logicalOperator);
         }
 
-        // Normalise operator/value and handle NULL comparisons for string attributes
+        // Normalize operator/value and handle NULL comparisons for string attributes
         if (is_string($attribute)) {
             $resolved = $this->resolveNullCondition($attribute, $operator, $value, $logicalOperator);
             if ($resolved !== null) {
@@ -561,7 +563,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Normalise operator/value when called as where('col', 'value') shorthand.
+     * Normalize operator/value when called as where('col', 'value') shorthand.
      *
      * When $value is null and $operator is not a comparison operator, treat
      * $operator as the value and default the operator to '='.
@@ -844,7 +846,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Where all of the given columns match the condition (AND logic).
+     * Where all the given columns match the condition (AND logic).
      *
      * Generates: WHERE (col1 op ? AND col2 op ? AND col3 op ?)
      *
@@ -860,7 +862,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Or where all of the given columns match the condition.
+     * Or where all the given columns match the condition.
      *
      * @param array<int, string> $columns The columns to check.
      * @param string $operator The comparison operator.
@@ -907,7 +909,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param array<int, string> $columns The columns.
      * @param string $operator The comparison operator.
      * @param mixed $value The value.
-     * @param string $joiner Inner logical operator (AND or OR).
+     * @param string $joiner Inner logical operator ('AND' or 'OR').
      * @param bool $negate Whether to wrap with NOT.
      * @param string $logicalOperator Outer logical operator.
      * @return static
@@ -1768,7 +1770,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         if ($alias !== null && $this->table !== null) {
             $quotedAlias = $this->quote($alias);
             if (!str_contains($this->table, $quotedAlias)) {
-                // Replace any existing alias or append new one
+                // Replace any existing alias or append a new one
                 // a Table format is either `table` or `table` `old_alias`
                 $parts = explode(' ', $this->table, 2);
                 $from = "FROM " . $parts[0] . " " . $quotedAlias;
@@ -1920,14 +1922,14 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Specify relations to eager load.
+     * Specify relations to an eager load.
      *
      * Supports multiple formats:
-     *   ->with('posts', 'profile')                    // simple
-     *   ->with('posts.comments')                      // nested
+     *   ->with('posts', 'profile') // simple
+     *   ->with('posts.comments') // nested
      *   ->with(['posts' => fn($q) => $q->where(...)]) // constrained
      *
-     * @param string|array<string|int, string|callable> ...$relations Relation names or [name => callback] array.
+     * @param string|array<string, callable> ...$relations
      * @return static
      */
     public function with(string|array ...$relations): static
@@ -2059,7 +2061,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Filter by the date part of a datetime column.
      *
-     * Supports shorthand: whereDate('col', '2024-01-01') defaults operator to '='.
+     * Supports shorthand: whereDate('col', '2024-01-01') defaults the operator to '='.
      *
      * @param string $column The column name.
      * @param string $operator The comparison operator or value (shorthand).
@@ -2259,7 +2261,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Or where JSON column path equals a value.
+     * Or where a JSON column path equals a value.
      *
      * @param string $column The JSON column path (e.g., 'meta->status').
      * @param mixed $value The value to match.
@@ -2465,7 +2467,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Or where JSON array length matches.
+     * Or where the JSON array length matches.
      *
      * @param string $column The JSON column path.
      * @param string $operator The comparison operator.
@@ -2542,7 +2544,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Or where JSON key exists.
+     * Or where the JSON key exists.
      *
      * @param string $column The JSON column path.
      * @return static
@@ -2565,7 +2567,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Or where JSON key does not exist.
+     * Or where the JSON key does not exist.
      *
      * @param string $column The JSON column path.
      * @return static
@@ -2576,7 +2578,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Or where JSON column matches.
+     * Or where the JSON column matches.
      *
      * @param string $column The JSON column path.
      * @param string $operator The comparison operator.
@@ -2632,7 +2634,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *
      * Handles dot notation (table.column) and simple names (deferred resolution).
      *
-     * @param string $col The column name (may contain dot for table.column).
+     * @param string $col The column name (may contain a dot for 'table.column').
      * @return string The qualified column reference.
      */
     private function qualifyJsonColumn(string $col): string
@@ -2646,7 +2648,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Filter by existence of a relation (has related records).
+     * Filter by the existence of a relation (has related records).
      *
      * Generates: WHERE EXISTS (SELECT 1 FROM related WHERE related.fk = parent.pk)
      *
@@ -2672,7 +2674,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Filter by existence of a relation with additional conditions.
+     * Filter by the existence of a relation with additional conditions.
      *
      * Generates: WHERE EXISTS (SELECT 1 FROM related WHERE related.fk = parent.pk AND ...)
      *
@@ -2728,7 +2730,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *
      * @param string $relationName The relation method name.
      * @param callable|null $callback Optional callback for additional conditions.
-     * @return string|null The sub-query SQL, or null if relation doesn't exist.
+     * @return string|null The sub-query SQL, or null if the relation doesn't exist.
      */
     private function buildRelationExistsQuery(string $relationName, ?callable $callback): ?string
     {
@@ -2740,7 +2742,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $model = new $this->modelClass();
         $relation = $model->{$relationName}();
 
-        if (!$relation instanceof \Simsoft\DB\Relation) {
+        if (!$relation instanceof Relation) {
             return null;
         }
 
