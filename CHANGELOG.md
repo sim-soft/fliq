@@ -50,7 +50,7 @@ Initial release.
 - Fluent query builder (SELECT, INSERT, UPDATE, DELETE, UPSERT)
 - Active Record pattern with hasOne/hasMany/viaTable relations
 - PDO driver (MySQL/MariaDB) and MySQLi driver
-- PostgreSQL driver (beta)
+- PostgreSQL driver
 - Eager loading with dot notation and constraints
 - Soft deletes and timestamps traits
 - Collection with lazy/chunked iteration

@@ -10,7 +10,7 @@
         <properties>
             <property name="ignorepattern"
                       description="Ignore methods matching this regex. Example: /^(__construct|get.*Filtered)$/"
-                      value="/^(__construct|parse|formal|make|lookup|save|saveTogether|like|orLike|notLike|orNotLike|whereLike|orWhereLike|whereNotLike|orWhereNotLike|between|betweenDate|betweenDateInterval|matchAll|jsonExtract)$/"/>
+                      value="/^(__construct|parse|formal|make|lookup|save|saveTogether|like|orLike|notLike|orNotLike|whereLike|orWhereLike|whereNotLike|orWhereNotLike|between|betweenDate|betweenDateInterval|matchAll|jsonExtract|explain)$/"/>
         </properties>
     </rule>
     <rule ref="rulesets/cleancode.xml/ElseExpression"/>
@@ -40,31 +40,31 @@
     <rule ref="rulesets/codesize.xml/ExcessiveClassLength">
         <properties>
             <!-- ActiveQuery is a fluent builder with intentionally many methods -->
-            <property name="minimum" value="3000"/>
+            <property name="minimum" value="3100"/>
         </properties>
     </rule>
     <rule ref="rulesets/codesize.xml/ExcessiveParameterList"/>
     <rule ref="rulesets/codesize.xml/ExcessivePublicCount">
         <properties>
             <!-- ActiveQuery and Model are ORM classes with intentionally large public APIs -->
-            <property name="minimum" value="160"/>
+            <property name="minimum" value="180"/>
         </properties>
     </rule>
     <rule ref="rulesets/codesize.xml/TooManyFields">
         <properties>
-            <property name="maxfields" value="16"/>
+            <property name="maxfields" value="17"/>
         </properties>
     </rule>
     <rule ref="rulesets/codesize.xml/TooManyMethods">
         <properties>
             <!-- ActiveQuery and Model are ORM classes with intentionally many methods -->
-            <property name="maxmethods" value="160"/>
+            <property name="maxmethods" value="170"/>
         </properties>
     </rule>
     <rule ref="rulesets/codesize.xml/TooManyPublicMethods">
         <properties>
             <!-- ActiveQuery, Model, Collection, DB are ORM/facade classes with intentionally large public APIs -->
-            <property name="maxmethods" value="140"/>
+            <property name="maxmethods" value="150"/>
         </properties>
     </rule>
     <!--<rule ref="rulesets/codesize.xml/ExcessiveClassComplexity"/>-->

@@ -2,6 +2,7 @@
 
 namespace Simsoft\DB\Builder;
 
+use Simsoft\DB\Connection;
 use Simsoft\DB\Traits\Ignore;
 
 /**
@@ -11,6 +12,12 @@ use Simsoft\DB\Traits\Ignore;
 class Insert extends Builder
 {
     use Ignore;
+
+    /** @var string|null Column to return via RETURNING clause */
+    protected ?string $returningColumn = null;
+
+    /** @var array<int, array<string, mixed>>|null Rows returned by RETURNING clause */
+    protected ?array $returningResult = null;
 
     /**
      * Constructor
@@ -23,16 +30,127 @@ class Insert extends Builder
     }
 
     /**
+     * Add a RETURNING clause to the INSERT statement.
+     *
+     * Supported by PostgreSQL and SQLite 3.35+.
+     *
+     * @param string $column The column to return.
+     * @return static
+     */
+    public function returning(string $column): static
+    {
+        $this->returningColumn = $column;
+        return $this;
+    }
+
+    /**
+     * Get the result from a RETURNING clause execution.
+     *
+     * @return array<int, array<string, mixed>>|null
+     */
+    public function getReturningResult(): ?array
+    {
+        return $this->returningResult;
+    }
+
+    /**
+     * Set the RETURNING result after execution.
+     *
+     * @param array<int, array<string, mixed>> $result The returned rows.
+     * @return void
+     */
+    public function setReturningResult(array $result): void
+    {
+        $this->returningResult = $result;
+    }
+
+    /**
+     * Check if this INSERT has a RETURNING clause.
+     *
+     * @return bool
+     */
+    public function hasReturning(): bool
+    {
+        return $this->returningColumn !== null;
+    }
+
+    /**
      * {@inheritdoc}
      */
     protected function buildSQL(): string
     {
-        return $this->getQualifiedSQL(implode(' ', array_filter([
-            'INSERT',
-            $this->ignoreModifier(),
+        $grammar = Connection::grammar($this->connection);
+
+        // PostgreSQL/SQLite: grammar provides full INSERT...ON CONFLICT DO NOTHING SQL
+        if ($this->ignore) {
+            $fullSQL = $this->buildIgnoreSQL($grammar);
+            if ($fullSQL !== null) {
+                return $this->getQualifiedSQL($fullSQL);
+            }
+        }
+
+        // MySQL uses INSERT IGNORE keyword; otherwise plain INSERT
+        $insertKeyword = $this->ignore ? $grammar->insertIgnoreSQL() : 'INSERT';
+
+        $sql = implode(' ', array_filter([
+            $insertKeyword,
             'INTO ' . $this->quote($this->table),
             $this->isBulkData() ? $this->bulkData() : $this->normalData(),
-        ])));
+        ]));
+
+        // Append RETURNING clause if set
+        if ($this->returningColumn !== null && $grammar->supportsReturning()) {
+            $sql .= ' ' . $grammar->returningSQL($this->returningColumn);
+        }
+
+        return $this->getQualifiedSQL($sql);
+    }
+
+    /**
+     * Build INSERT IGNORE SQL using grammar-specific full override.
+     *
+     * @param \Simsoft\DB\Grammar\Grammar $grammar The grammar instance.
+     * @return string|null Full SQL if grammar provides override, null otherwise.
+     */
+    private function buildIgnoreSQL(\Simsoft\DB\Grammar\Grammar $grammar): ?string
+    {
+        /** @var array<int, string> $columns */
+        $columns = $this->isBulkData()
+            ? array_map('strval', array_keys($this->attributes[0]))
+            : array_map('strval', array_keys($this->attributes));
+        $quotedTable = $this->quote($this->table);
+
+        if ($this->isBulkData()) {
+            // Check if grammar supports full override before appending binds
+            $placeholders = $this->getBulkPlaceholders();
+            $fullSQL = $grammar->insertIgnoreFullSQL($quotedTable, $columns, $placeholders);
+            if ($fullSQL === null) {
+                return null;
+            }
+            $this->bulkData();
+            return $fullSQL;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($this->attributes), $this->getPlaceHolder()));
+        $fullSQL = $grammar->insertIgnoreFullSQL($quotedTable, $columns, $placeholders);
+        if ($fullSQL === null) {
+            return null;
+        }
+        $this->appendBinds(array_values($this->attributes));
+
+        return $fullSQL;
+    }
+
+    /**
+     * Get bulk insert placeholders string.
+     *
+     * @return string
+     */
+    private function getBulkPlaceholders(): string
+    {
+        $columns = array_keys($this->attributes[0]);
+        $rowPlaceholder = '(' . implode(',', array_fill(0, count($columns), $this->getPlaceHolder())) . ')';
+        return implode(',', array_fill(0, count($this->attributes), $rowPlaceholder));
     }
 
     /**

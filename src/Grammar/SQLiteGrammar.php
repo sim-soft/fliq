@@ -135,4 +135,102 @@ class SQLiteGrammar implements Grammar
     {
         return "time($column)";
     }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function insertIgnoreFullSQL(string $table, array $columns, string $placeholders): ?string
+    {
+        return null; // SQLite uses INSERT OR IGNORE keyword directly
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function returningSQL(string $column): string
+    {
+        return "RETURNING " . $this->quoteIdentifier($column);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function returningColumnsSQL(array $columns): string
+    {
+        if (empty($columns)) {
+            return 'RETURNING *';
+        }
+
+        $quoted = array_map(fn($col) => $this->quoteIdentifier($col), $columns);
+        return 'RETURNING ' . implode(', ', $quoted);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsReturning(): bool
+    {
+        return true; // SQLite 3.35+ supports RETURNING
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function jsonKeyExists(string $column, string $path): string
+    {
+        $jsonPath = '$.' . $path;
+        return "json_type($column, '$jsonPath') IS NOT NULL";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function lockSQL(string $lockType): string
+    {
+        return ''; // SQLite does not support row-level locking
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function fulltextSearch(array $columns, string $mode = 'plain', string $language = 'english'): string
+    {
+        // SQLite FTS5 uses MATCH syntax on virtual tables — limited support
+        $col = $columns[0] ?? 'content';
+        return "$col MATCH ?";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsFulltext(): bool
+    {
+        return false; // FTS5 requires virtual tables, not general-purpose
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function arrayContains(string $column, string $type = 'text'): string
+    {
+        // SQLite does not support native array columns
+        return "EXISTS (SELECT 1 FROM json_each($column) WHERE json_each.value = ?)";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function arrayOverlaps(string $column, int $count, string $type = 'text'): string
+    {
+        $placeholders = implode(',', array_fill(0, $count, '?'));
+        return "EXISTS (SELECT 1 FROM json_each($column) WHERE json_each.value IN ($placeholders))";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsArrayColumns(): bool
+    {
+        return false;
+    }
 }

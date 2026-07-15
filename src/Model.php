@@ -183,7 +183,7 @@ abstract class Model implements ArrayAccess
         if (array_key_exists($name, $this->casts)) {
             match ($this->casts[$name]) {
                 'int', 'integer' => $this->attributes[$name] = (int)$value,
-                'bool', 'boolean' => $this->attributes[$name] = (bool)$value,
+                'bool', 'boolean' => $this->attributes[$name] = $this->castToBoolean($value),
                 'float', 'double', 'real' => $this->attributes[$name] = (float)$value,
                 'string', 'binary' => $this->attributes[$name] = (string)$value,
                 'array' => $this->attributes[$name] = (array)$value,
@@ -207,7 +207,7 @@ abstract class Model implements ArrayAccess
         if (array_key_exists($name, $this->casts)) {
             $this->attributes[$name] = match ($this->casts[$name]) {
                 'int', 'integer' => (int)($this->attributes[$name] ?? 0),
-                'bool', 'boolean' => (bool)($this->attributes[$name] ?? false),
+                'bool', 'boolean' => $this->castToBoolean($this->attributes[$name] ?? false),
                 'float', 'double', 'real' => (float)($this->attributes[$name] ?? 0.00),
                 'string', 'binary' => (string)($this->attributes[$name] ?? ''),
                 'array' => (array)($this->attributes[$name] ?? []),
@@ -233,6 +233,28 @@ abstract class Model implements ArrayAccess
         }
 
         return null;
+    }
+
+    /**
+     * Cast a value to boolean, handling PostgreSQL string representations.
+     *
+     * PostgreSQL returns boolean columns as 't'/'f' or 'true'/'false' strings
+     * depending on PDO configuration. This method normalizes all formats.
+     *
+     * @param mixed $value The value to cast.
+     * @return bool
+     */
+    private function castToBoolean(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_string($value)) {
+            return !in_array(strtolower($value), ['f', 'false', '0', '', 'no', 'off'], true);
+        }
+
+        return (bool)$value;
     }
 
     /**
@@ -874,7 +896,16 @@ abstract class Model implements ArrayAccess
         $attributes = array_intersect_key($this->attributes, $this->dirtyAttributes);
         if ($attributes) {
             $query = new Insert($this->getTable(), $attributes);
-            $status = $query->withConnection($this->getConnectionName())->execute();
+            $query->withConnection($this->getConnectionName());
+
+            // Use RETURNING for PostgreSQL to get the inserted ID reliably
+            // (PDO::lastInsertId() requires sequence name on PG without RETURNING)
+            $grammar = Connection::grammar($this->getConnectionName());
+            if ($grammar->getDriverName() === 'pgsql' && is_string($this->primaryKey)) {
+                $query->returning($this->primaryKey);
+            }
+
+            $status = $query->execute();
             if ($status) {
                 $key = $query->getLastInsertId();
                 if (is_string($this->primaryKey) && $key) {

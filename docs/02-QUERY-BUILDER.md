@@ -14,6 +14,7 @@
 - [Merge Queries](#merge-queries)
 - [Union Queries](#union-queries)
 - [JSON Column Queries](#json-column-queries)
+- [Array Columns (PostgreSQL)](#array-columns-postgresql)
 - [Multi-Column Conditions](#multi-column-conditions)
 - [Like Clauses](#like-clauses)
 - [Ordering, Grouping, Limit & Offset](#ordering-grouping-limit--offset)
@@ -735,6 +736,48 @@ $users = (new ActiveQuery())
 - With `alias.` prefix → uses the alias (e.g., `s.metadata`)
 - With `table_name.` prefix → uses the full table name (e.g., `setting.metadata`)
 - The part after `->` is always the JSON path (`$.tags`, `$.address.city`, etc.)
+
+## Array Columns (PostgreSQL)
+
+PostgreSQL supports native array column types (`text[]`, `int[]`, `varchar[]`).
+FLIQ provides fluent query methods for array containment and overlap checks.
+
+### `arrayContains()` — Column contains a value
+
+```php
+/* PostgreSQL: WHERE "user"."tags" @> ARRAY[?]::text[] */
+User::find()->arrayContains('tags', 'php')->get();
+
+/* Integer array column */
+User::find()->arrayContains('role_ids', 5, 'int')->get();
+```
+
+### `arrayOverlaps()` — Column has any of the given values
+
+```php
+/* PostgreSQL: WHERE "user"."tags" && ARRAY[?, ?]::text[] */
+User::find()->arrayOverlaps('tags', ['php', 'python'])->get();
+
+/* Integer array */
+User::find()->arrayOverlaps('department_ids', [1, 3, 5], 'int')->get();
+```
+
+### Or Variants
+
+```php
+User::find()
+    ->arrayContains('tags', 'php')
+    ->orArrayContains('tags', 'python')
+    ->get();
+
+User::find()
+    ->where('status', 'active')
+    ->orArrayOverlaps('skills', ['docker', 'kubernetes'])
+    ->get();
+```
+
+> For GIN index recommendations and schema examples, see
+> the [PostgreSQL Guide](10-POSTGRESQL.md#array-columns).
 
 ## Multi-Column Conditions
 

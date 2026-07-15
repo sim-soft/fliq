@@ -90,6 +90,38 @@ trait Execute
     }
 
     /**
+     * Get the EXPLAIN output for this query.
+     *
+     * Returns the database's query plan as an array of rows.
+     * Supports EXPLAIN ANALYZE for actual execution statistics.
+     *
+     * @param bool $analyze Whether to use EXPLAIN ANALYZE (actually executes the query).
+     * @param string $format Output format: 'text', 'json', 'yaml', 'xml'. Default: 'text'.
+     * @return array<int, array<string, mixed>> The explain output rows.
+     */
+    public function explain(bool $analyze = false, string $format = 'text'): array
+    {
+        $sql = $this->getSQL();
+        $binds = $this->getBinds();
+
+        $grammar = Connection::grammar($this->connection);
+        $driverName = $grammar->getDriverName();
+
+        $explainPrefix = match ($driverName) {
+            'pgsql' => 'EXPLAIN' . ($analyze ? ' ANALYZE' : '')
+                . ($format !== 'text' ? ' (FORMAT ' . strtoupper($format) . ')' : ''),
+            'sqlite' => 'EXPLAIN QUERY PLAN',
+            default => 'EXPLAIN' . ($analyze ? ' ANALYZE' : ''),
+        };
+
+        $explainSQL = "$explainPrefix $sql";
+        $raw = new \Simsoft\DB\Builder\Raw($explainSQL, $binds);
+        $raw->withConnection($this->connection);
+
+        return $raw->fetchAll();
+    }
+
+    /**
      * Get the connection name.
      *
      * @return string|null
@@ -152,6 +184,15 @@ trait Execute
      */
     public function getLastInsertId(): ?string
     {
+        // Check if the builder has a RETURNING result (PostgreSQL/SQLite)
+        if ($this instanceof \Simsoft\DB\Builder\Insert && $this->hasReturning()) {
+            $rows = $this->getReturningResult();
+            if (!empty($rows) && is_array($rows[0])) {
+                $firstValue = reset($rows[0]);
+                return $firstValue !== null ? (string)$firstValue : null;
+            }
+        }
+
         $result = $this->getDriver('write')->lastInsertId();
 
         return $result === false ? null : $result;
