@@ -120,7 +120,9 @@ Requires PHP 8.4+ with `ext-pdo`.
 - Query logging with timing (`QueryLogger`)
 - Index advisor — suggests missing indexes from logged queries
 - `dd()` and `dump()` — inspect generated SQL during development
+- `explain()` — get query execution plan (EXPLAIN ANALYZE)
 - Query result caching with pluggable drivers
+- **Model Generator** — CLI tool to create Model files from database tables
 
 ### Database Support
 
@@ -164,6 +166,8 @@ and other ORMs.
 | [Collections](06-COLLECTIONS.md)             | filter, map, reduce, indexBy, groupBy              |
 | [Comparison](07-COMPARISON.md)               | Benchmarks, FLIQ vs Eloquent/Doctrine/Yii3         |
 | [Cheatsheet](08-CHEATSHEET.md)               | Quick reference for all operations                 |
+| [PostgreSQL Guide](10-POSTGRESQL.md)         | PG features, production guidance, PgBouncer        |
+| [Model Generator](11-MODEL-GENERATOR.md)     | CLI tool to scaffold models from database tables   |
 
 ## Links
 

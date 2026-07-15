@@ -8,34 +8,34 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 
 ### Query Building (no DB execution, 10,000 iterations)
 
-| Operation | Time per query | Memory |
-|-----------|:--------------:|:------:|
-| Simple SELECT (`where('status', 1)`) | 6.9μs | 448 bytes/object |
-| Complex WHERE (5 conditions) | 9.1μs | — |
-| JOIN + GROUP BY + HAVING + ORDER BY + LIMIT | 9.3μs | — |
+| Operation                                   | Time per query |      Memory      |
+|---------------------------------------------|:--------------:|:----------------:|
+| Simple SELECT (`where('status', 1)`)        |     6.9μs      | 448 bytes/object |
+| Complex WHERE (5 conditions)                |     9.1μs      |        —         |
+| JOIN + GROUP BY + HAVING + ORDER BY + LIMIT |     9.3μs      |        —         |
 
 ### Database Execution (MySQL, 1,000 iterations)
 
-| Operation | Time per query |
-|-----------|:--------------:|
-| `findByPk(1)` | 1.09ms |
-| `find()->where()->first()` | 1.15ms |
-| `find()->get()->all()` (10 rows) | 1.26ms |
+| Operation                        | Time per query |
+|----------------------------------|:--------------:|
+| `findByPk(1)`                    |     1.09ms     |
+| `find()->where()->first()`       |     1.15ms     |
+| `find()->get()->all()` (10 rows) |     1.26ms     |
 
 ### Model Hydration
 
-| Operation | Time | Memory |
-|-----------|:----:|:------:|
-| 1,000 models hydrated | 0.67ms total | 543KB |
-| Per model | 0.67μs | 536 bytes |
+| Operation             |     Time     |  Memory   |
+|-----------------------|:------------:|:---------:|
+| 1,000 models hydrated | 0.67ms total |   543KB   |
+| Per model             |    0.67μs    | 536 bytes |
 
 ### Memory Footprint
 
-| Object | Size |
-|--------|:----:|
-| ActiveQuery instance | 448 bytes |
-| Model instance | 536 bytes |
-| Peak memory (full benchmark) | 6 MB |
+| Object                       |   Size    |
+|------------------------------|:---------:|
+| ActiveQuery instance         | 448 bytes |
+| Model instance               | 536 bytes |
+| Peak memory (full benchmark) |   6 MB    |
 
 ## Performance
 
@@ -107,6 +107,8 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 | Query logging with timing |  ✅   |    ✅     |    ✅     |    ❌    |     ❌     |     ❌      |
 | Advisory locks (PG)       |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
 | LISTEN / NOTIFY (PG)      |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
+| EXPLAIN / query plans     |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
+| Model generator (CLI)     |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
 
 ## Summary
 

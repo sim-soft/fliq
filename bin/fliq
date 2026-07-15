@@ -1,0 +1,209 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * FLIQ CLI — Model generator and utility commands.
+ *
+ * Usage:
+ *   vendor/bin/fliq make:model <TableName> [options]
+ *
+ * Options:
+ *   --table=<name>        Table name (defaults to snake_case of class name)
+ *   --connection=<name>   Database connection name (default: from Connection registry)
+ *   --namespace=<ns>      PHP namespace (default: App\Models)
+ *   --output=<dir>        Output directory (default: src/Models)
+ *   --force               Overwrite existing file
+ *   --preview             Print generated code without writing file
+ *   --config=<file>       Path to database config file to load connections
+ */
+
+// Find autoloader
+$autoloadPaths = [
+        __DIR__ . '/../vendor/autoload.php',       // Installed as package
+        __DIR__ . '/../../../autoload.php',         // Installed in vendor/bin
+];
+
+$autoloaded = false;
+foreach ($autoloadPaths as $autoloadPath) {
+    if (file_exists($autoloadPath)) {
+        require $autoloadPath;
+        $autoloaded = true;
+        break;
+    }
+}
+
+if (!$autoloaded) {
+    fwrite(STDERR, "Error: Could not find autoload.php. Run 'composer install' first.\n");
+    exit(1);
+}
+
+use Simsoft\DB\Connection;
+use Simsoft\DB\Generator\ModelGenerator;
+
+// Parse arguments
+$args = array_slice($argv, 1);
+
+if (empty($args) || in_array('--help', $args, true) || in_array('-h', $args, true)) {
+    printHelp();
+    exit(0);
+}
+
+$command = array_shift($args);
+
+if ($command !== 'make:model') {
+    fwrite(STDERR, "Unknown command: $command\n\n");
+    printHelp();
+    exit(1);
+}
+
+// Parse positional and option arguments
+$className = null;
+$options = parseOptions($args, $className);
+
+// Load config if provided
+if (isset($options['config'])) {
+    $configFile = $options['config'];
+    if (!file_exists($configFile)) {
+        fwrite(STDERR, "Error: Config file not found: $configFile\n");
+        exit(1);
+    }
+    Connection::configure($configFile);
+}
+
+$namespace = $options['namespace'] ?? 'App\\Models';
+$outputDir = $options['output'] ?? 'app/Models';
+$connection = $options['connection'] ?? null;
+$force = isset($options['force']);
+$preview = isset($options['preview']);
+
+// Handle --all: generate models for every table in the connection
+if (isset($options['all'])) {
+    $result = ModelGenerator::generateAll($connection, $namespace, $outputDir, $force);
+
+    foreach ($result['created'] as $path) {
+        echo "Created: $path\n";
+    }
+    foreach ($result['skipped'] as $table) {
+        echo "Skipped: $table (already exists)\n";
+    }
+
+    $total = count($result['created']) + count($result['skipped']);
+    echo "\nDone. " . count($result['created']) . " created, " . count($result['skipped']) . " skipped ($total tables).\n";
+    exit(0);
+}
+
+if ($className === null) {
+    fwrite(STDERR, "Error: Model class name is required (or use --all to generate all).\n\n");
+    fwrite(STDERR, "Usage: vendor/bin/fliq make:model <ClassName> [--table=...] [--force]\n");
+    fwrite(STDERR, "       vendor/bin/fliq make:model --all --config=config/db.php [--force]\n");
+    exit(1);
+}
+
+// Resolve table name: --table option or snake_case from class name
+$table = $options['table'] ?? classToTable($className);
+
+// Build generator
+$generator = ModelGenerator::fromTable($table, $connection)
+        ->namespace($namespace)
+        ->outputDir($outputDir)
+        ->force($force);
+
+if ($preview) {
+    echo $generator->preview();
+    exit(0);
+}
+
+$result = $generator->generate();
+
+if ($result === false) {
+    $filePath = $outputDir . DIRECTORY_SEPARATOR . $className . '.php';
+    fwrite(STDERR, "Skipped: $filePath already exists. Use --force to overwrite.\n");
+    exit(0);
+}
+
+echo "Created: $result\n";
+exit(0);
+
+// ------------------------------------------------------------------
+// Helper functions
+// ------------------------------------------------------------------
+
+/**
+ * Parse CLI options from argument list.
+ *
+ * @param array<int, string> $args The arguments.
+ * @param string|null $className Output: the positional class name.
+ * @return array<string, string|true>
+ */
+function parseOptions(array $args, ?string &$className): array
+{
+    $options = [];
+
+    foreach ($args as $arg) {
+        if (str_starts_with($arg, '--')) {
+            $stripped = substr($arg, 2);
+            if (str_contains($stripped, '=')) {
+                [$key, $value] = explode('=', $stripped, 2);
+                $options[$key] = $value;
+            } else {
+                $options[$stripped] = true;
+            }
+        } elseif ($className === null) {
+            $className = $arg;
+        }
+    }
+
+    return $options;
+}
+
+/**
+ * Convert a PascalCase class name to a snake_case table name.
+ *
+ * @param string $className The class name.
+ * @return string The table name.
+ */
+function classToTable(string $className): string
+{
+    $snake = preg_replace('/([a-z])([A-Z])/', '$1_$2', $className) ?? $className;
+    return strtolower($snake);
+}
+
+/**
+ * Print help text.
+ *
+ * @return void
+ */
+function printHelp(): void
+{
+    echo <<<'HELP'
+    FLIQ CLI — Model Generator
+
+    Usage:
+      vendor/bin/fliq make:model <ClassName> [options]
+      vendor/bin/fliq make:model --all [options]
+
+    Arguments:
+      ClassName             The model class name (PascalCase, e.g. UserProfile)
+
+    Options:
+      --all                 Generate models for ALL tables in the database
+      --table=<name>        Database table name (default: snake_case of ClassName)
+      --connection=<name>   Connection name registered via Connection::add()
+      --namespace=<ns>      PHP namespace for the model (default: App\Models)
+      --output=<dir>        Output directory (default: app/Models)
+      --config=<file>       Load database connections from a PHP config file
+      --force               Overwrite existing files
+      --preview             Print generated code to stdout (no file written)
+      --help, -h            Show this help message
+
+    Examples:
+      vendor/bin/fliq make:model User --config=config/db.php
+      vendor/bin/fliq make:model UserProfile --table=user_profile --connection=pgsql
+      vendor/bin/fliq make:model Order --namespace=App\\Domain\\Models --output=app/Domain/Models
+      vendor/bin/fliq make:model Post --preview
+      vendor/bin/fliq make:model Post --force
+      vendor/bin/fliq make:model --all --config=config/db.php
+      vendor/bin/fliq make:model --all --config=config/db.php --connection=pgsql --force
+
+    HELP;
+}

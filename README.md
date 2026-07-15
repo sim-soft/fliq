@@ -286,7 +286,36 @@ $slowest = QueryLogger::getSlowestQuery();
 
 // Index advisor
 IndexAdvisor::suggestSQL();
+
+// EXPLAIN query plans
+$plan = User::find()->where('role', 'admin')->explain(analyze: true);
 ```
+
+### Model Generator
+
+Generate Model files directly from your database schema — no boilerplate by
+hand:
+
+```bash
+# Generate a single model
+vendor/bin/fliq make:model User --config=config/db.php
+
+# Generate all models at once
+vendor/bin/fliq make:model --all --config=config/db.php
+```
+
+Or use it in PHP code:
+
+```php
+use Simsoft\DB\Generator\ModelGenerator;
+
+ModelGenerator::fromTable('user')->namespace('App\\Models')->generate();
+ModelGenerator::generateAll(namespace: 'App\\Models');
+```
+
+The generator introspects your tables and creates models with `$connection`,
+`$table`, `$fillable`, `$casts`, PHPDoc properties, and auto-detected traits (
+`SoftDeletes`, `Timestamps`).
 
 ## Documentation
 
@@ -300,6 +329,10 @@ IndexAdvisor::suggestSQL();
 6. [Collections](docs/06-COLLECTIONS.md) — Lazy iteration, filter, map, reduce, indexBy, groupBy, batch processing
 7. [Comparison](docs/07-COMPARISON.md) — Feature comparison with Eloquent, Doctrine, Yii3, Cycle, Propel
 8. [Cheatsheet](docs/08-CHEATSHEET.md) — Quick reference for all common operations
+9. [PostgreSQL Guide](docs/10-POSTGRESQL.md) — PG-specific features, production
+   guidance, PgBouncer
+10. [Model Generator](docs/11-MODEL-GENERATOR.md) — CLI tool to scaffold models
+    from database tables
 
 ## License
 
