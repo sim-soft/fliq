@@ -2,6 +2,8 @@
 
 namespace Simsoft\DB\Traits;
 
+use Simsoft\DB\Builder\Insert;
+use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Cache\QueryCache;
 use Simsoft\DB\Connection;
 use Simsoft\DB\Drivers\Driver;
@@ -115,7 +117,7 @@ trait Execute
         };
 
         $explainSQL = "$explainPrefix $sql";
-        $raw = new \Simsoft\DB\Builder\Raw($explainSQL, $binds);
+        $raw = new Raw($explainSQL, $binds);
         $raw->withConnection($this->connection);
 
         return $raw->fetchAll();
@@ -185,7 +187,7 @@ trait Execute
     public function getLastInsertId(): ?string
     {
         // Check if the builder has a RETURNING result (PostgreSQL/SQLite)
-        if ($this instanceof \Simsoft\DB\Builder\Insert && $this->hasReturning()) {
+        if ($this instanceof Insert && $this->hasReturning()) {
             $rows = $this->getReturningResult();
             if (!empty($rows) && is_array($rows[0])) {
                 $firstValue = reset($rows[0]);

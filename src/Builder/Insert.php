@@ -3,6 +3,7 @@
 namespace Simsoft\DB\Builder;
 
 use Simsoft\DB\Connection;
+use Simsoft\DB\Grammar\Grammar;
 use Simsoft\DB\Traits\Ignore;
 
 /**
@@ -109,10 +110,10 @@ class Insert extends Builder
     /**
      * Build INSERT IGNORE SQL using grammar-specific full override.
      *
-     * @param \Simsoft\DB\Grammar\Grammar $grammar The grammar instance.
+     * @param Grammar $grammar The grammar instance.
      * @return string|null Full SQL if grammar provides override, null otherwise.
      */
-    private function buildIgnoreSQL(\Simsoft\DB\Grammar\Grammar $grammar): ?string
+    private function buildIgnoreSQL(Grammar $grammar): ?string
     {
         /** @var array<int, string> $columns */
         $columns = $this->isBulkData()

@@ -5,6 +5,9 @@ namespace Simsoft\DB\Drivers;
 use PDO;
 use PDOException;
 use PDOStatement;
+use Simsoft\DB\Builder\Delete;
+use Simsoft\DB\Builder\Insert;
+use Simsoft\DB\Builder\Update;
 use Simsoft\DB\Interfaces\Executable;
 
 /**
@@ -111,21 +114,21 @@ class PostgresDriver extends Driver
         $binds = $query->getBinds();
 
         // Handle INSERT/UPDATE/DELETE with RETURNING clause
-        if ($query instanceof \Simsoft\DB\Builder\Insert && $query->hasReturning()) {
+        if ($query instanceof Insert && $query->hasReturning()) {
             $stmt = $this->prepareStatement($sql);
             $stmt->execute($binds ?? []);
             $query->setReturningResult($stmt->fetchAll());
             return true;
         }
 
-        if ($query instanceof \Simsoft\DB\Builder\Update && $query->hasReturning()) {
+        if ($query instanceof Update && $query->hasReturning()) {
             $stmt = $this->prepareStatement($sql);
             $stmt->execute($binds ?? []);
             $query->setReturningResult($stmt->fetchAll());
             return true;
         }
 
-        if ($query instanceof \Simsoft\DB\Builder\Delete && $query->hasReturning()) {
+        if ($query instanceof Delete && $query->hasReturning()) {
             $stmt = $this->prepareStatement($sql);
             $stmt->execute($binds ?? []);
             $query->setReturningResult($stmt->fetchAll());
@@ -471,10 +474,8 @@ class PostgresDriver extends Driver
     public function getNotification(int $timeoutMs = 0): ?array
     {
         $conn = $this->requireConnection();
-        $pdo = $conn;
 
-        /** @var \PDO $pdo */
-        $pgsql = $pdo->pgsqlGetNotify(\PDO::FETCH_ASSOC, $timeoutMs);
+        $pgsql = $conn->pgsqlGetNotify(PDO::FETCH_ASSOC, $timeoutMs);
 
         if ($pgsql === false) {
             return null;
