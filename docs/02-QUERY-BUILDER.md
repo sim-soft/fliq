@@ -26,6 +26,7 @@
 - [Date Filters](#date-filters)
 - [Scopes](#scopes)
 - [Conditional Clauses](#conditional-clauses)
+- [Debugging (explain, dump, dd)](#explain--query-execution-plan)
 
 The query builder provides a fluent interface for building SQL queries without writing raw SQL.
 
@@ -1333,4 +1334,58 @@ $users = User::find()
 
 // Output:
 // SELECT `user`.* FROM `user` WHERE `user`.`status` = 'active'
+```
+
+### `explain()` — Query Execution Plan
+
+Get the database's query plan for performance analysis. Works on all drivers (
+MySQL, PostgreSQL, SQLite).
+
+```php
+$plan = User::find()
+    ->where('status_code', 1)
+    ->orderBy('score', 'DESC')
+    ->limit(10)
+    ->explain();
+
+/*
+  MySQL:      EXPLAIN SELECT ...
+  PostgreSQL: EXPLAIN SELECT ...
+  SQLite:     EXPLAIN QUERY PLAN SELECT ...
+*/
+```
+
+#### EXPLAIN ANALYZE (actual execution timings)
+
+```php
+/* Actually executes the query and reports real timings */
+$plan = User::find()
+    ->where('role', 'admin')
+    ->explain(analyze: true);
+```
+
+#### JSON format (programmatic analysis)
+
+```php
+/* PostgreSQL: EXPLAIN (FORMAT JSON) SELECT ... */
+$plan = Post::find()
+    ->whereFulltext(['title', 'body'], 'optimization')
+    ->explain(format: 'json');
+```
+
+| Parameter  | Values                                | Default  |
+|------------|---------------------------------------|----------|
+| `$analyze` | `true` / `false`                      | `false`  |
+| `$format`  | `'text'`, `'json'`, `'yaml'`, `'xml'` | `'text'` |
+
+Works on any builder:
+
+```php
+use Simsoft\DB\Builder\ActiveQuery;
+
+$plan = (new ActiveQuery())
+    ->from('order')
+    ->join('user', ['id' => '!order.user_id'])
+    ->where('!order.total', '>', 100)
+    ->explain(analyze: true, format: 'json');
 ```

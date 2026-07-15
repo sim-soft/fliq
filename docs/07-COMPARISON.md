@@ -62,14 +62,17 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 
 ## Query Builder Features
 
-| Feature                         |  FLIQ  | Eloquent | Doctrine | Yii3 AR | Cycle ORM | Propel ORM |
-|---------------------------------|:------:|:--------:|:--------:|:-------:|:---------:|:----------:|
-| Fluent query builder            |   ✅    |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
-| Scopes / when / unless          |   ✅    |    ✅     |    ❌     | Partial |     ❌     |  Partial   |
-| whereAny / whereAll / whereNone |   ✅    |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
-| Upsert                          |   ✅    |    ✅     |    ❌     |    ❌    |     ❌     |     ✅      |
-| Sub-queries                     |   ✅    |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
-| Unions                          |   ✅    |    ✅     |    ✅     |    ✅    |     ✅     |     ❌      |
+| Feature                           | FLIQ | Eloquent | Doctrine | Yii3 AR | Cycle ORM | Propel ORM |
+|-----------------------------------|:----:|:--------:|:--------:|:-------:|:---------:|:----------:|
+| Fluent query builder              |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
+| Scopes / when / unless            |  ✅   |    ✅     |    ❌     | Partial |     ❌     |  Partial   |
+| whereAny / whereAll / whereNone   |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
+| Upsert                            |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ✅      |
+| Sub-queries                       |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
+| Unions                            |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ❌      |
+| Row-level locking (FOR UPDATE)    |  ✅   |    ✅     |    ✅     |    ❌    |     ✅     |     ❌      |
+| RETURNING on INSERT/UPDATE/DELETE |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
+| EXPLAIN / query plans             |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
 
 ## JSON Support
 
@@ -78,6 +81,7 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 | JSON where (auto -> notation) |  ✅   |    ✅     |    ❌     |    ❌    |  Partial  |     ❌      |
 | JSON contains / length / key  |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
 | JSON column casts             |  ✅   |    ✅     |    ✅     |    ❌    |     ✅     |     ❌      |
+| Array column queries (PG)     |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
 
 ## Active Record Features
 
@@ -96,10 +100,13 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 
 | Feature                   | FLIQ | Eloquent | Doctrine | Yii3 AR | Cycle ORM | Propel ORM |
 |---------------------------|:----:|:--------:|:--------:|:-------:|:---------:|:----------:|
-| Full-text search (MATCH)  |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
+| Full-text search          |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
+| Full-text search (PG FTS) |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
 | Cursor (unbuffered)       |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
 | N+1 query detection       |  ✅   | Package  |    ❌     |    ❌    |     ❌     |     ❌      |
 | Query logging with timing |  ✅   |    ✅     |    ✅     |    ❌    |     ❌     |     ❌      |
+| Advisory locks (PG)       |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
+| LISTEN / NOTIFY (PG)      |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
 
 ## Summary
 
