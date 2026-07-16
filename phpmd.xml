@@ -40,7 +40,7 @@
     <rule ref="rulesets/codesize.xml/ExcessiveClassLength">
         <properties>
             <!-- ActiveQuery is a fluent builder with intentionally many methods -->
-            <property name="minimum" value="3100"/>
+            <property name="minimum" value="3200"/>
         </properties>
     </rule>
     <rule ref="rulesets/codesize.xml/ExcessiveParameterList"/>
@@ -94,7 +94,7 @@
     <rule ref="rulesets/naming.xml/ShortMethodName">
         <properties>
             <property name="minimum" value="3"/>
-            <property name="exceptions" value="in,on,to,dd"/>
+            <property name="exceptions" value="in,on,to,dd,as"/>
         </properties>
     </rule>
     <rule ref="rulesets/naming.xml/ConstructorWithNameAsEnclosingClass"/>

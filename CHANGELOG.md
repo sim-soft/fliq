@@ -2,7 +2,7 @@
 
 All notable changes to `simsoft/fliq` are documented here.
 
-## [2.0.3] - 2025-07-15
+## [2.0.4] - 2025-07-16
 
 ### Added
 
@@ -38,6 +38,8 @@ All notable changes to `simsoft/fliq` are documented here.
   tsvector, MySQL: MATCH AGAINST)
 - `arrayContains(column, value, type)` / `arrayOverlaps(column, values, type)` —
   array column queries
+- `CaseExpression` — fluent CASE WHEN THEN ELSE END builder with `when()`,
+  `whenColumn()`, `whenRaw()`, alias support via `->as()`
 
 **Code Generators (CLI)**
 

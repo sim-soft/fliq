@@ -114,6 +114,19 @@ Aliases: `whereJsonContains`, `whereJsonDoesntContain`, `whereJsonContainsKey`, 
 Aliases: `whereArrayContains`, `whereArrayOverlaps`, `orWhereArrayContains`,
 `orWhereArrayOverlaps`
 
+## CASE WHEN Expressions
+
+| Task              | Code                                                                     |
+|-------------------|--------------------------------------------------------------------------|
+| Value comparison  | `CaseExpression::when('score', '>', 90)->then('A')`                      |
+| Multiple WHENs    | `->andWhen('score', '>', 70)->then('B')`                                 |
+| Column comparison | `CaseExpression::whenColumn('score', '>', 'min_score')->then('pass')`    |
+| Raw condition     | `CaseExpression::whenRaw('age BETWEEN ? AND ?', [18,30])->then('young')` |
+| ELSE value        | `->else('F')`                                                            |
+| Alias (SELECT)    | `->as('grade')`                                                          |
+| In select()       | `User::find()->select('name', CaseExpression::when(...)->as('grade'))`   |
+| In orderByRaw     | `->orderByRaw((string) CaseExpression::when(...)->then(1)->else(2))`     |
+
 ## Relations
 
 | Task            | Code                                                    |

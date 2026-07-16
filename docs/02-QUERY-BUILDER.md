@@ -15,6 +15,7 @@
 - [Union Queries](#union-queries)
 - [JSON Column Queries](#json-column-queries)
 - [Array Columns (PostgreSQL)](#array-columns-postgresql)
+- [CASE WHEN Expressions](#case-when-expressions)
 - [Multi-Column Conditions](#multi-column-conditions)
 - [Like Clauses](#like-clauses)
 - [Ordering, Grouping, Limit & Offset](#ordering-grouping-limit--offset)
@@ -779,6 +780,129 @@ User::find()
 
 > For GIN index recommendations and schema examples, see
 > the [PostgreSQL Guide](10-POSTGRESQL.md#array-columns).
+
+## CASE WHEN Expressions
+
+Build SQL `CASE WHEN ... THEN ... ELSE ... END` expressions using a fluent
+builder. Works in SELECT, WHERE, and ORDER BY.
+
+### What is a CASE Expression?
+
+A CASE expression lets you return different values based on conditions — like an
+if/else in SQL:
+
+```sql
+SELECT name,
+       CASE WHEN score > 90 THEN 'A'
+            WHEN score > 70 THEN 'B'
+            ELSE 'C'
+       END AS grade
+FROM user
+```
+
+With FLIQ, you build this fluently:
+
+```php
+use Simsoft\DB\Builder\Clauses\CaseExpression;
+
+User::find()->select(
+    'name',
+    CaseExpression::when('score', '>', 90)->then('A')
+        ->andWhen('score', '>', 70)->then('B')
+        ->else('C')
+        ->as('grade')
+)->get();
+```
+
+### Basic Usage
+
+```php
+use Simsoft\DB\Builder\Clauses\CaseExpression;
+
+/* Single condition with else */
+User::find()->select(
+    'name',
+    CaseExpression::when('status', '=', 'active')->then('Yes')
+        ->else('No')
+        ->as('is_active')
+)->get();
+```
+
+### Multiple Conditions
+
+Chain `->andWhen()` for additional WHEN clauses:
+
+```php
+User::find()->select(
+    'name',
+    CaseExpression::when('role', '=', 'admin')->then('Full Access')
+        ->andWhen('role', '=', 'editor')->then('Edit Access')
+        ->andWhen('role', '=', 'member')->then('Read Only')
+        ->else('No Access')
+        ->as('access_level')
+)->get();
+```
+
+### Comparing Two Columns
+
+Use `whenColumn()` when both sides are column names (not literal values):
+
+```php
+/* Same-table columns */
+User::find()->select(
+    'name',
+    CaseExpression::whenColumn('score', '>', 'min_score')->then('pass')
+        ->andWhenColumn('score', '=', 'min_score')->then('borderline')
+        ->else('fail')
+        ->as('result')
+)->get();
+
+/* Cross-table columns (with dot notation) */
+CaseExpression::whenColumn('order.total', '>', 'customer.credit_limit')
+    ->then('over_limit')
+    ->else('ok')
+    ->as('credit_status');
+```
+
+### Raw Conditions
+
+For complex conditions that can't be expressed with column/operator/value:
+
+```php
+CaseExpression::whenRaw('age >= ? AND age < ?', [18, 30])->then('young')
+    ->andWhenRaw('age >= ? AND age < ?', [30, 50])->then('middle')
+    ->else('senior')
+    ->as('age_group');
+```
+
+### Use in ORDER BY
+
+```php
+/* Sort admins first, editors second, others last */
+User::find()
+    ->orderByRaw(
+        (string) CaseExpression::when('role', '=', 'admin')->then(1)
+            ->andWhen('role', '=', 'editor')->then(2)
+            ->else(3)
+    )
+    ->get();
+```
+
+### Method Reference
+
+| Method                                             | What It Does                                    |
+|----------------------------------------------------|-------------------------------------------------|
+| `CaseExpression::when($col, $op, $val)`            | Start with a value comparison (binds the value) |
+| `CaseExpression::whenColumn($col, $op, $otherCol)` | Start with a column-to-column comparison        |
+| `CaseExpression::whenRaw($sql, $binds)`            | Start with a raw SQL condition                  |
+| `->then($value)`                                   | Set the result for the current WHEN             |
+| `->andWhen($col, $op, $val)`                       | Add another value comparison WHEN               |
+| `->andWhenColumn($col, $op, $otherCol)`            | Add another column comparison WHEN              |
+| `->andWhenRaw($sql, $binds)`                       | Add another raw WHEN                            |
+| `->else($value)`                                   | Set the fallback value (optional)               |
+| `->as($alias)`                                     | Add a column alias for SELECT                   |
+
+---
 
 ## Multi-Column Conditions
 

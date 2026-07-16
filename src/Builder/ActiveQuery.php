@@ -494,9 +494,19 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string|Raw ...$attributes the list of attribute value to be select
      * @return static
      */
-    public function select(string|Raw ...$attributes): static
+    public function select(string|Raw|Clause ...$attributes): static
     {
         foreach ($attributes as $attribute) {
+            if ($attribute instanceof Clause) {
+                $attribute->alias($this->getAlias());
+                $attribute->setPlaceHolder($this->getPlaceHolder());
+                $this->selects[] = (string)$attribute;
+                if ($attribute->getBinds()) {
+                    $this->appendBinds($attribute->getBinds());
+                }
+                continue;
+            }
+
             $this->selects[] = $attribute instanceof Raw
                 ? (string)$attribute
                 : $this->queryAttribute($attribute);
@@ -510,7 +520,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string|Raw ...$attributes List of SELECT attributes
      * @return static
      */
-    public function selectDistinct(string|Raw ...$attributes): static
+    public function selectDistinct(string|Raw|Clause ...$attributes): static
     {
         $this->select(...$attributes);
         return $this->distinct();
