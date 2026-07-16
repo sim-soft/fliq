@@ -2,25 +2,17 @@
 <?php
 
 /**
- * FLIQ CLI — Model generator and utility commands.
+ * FLIQ CLI — Code Generator.
  *
- * Usage:
- *   vendor/bin/fliq make:model <TableName> [options]
- *
- * Options:
- *   --table=<name>        Table name (defaults to snake_case of class name)
- *   --connection=<name>   Database connection name (default: from Connection registry)
- *   --namespace=<ns>      PHP namespace (default: App\Models)
- *   --output=<dir>        Output directory (default: src/Models)
- *   --force               Overwrite existing file
- *   --preview             Print generated code without writing file
- *   --config=<file>       Path to database config file to load connections
+ * Commands:
+ *   make:model     Generate Model classes from database tables
+ *   make:observer  Generate Observer classes for Models
  */
 
 // Find autoloader
 $autoloadPaths = [
-        __DIR__ . '/../vendor/autoload.php',       // Installed as package
-        __DIR__ . '/../../../autoload.php',         // Installed in vendor/bin
+        __DIR__ . '/../vendor/autoload.php',
+        __DIR__ . '/../../../autoload.php',
 ];
 
 $autoloaded = false;
@@ -33,12 +25,13 @@ foreach ($autoloadPaths as $autoloadPath) {
 }
 
 if (!$autoloaded) {
-    fwrite(STDERR, "Error: Could not find autoload.php. Run 'composer install' first.\n");
+    err("Could not find autoload.php. Run 'composer install' first.");
     exit(1);
 }
 
 use Simsoft\DB\Connection;
 use Simsoft\DB\Generator\ModelGenerator;
+use Simsoft\DB\Generator\ObserverGenerator;
 
 // Parse arguments
 $args = array_slice($argv, 1);
@@ -49,84 +42,478 @@ if (empty($args) || in_array('--help', $args, true) || in_array('-h', $args, tru
 }
 
 $command = array_shift($args);
+$className = null;
+$options = parseOptions($args, $className);
+$verbose = isset($options['verbose']) || isset($options['v']);
 
-if ($command !== 'make:model') {
-    fwrite(STDERR, "Unknown command: $command\n\n");
+// Auto-discover config if not provided
+loadConfig($options);
+
+match ($command) {
+    'make:model' => handleMakeModel($className, $options, $verbose),
+    'make:observer' => handleMakeObserver($className, $options, $verbose),
+    default => handleUnknown($command),
+};
+
+// ==================================================================
+// COMMAND HANDLERS
+// ==================================================================
+
+/**
+ * Handle make:model command.
+ *
+ * @param string|null $className The class name.
+ * @param array<string, string|true> $options Parsed options.
+ * @param bool $verbose Verbose output.
+ * @return never
+ */
+function handleMakeModel(?string $className, array $options, bool $verbose): never
+{
+    $namespace = $options['namespace'] ?? 'App\\Models';
+    $outputDir = $options['output'] ?? 'app/Models';
+    $connection = isset($options['connection']) && is_string($options['connection']) ? $options['connection'] : null;
+    $force = isset($options['force']);
+    $preview = isset($options['preview']);
+    $dryRun = isset($options['dry-run']);
+
+    // Handle --exclude
+    if (isset($options['exclude']) && is_string($options['exclude'])) {
+        $excluded = array_map('trim', explode(',', $options['exclude']));
+        ModelGenerator::exclude($excluded);
+        if ($verbose) {
+            info("Excluding tables: " . implode(', ', $excluded));
+        }
+    }
+
+    // Handle --all
+    if (isset($options['all'])) {
+        handleMakeModelAll($connection, $namespace, $outputDir, $force, $dryRun, $verbose, $options);
+        exit(0);
+    }
+
+    if ($className === null) {
+        err("Model class name is required (or use --all to generate all).");
+        hint("vendor/bin/fliq make:model <ClassName> [--table=...] [--force]");
+        hint("vendor/bin/fliq make:model --all --config=config/db.php [--force]");
+        exit(1);
+    }
+
+    $table = isset($options['table']) && is_string($options['table']) ? $options['table'] : classToTable($className);
+
+    if ($verbose) {
+        info("Table: $table → Class: $className");
+        info("Connection: " . ($connection ?? 'default'));
+    }
+
+    $generator = ModelGenerator::fromTable($table, $connection)
+            ->namespace($namespace)
+            ->outputDir($outputDir)
+            ->force($force);
+
+    if ($preview) {
+        echo $generator->preview();
+        exit(0);
+    }
+
+    if ($dryRun) {
+        success("[dry-run] Would create: $outputDir/$className.php");
+        exit(0);
+    }
+
+    $result = $generator->generate();
+
+    if ($result === false) {
+        skipped("$outputDir/$className.php already exists. Use --force to overwrite.");
+        exit(0);
+    }
+
+    success("Created: $result");
+
+    // Handle --with-observer: also generate the observer
+    if (isset($options['with-observer'])) {
+        $observerNamespace = $options['observer-namespace'] ?? 'App\\Observers';
+        $observerDir = $options['observer-output'] ?? 'app/Observers';
+
+        $observer = ObserverGenerator::forModel($className)
+                ->namespace($observerNamespace)
+                ->modelNamespace($namespace)
+                ->outputDir($observerDir)
+                ->skipValidation()
+                ->force($force);
+
+        if (isset($options['events']) && is_string($options['events'])) {
+            $observer->events(explode(',', $options['events']));
+        }
+
+        $observerResult = $observer->generate();
+        if ($observerResult === false) {
+            skipped("$observerDir/{$className}Observer.php already exists.");
+        } else {
+            success("Created: $observerResult");
+        }
+    }
+
+    exit(0);
+}
+
+/**
+ * Handle make:model --all.
+ *
+ * @param string|null $connection Connection name.
+ * @param string $namespace PHP namespace.
+ * @param string $outputDir Output directory.
+ * @param bool $force Overwrite existing.
+ * @param bool $dryRun Show what would happen without writing.
+ * @param bool $verbose Show extra info.
+ * @param array<string, string|true> $options All parsed options.
+ * @return void
+ */
+function handleMakeModelAll(
+        ?string $connection,
+        string  $namespace,
+        string  $outputDir,
+        bool    $force,
+        bool    $dryRun,
+        bool    $verbose,
+        array   $options = []
+): void
+{
+    if ($dryRun) {
+        $tables = ModelGenerator::listTables($connection);
+        info("[dry-run] Would generate models for " . count($tables) . " tables:");
+        foreach ($tables as $table) {
+            $className = tableToClass($table);
+            echo "  $outputDir/$className.php ← $table\n";
+        }
+        return;
+    }
+
+    if ($verbose) {
+        info("Generating all models...");
+        info("Connection: " . ($connection ?? 'default'));
+        info("Namespace: $namespace");
+        info("Output: $outputDir");
+    }
+
+    $result = ModelGenerator::generateAll($connection, $namespace, $outputDir, $force);
+
+    foreach ($result['created'] as $path) {
+        success("Created: $path");
+    }
+    foreach ($result['skipped'] as $table) {
+        skipped("$table (already exists)");
+    }
+
+    $total = count($result['created']) + count($result['skipped']);
+    echo "\n";
+    info(count($result['created']) . " created, " . count($result['skipped']) . " skipped ($total tables).");
+
+    // Handle --with-observer for --all
+    if (isset($options['with-observer']) && !empty($result['created'])) {
+        echo "\n";
+        $observerNamespace = $options['observer-namespace'] ?? 'App\\Observers';
+        $observerDir = $options['observer-output'] ?? 'app/Observers';
+        $observerCreated = 0;
+
+        foreach ($result['created'] as $modelPath) {
+            $modelName = basename($modelPath, '.php');
+            $observer = ObserverGenerator::forModel($modelName)
+                    ->namespace($observerNamespace)
+                    ->modelNamespace($namespace)
+                    ->outputDir($observerDir)
+                    ->skipValidation()
+                    ->force($force);
+
+            if (isset($options['events']) && is_string($options['events'])) {
+                $observer->events(explode(',', $options['events']));
+            }
+
+            $observerResult = $observer->generate();
+            if ($observerResult === false) {
+                skipped("{$modelName}Observer (already exists)");
+                continue;
+            }
+            success("Created: $observerResult");
+            $observerCreated++;
+        }
+
+        info("$observerCreated observers created.");
+    }
+}
+
+/**
+ * Handle make:observer command.
+ *
+ * @param string|null $className The model name.
+ * @param array<string, string|true> $options Parsed options.
+ * @param bool $verbose Verbose output.
+ * @return never
+ */
+function handleMakeObserver(?string $className, array $options, bool $verbose): never
+{
+    $namespace = $options['namespace'] ?? 'App\\Observers';
+    $outputDir = $options['output'] ?? 'app/Observers';
+    $force = isset($options['force']);
+    $preview = isset($options['preview']);
+
+    // Auto-detect model namespace from existing files
+    $modelNamespace = resolveModelNamespace($options);
+
+    // Handle --all: generate observers for all model files in the model directory
+    if (isset($options['all'])) {
+        handleMakeObserverAll($modelNamespace, $namespace, $outputDir, $force, $verbose);
+        exit(0);
+    }
+
+    if ($className === null) {
+        err("Model name is required (or use --all to generate for all models).");
+        hint("vendor/bin/fliq make:observer <ModelName> [options]");
+        hint("vendor/bin/fliq make:observer --all [options]");
+        exit(1);
+    }
+
+    if ($verbose) {
+        info("Model: $modelNamespace\\$className");
+        info("Observer: $namespace\\{$className}Observer");
+    }
+
+    $generator = ObserverGenerator::forModel($className)
+        ->namespace($namespace)
+            ->modelNamespace($modelNamespace)
+        ->outputDir($outputDir)
+        ->force($force);
+
+    if (isset($options['events']) && is_string($options['events'])) {
+        $generator->events(explode(',', $options['events']));
+        if ($verbose) {
+            info("Events: " . $options['events']);
+        }
+    }
+
+    if ($preview) {
+        echo $generator->preview();
+        exit(0);
+    }
+
+    // Handle --append: add missing event methods to existing observer
+    if (isset($options['append'])) {
+        try {
+            $result = $generator->append();
+        } catch (\RuntimeException $exception) {
+            err($exception->getMessage());
+            exit(1);
+        }
+
+        if ($result === false) {
+            err("Observer file not found: $outputDir/{$className}Observer.php");
+            hint("Generate the observer first: vendor/bin/fliq make:observer $className");
+            exit(1);
+        }
+
+        if (empty($result['added'])) {
+            info("No missing events. All requested events already exist in the observer.");
+            exit(0);
+        }
+
+        success("Updated: " . $result['file']);
+        info("Added events: " . implode(', ', $result['added']));
+        if ($verbose && !empty($result['existing'])) {
+            info("Already had: " . implode(', ', $result['existing']));
+        }
+        exit(0);
+    }
+
+    try {
+        $result = $generator->generate();
+    } catch (\RuntimeException $exception) {
+        err($exception->getMessage());
+        exit(1);
+    }
+
+    if ($result === false) {
+        skipped("$outputDir/{$className}Observer.php already exists. Use --force to overwrite.");
+        exit(0);
+    }
+
+    success("Created: $result");
+    exit(0);
+}
+
+/**
+ * Handle make:observer --all.
+ *
+ * @param string $modelNamespace The model namespace.
+ * @param string $namespace The observer namespace.
+ * @param string $outputDir The output directory.
+ * @param bool $force Overwrite existing.
+ * @param bool $verbose Show extra info.
+ * @return void
+ */
+function handleMakeObserverAll(
+        string $modelNamespace,
+        string $namespace,
+        string $outputDir,
+        bool   $force,
+        bool   $verbose
+): void
+{
+    $modelDir = resolveModelDirectory($modelNamespace);
+
+    if (!is_dir($modelDir)) {
+        err("Model directory not found: $modelDir");
+        hint("Generate models first with: vendor/bin/fliq make:model --all --config=config/db.php");
+        exit(1);
+    }
+
+    $files = glob($modelDir . '/*.php');
+    if (empty($files)) {
+        err("No model files found in: $modelDir");
+        exit(1);
+    }
+
+    if ($verbose) {
+        info("Scanning: $modelDir");
+        info("Found " . count($files) . " model files");
+    }
+
+    $created = 0;
+    $skippedCount = 0;
+
+    foreach ($files as $file) {
+        $modelName = basename($file, '.php');
+
+        $generator = ObserverGenerator::forModel($modelName)
+                ->namespace($namespace)
+                ->modelNamespace($modelNamespace)
+                ->outputDir($outputDir)
+                ->force($force)
+                ->skipValidation();
+
+        try {
+            $result = $generator->generate();
+        } catch (\RuntimeException) {
+            continue;
+        }
+
+        if ($result === false) {
+            skipped("$modelName (already exists)");
+            $skippedCount++;
+            continue;
+        }
+
+        success("Created: $result");
+        $created++;
+    }
+
+    echo "\n";
+    info("$created created, $skippedCount skipped (" . count($files) . " models).");
+}
+
+/**
+ * Handle unknown command.
+ *
+ * @param string $command The command name.
+ * @return never
+ */
+function handleUnknown(string $command): never
+{
+    err("Unknown command: $command");
     printHelp();
     exit(1);
 }
 
-// Parse positional and option arguments
-$className = null;
-$options = parseOptions($args, $className);
+// ==================================================================
+// UTILITIES
+// ==================================================================
 
-// Load config if provided
-if (isset($options['config'])) {
-    $configFile = $options['config'];
-    if (!file_exists($configFile)) {
-        fwrite(STDERR, "Error: Config file not found: $configFile\n");
-        exit(1);
-    }
-    Connection::configure($configFile);
-}
-
-$namespace = $options['namespace'] ?? 'App\\Models';
-$outputDir = $options['output'] ?? 'app/Models';
-$connection = $options['connection'] ?? null;
-$force = isset($options['force']);
-$preview = isset($options['preview']);
-
-// Handle --all: generate models for every table in the connection
-if (isset($options['all'])) {
-    $result = ModelGenerator::generateAll($connection, $namespace, $outputDir, $force);
-
-    foreach ($result['created'] as $path) {
-        echo "Created: $path\n";
-    }
-    foreach ($result['skipped'] as $table) {
-        echo "Skipped: $table (already exists)\n";
+/**
+ * Load database config (auto-discovery or explicit --config).
+ *
+ * @param array<string, string|true> $options The parsed options.
+ * @return void
+ */
+function loadConfig(array $options): void
+{
+    if (isset($options['config']) && is_string($options['config'])) {
+        $configFile = $options['config'];
+        if (!file_exists($configFile)) {
+            err("Config file not found: $configFile");
+            exit(1);
+        }
+        Connection::configure($configFile);
+        return;
     }
 
-    $total = count($result['created']) + count($result['skipped']);
-    echo "\nDone. " . count($result['created']) . " created, " . count($result['skipped']) . " skipped ($total tables).\n";
-    exit(0);
+    // Auto-discover common config locations
+    $candidates = [
+            'config/db.php',
+            'config/database.php',
+            'tests/config/db.php',
+    ];
+
+    foreach ($candidates as $candidate) {
+        if (file_exists($candidate)) {
+            Connection::configure($candidate);
+            return;
+        }
+    }
 }
 
-if ($className === null) {
-    fwrite(STDERR, "Error: Model class name is required (or use --all to generate all).\n\n");
-    fwrite(STDERR, "Usage: vendor/bin/fliq make:model <ClassName> [--table=...] [--force]\n");
-    fwrite(STDERR, "       vendor/bin/fliq make:model --all --config=config/db.php [--force]\n");
-    exit(1);
+/**
+ * Resolve the model namespace from options or composer.json PSR-4 mapping.
+ *
+ * @param array<string, string|true> $options The parsed options.
+ * @return string The model namespace.
+ */
+function resolveModelNamespace(array $options): string
+{
+    if (isset($options['model-namespace']) && is_string($options['model-namespace'])) {
+        return $options['model-namespace'];
+    }
+
+    // Try to detect from composer.json PSR-4 autoload
+    $composerPath = 'composer.json';
+    if (file_exists($composerPath)) {
+        $composer = json_decode(file_get_contents($composerPath) ?: '{}', true);
+        $psr4 = $composer['autoload']['psr-4'] ?? [];
+
+        foreach ($psr4 as $ns => $path) {
+            $normalizedPath = rtrim(str_replace('\\', '/', $path), '/');
+            if (is_dir($normalizedPath . '/Models')) {
+                return rtrim($ns, '\\') . '\\Models';
+            }
+        }
+    }
+
+    return 'App\\Models';
 }
 
-// Resolve table name: --table option or snake_case from class name
-$table = $options['table'] ?? classToTable($className);
+/**
+ * Resolve the filesystem directory for a model namespace.
+ *
+ * @param string $namespace The model namespace.
+ * @return string The directory path.
+ */
+function resolveModelDirectory(string $namespace): string
+{
+    $composerPath = 'composer.json';
+    if (file_exists($composerPath)) {
+        $composer = json_decode(file_get_contents($composerPath) ?: '{}', true);
+        $psr4 = $composer['autoload']['psr-4'] ?? [];
 
-// Build generator
-$generator = ModelGenerator::fromTable($table, $connection)
-        ->namespace($namespace)
-        ->outputDir($outputDir)
-        ->force($force);
+        foreach ($psr4 as $ns => $path) {
+            $trimmedNs = rtrim($ns, '\\');
+            if (str_starts_with($namespace, $trimmedNs)) {
+                $relative = substr($namespace, strlen($trimmedNs));
+                $relative = str_replace('\\', '/', ltrim($relative, '\\'));
+                return rtrim($path, '/') . '/' . $relative;
+            }
+        }
+    }
 
-if ($preview) {
-    echo $generator->preview();
-    exit(0);
+    // Fallback: assume app/Models
+    return 'app/Models';
 }
-
-$result = $generator->generate();
-
-if ($result === false) {
-    $filePath = $outputDir . DIRECTORY_SEPARATOR . $className . '.php';
-    fwrite(STDERR, "Skipped: $filePath already exists. Use --force to overwrite.\n");
-    exit(0);
-}
-
-echo "Created: $result\n";
-exit(0);
-
-// ------------------------------------------------------------------
-// Helper functions
-// ------------------------------------------------------------------
 
 /**
  * Parse CLI options from argument list.
@@ -148,6 +535,8 @@ function parseOptions(array $args, ?string &$className): array
             } else {
                 $options[$stripped] = true;
             }
+        } elseif (str_starts_with($arg, '-') && strlen($arg) === 2) {
+            $options[substr($arg, 1)] = true;
         } elseif ($className === null) {
             $className = $arg;
         }
@@ -169,6 +558,108 @@ function classToTable(string $className): string
 }
 
 /**
+ * Convert a table name to a PascalCase class name.
+ *
+ * @param string $table The table name.
+ * @return string The class name.
+ */
+function tableToClass(string $table): string
+{
+    return str_replace(' ', '', ucwords(str_replace(['_', '-'], ' ', $table)));
+}
+
+// ==================================================================
+// OUTPUT HELPERS (colored)
+// ==================================================================
+
+/**
+ * Print a success message (green).
+ *
+ * @param string $message The message.
+ * @return void
+ */
+function success(string $message): void
+{
+    echo colorize($message, '32') . "\n";
+}
+
+/**
+ * Print an info message (cyan).
+ *
+ * @param string $message The message.
+ * @return void
+ */
+function info(string $message): void
+{
+    echo colorize($message, '36') . "\n";
+}
+
+/**
+ * Print a skipped message (yellow).
+ *
+ * @param string $message The message.
+ * @return void
+ */
+function skipped(string $message): void
+{
+    echo colorize("Skipped: $message", '33') . "\n";
+}
+
+/**
+ * Print an error message (red) to stderr.
+ *
+ * @param string $message The message.
+ * @return void
+ */
+function err(string $message): void
+{
+    fwrite(STDERR, colorize("Error: $message", '31') . "\n");
+}
+
+/**
+ * Print a hint message (dim) to stderr.
+ *
+ * @param string $message The message.
+ * @return void
+ */
+function hint(string $message): void
+{
+    fwrite(STDERR, colorize("  $message", '2') . "\n");
+}
+
+/**
+ * Wrap text in ANSI color codes (disabled if not a TTY).
+ *
+ * @param string $text The text to colorize.
+ * @param string $code The ANSI color code.
+ * @return string
+ */
+function colorize(string $text, string $code): string
+{
+    if (!supportsColor()) {
+        return $text;
+    }
+
+    return "\033[{$code}m$text\033[0m";
+}
+
+/**
+ * Check if the terminal supports ANSI colors.
+ *
+ * @return bool
+ */
+function supportsColor(): bool
+{
+    if (DIRECTORY_SEPARATOR === '\\') {
+        return str_contains(getenv('ANSICON') ?: '', '') !== false
+                || getenv('ConEmuANSI') === 'ON'
+                || getenv('TERM') === 'xterm';
+    }
+
+    return function_exists('posix_isatty') && posix_isatty(STDOUT);
+}
+
+/**
  * Print help text.
  *
  * @return void
@@ -176,34 +667,59 @@ function classToTable(string $className): string
 function printHelp(): void
 {
     echo <<<'HELP'
-    FLIQ CLI — Model Generator
+    FLIQ CLI — Code Generator
 
     Usage:
       vendor/bin/fliq make:model <ClassName> [options]
       vendor/bin/fliq make:model --all [options]
+      vendor/bin/fliq make:observer <ModelName> [options]
+      vendor/bin/fliq make:observer --all [options]
 
-    Arguments:
-      ClassName             The model class name (PascalCase, e.g. UserProfile)
+    Commands:
+      make:model            Generate a Model class from a database table
+      make:observer         Generate an Observer class for a Model
 
-    Options:
+    Model Options:
       --all                 Generate models for ALL tables in the database
       --table=<name>        Database table name (default: snake_case of ClassName)
       --connection=<name>   Connection name registered via Connection::add()
-      --namespace=<ns>      PHP namespace for the model (default: App\Models)
+      --namespace=<ns>      PHP namespace (default: App\Models)
       --output=<dir>        Output directory (default: app/Models)
-      --config=<file>       Load database connections from a PHP config file
+      --config=<file>       Database config file (auto-discovers config/db.php)
+      --exclude=<list>      Comma-separated tables to skip (with --all)
+      --with-observer       Also generate an Observer for the model(s)
+      --observer-namespace  Observer namespace (default: App\Observers)
+      --observer-output     Observer output dir (default: app/Observers)
+      --dry-run             Show what would be generated without writing
       --force               Overwrite existing files
       --preview             Print generated code to stdout (no file written)
+      --verbose, -v         Show detailed output
+
+    Observer Options:
+      --all                  Generate observers for ALL model files
+      --namespace=<ns>       PHP namespace (default: App\Observers)
+      --model-namespace=<ns> Model namespace (auto-detected from composer.json)
+      --output=<dir>         Output directory (default: app/Observers)
+      --events=<list>        Comma-separated events (default: all 8 lifecycle events)
+      --append               Add missing event methods to an existing observer
+      --force                Overwrite existing files
+      --preview              Print generated code to stdout (no file written)
+      --verbose, -v          Show detailed output
+
+    General:
       --help, -h            Show this help message
 
     Examples:
       vendor/bin/fliq make:model User --config=config/db.php
-      vendor/bin/fliq make:model UserProfile --table=user_profile --connection=pgsql
-      vendor/bin/fliq make:model Order --namespace=App\\Domain\\Models --output=app/Domain/Models
-      vendor/bin/fliq make:model Post --preview
-      vendor/bin/fliq make:model Post --force
+      vendor/bin/fliq make:model User --with-observer
       vendor/bin/fliq make:model --all --config=config/db.php
-      vendor/bin/fliq make:model --all --config=config/db.php --connection=pgsql --force
+      vendor/bin/fliq make:model --all --with-observer
+      vendor/bin/fliq make:model --all --exclude=migrations,sessions --force
+      vendor/bin/fliq make:model User --dry-run
+      vendor/bin/fliq make:observer User
+      vendor/bin/fliq make:observer --all
+      vendor/bin/fliq make:observer Order --events=creating,updating,deleting
+      vendor/bin/fliq make:observer User --append --events=saving,deleting
 
     HELP;
 }

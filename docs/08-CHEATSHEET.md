@@ -347,3 +347,21 @@ User::transaction(function () {
 | Disconnect       | `Connection::disconnect('mysql')`                                    |
 | Reconnect        | `Connection::reconnect('mysql')`                                     |
 | Reset all        | `Connection::reset()`                                                |
+
+## Code Generators (CLI)
+
+| Task                   | Command                                                          |
+|------------------------|------------------------------------------------------------------|
+| Generate one model     | `vendor/bin/fliq make:model User --config=config/db.php`         |
+| Generate all models    | `vendor/bin/fliq make:model --all --config=config/db.php`        |
+| Custom class name      | `vendor/bin/fliq make:model Profile --table=user_profile`        |
+| Exclude tables         | `vendor/bin/fliq make:model --all --exclude=migrations,sessions` |
+| Dry run                | `vendor/bin/fliq make:model --all --dry-run`                     |
+| Preview code           | `vendor/bin/fliq make:model User --preview`                      |
+| Force overwrite        | `vendor/bin/fliq make:model User --force`                        |
+| Generate one observer  | `vendor/bin/fliq make:observer User`                             |
+| Generate all observers | `vendor/bin/fliq make:observer --all`                            |
+| Specific events only   | `vendor/bin/fliq make:observer Order --events=creating,deleting` |
+| Programmatic model     | `ModelGenerator::fromTable('user')->generate()`                  |
+| Programmatic observer  | `ObserverGenerator::forModel('User')->generate()`                |
+| List all tables        | `ModelGenerator::listTables('mysql')`                            |

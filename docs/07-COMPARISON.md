@@ -72,7 +72,6 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 | Unions                            |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ❌      |
 | Row-level locking (FOR UPDATE)    |  ✅   |    ✅     |    ✅     |    ❌    |     ✅     |     ❌      |
 | RETURNING on INSERT/UPDATE/DELETE |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
-| EXPLAIN / query plans             |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
 
 ## JSON Support
 
@@ -109,6 +108,7 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 | LISTEN / NOTIFY (PG)      |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
 | EXPLAIN / query plans     |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
 | Model generator (CLI)     |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
+| Observer generator (CLI)  |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
 
 ## Summary
 

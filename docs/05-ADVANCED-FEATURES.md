@@ -1,5 +1,25 @@
 # Advanced Features
 
+## Table of Contents
+
+- [Query Result Caching](#query-result-caching)
+- [Pagination](#pagination)
+- [Global Scopes](#global-scopes)
+- [Batch Insert](#batch-insert)
+- [Batch Update](#batch-update)
+- [Cursor Pagination](#cursor-pagination)
+- [Cursor (Unbuffered Iteration)](#cursor-unbuffered-iteration)
+- [Chunk By ID](#chunk-by-id)
+- [Index Advisor](#index-advisor)
+- [Read/Write Connection Splitting](#readwrite-connection-splitting)
+- [Model Replication](#model-replication)
+- [Find All with Conditions](#find-all-with-conditions)
+- [Row-Level Locking](#row-level-locking)
+- [Query Execution Plans (EXPLAIN)](#query-execution-plans-explain)
+- [Code Generators](#code-generators)
+
+---
+
 ## Query Result Caching
 
 Cache query results to avoid repeated database hits for identical queries.
@@ -10,7 +30,7 @@ Cache query results to avoid repeated database hits for identical queries.
 use Simsoft\DB\Cache\ArrayCache;
 use Simsoft\DB\Cache\QueryCache;
 
-/* Set a cache driver (use ArrayCache for testing, or implement CacheInterface for Redis/Memcached) */
+/* Set a cache driver (use ArrayCache for testing or implement CacheInterface for Redis/Memcached) */
 QueryCache::setDriver(new ArrayCache());
 ```
 
@@ -70,12 +90,12 @@ $paginator->lastPage;     // last page number
 $paginator->hasMorePages(); // bool
 $paginator->isFirstPage();  // bool
 $paginator->isLastPage();   // bool
-$paginator->count();        // items on current page
+$paginator->count();        // items on the current page
 $paginator->isEmpty();      // bool
 $paginator->nextPage();     // int|null — next page number
 $paginator->previousPage(); // int|null — previous page number
-$paginator->from();         // int|null — index of first item (e.g., 11 for page 2 of 10/page)
-$paginator->to();           // int|null — index of last item (e.g., 20 for page 2 of 10/page)
+$paginator->from();         // int|null — index of the first item (e.g., 11 for page 2 of 10/page)
+$paginator->to();           // int|null — index of the last item (e.g., 20 for page 2 of 10/page)
 ```
 
 ### Iteration
@@ -87,7 +107,7 @@ foreach ($paginator as $user) {
     echo $user->name;
 }
 
-count($paginator); // number of items on current page
+count($paginator); // number of items on the current page
 ```
 
 ### Convert to Array (for JSON APIs)
@@ -109,7 +129,7 @@ $paginator->toArray();
 
 ### Display Range
 
-Useful for UI like "Showing 11-20 of 100":
+Useful for UI like "Showing 11–20 of 100":
 
 ```php
 echo "Showing {$paginator->from()}-{$paginator->to()} of {$paginator->total}";
@@ -237,7 +257,7 @@ $page1->data;           // array of models
 $page1->perPage;        // 25
 $page1->hasMore;        // true if more records exist
 $page1->nextCursor;     // value to pass for next page
-$page1->previousCursor; // null on first page
+$page1->previousCursor; // null on the first page
 
 // Next page — pass the cursor
 $page2 = User::find()
@@ -383,3 +403,106 @@ $users = User::findAll(['id' => [1, 2, 3]]);
 /* Null values auto-use IS NULL */
 $users = User::findAll(['deleted_at' => null]);
 ```
+
+---
+
+## Row-Level Locking
+
+Acquire row-level locks within transactions for safe concurrent access:
+
+```php
+$driver = Connection::get('mysql');
+
+$driver->transaction(function () {
+    /* Exclusive lock — no other transaction can read or modify these rows */
+    $job = Job::find()
+        ->where('status', 'pending')
+        ->orderBy('created_at')
+        ->limit(1)
+        ->forUpdate()
+        ->first();
+
+    $job->update(['status' => 'processing']);
+    return true;
+});
+```
+
+| Method                  | SQL Generated            | Use Case                                 |
+|-------------------------|--------------------------|------------------------------------------|
+| `forUpdate()`           | `FOR UPDATE`             | Exclusive lock for writes                |
+| `forShare()`            | `FOR SHARE`              | Shared lock (read without modification)  |
+| `forUpdateNoWait()`     | `FOR UPDATE NOWAIT`      | Fail immediately if locked (PG/MySQL 8+) |
+| `forUpdateSkipLocked()` | `FOR UPDATE SKIP LOCKED` | Skip locked rows (job queues)            |
+
+---
+
+## Query Execution Plans (EXPLAIN)
+
+Inspect how the database will execute a query — useful for finding missing
+indexes and slow scans:
+
+```php
+/* Basically explain */
+$plan = User::find()
+    ->where('status_code', 1)
+    ->orderBy('score', 'DESC')
+    ->explain();
+
+/* EXPLAIN ANALYZE — actually runs the query and shows real timings */
+$plan = User::find()->where('role', 'admin')->explain(analyze: true);
+
+/* JSON format for programmatic analysis (PostgreSQL) */
+$plan = Post::find()
+    ->whereFulltext(['title', 'body'], 'optimization')
+    ->explain(format: 'json');
+```
+
+Works on all drivers:
+
+- **MySQL**: `EXPLAIN` / `EXPLAIN ANALYZE`
+- **PostgreSQL**: `EXPLAIN` / `EXPLAIN ANALYZE` /
+  `EXPLAIN (FORMAT JSON|YAML|XML)`
+- **SQLite**: `EXPLAIN QUERY PLAN`
+
+---
+
+## Code Generators
+
+Generate Model and Observer files from your database without writing boilerplate
+by hand.
+
+### Model Generator
+
+```bash
+/* Generate from a single table */
+vendor/bin/fliq make:model User --config=config/db.php
+
+/* Generate all models at once */
+vendor/bin/fliq make:model --all --config=config/db.php
+
+/* Exclude system tables */
+vendor/bin/fliq make:model --all --exclude=migrations,sessions
+
+/* Preview without writing */
+vendor/bin/fliq make:model User --preview
+```
+
+Auto-detects: `$connection`, `$table`, `$fillable`, `$guarded`, `$casts`,
+`$primaryKey` (composite supported), traits (`SoftDeletes`, `Timestamps`),
+relations from `*_id` columns, enum value comments.
+
+### Observer Generator
+
+```bash
+/* Generate observer with all lifecycle events */
+vendor/bin/fliq make:observer User
+
+/* Only specific events */
+vendor/bin/fliq make:observer Order --events=creating,updating,deleting
+
+/* Generate for all models */
+vendor/bin/fliq make:observer --all
+```
+
+See [Model Generator Guide](11-MODEL-GENERATOR.md)
+and [Observer Generator Guide](12-OBSERVER-GENERATOR.md) for full tutorials.

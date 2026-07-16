@@ -4,6 +4,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sim-soft/fliq/blob/main/LICENSE)
 [![PHP 8.4+](https://img.shields.io/badge/PHP-8.4%2B-8892BF.svg)](https://www.php.net/releases/8.4/en.php)
+[![PHPStan Level 8](https://img.shields.io/badge/PHPStan-Level%208-brightgreen.svg)](https://phpstan.org/)
+[![Tests](https://img.shields.io/badge/Tests-passing-brightgreen.svg)]()
 [![Docs](https://img.shields.io/badge/Docs-online-green.svg)](https://sim-soft.github.io/fliq/)
 
 A high-performance Active Record / ORM for MySQL, MariaDB, PostgreSQL, and SQLite. Zero framework dependencies, minimal footprint, maximum speed.
@@ -136,6 +138,7 @@ $post->delete();
 - [Conditional Queries](#conditional-queries)
 - [JSON Column Queries](#json-column-queries)
 - [Multi-Column Conditions](#multi-column-conditions)
+- [Row-Level Locking](#row-level-locking)
 - [Transactions](#transactions)
 - [Soft Deletes & Timestamps](#soft-deletes--timestamps)
 - [Model Events](#model-events)
@@ -218,6 +221,23 @@ User::transaction(function () {
 });
 // Return false (or don't return true) to roll back
 ```
+
+### Row-Level Locking
+
+```php
+$driver->transaction(function () {
+    /* FOR UPDATE — exclusive lock for safe concurrent writes */
+    $job = Job::find()->where('status', 'pending')->limit(1)->forUpdate()->first();
+    $job->update(['status' => 'processing']);
+    return true;
+});
+
+/* FOR UPDATE SKIP LOCKED — job queue pattern (skip rows locked by other workers) */
+$job = Job::find()->where('status', 'pending')->forUpdateSkipLocked()->first();
+```
+
+Available: `forUpdate()`, `forShare()`, `forUpdateNoWait()`,
+`forUpdateSkipLocked()`
 
 ### Soft Deletes & Timestamps
 
@@ -317,6 +337,29 @@ The generator introspects your tables and creates models with `$connection`,
 `$table`, `$fillable`, `$casts`, PHPDoc properties, and auto-detected traits (
 `SoftDeletes`, `Timestamps`).
 
+### Observer Generator
+
+Generate Observer classes to organize your model lifecycle logic:
+
+```bash
+# Generate an observer with all lifecycle events
+vendor/bin/fliq make:observer User
+
+# Only specific events
+vendor/bin/fliq make:observer Order --events=creating,updating,deleting
+```
+
+Or use it in PHP code:
+
+```php
+use Simsoft\DB\Generator\ObserverGenerator;
+
+ObserverGenerator::forModel('User')->generate();
+```
+
+The observer validates that the Model exists before generating, and creates
+method stubs for events like `creating`, `updated`, `deleting`, etc.
+
 ## Documentation
 
 📖 **[Read the full documentation](https://sim-soft.github.io/fliq/)**
@@ -333,6 +376,8 @@ The generator introspects your tables and creates models with `$connection`,
    guidance, PgBouncer
 10. [Model Generator](docs/11-MODEL-GENERATOR.md) — CLI tool to scaffold models
     from database tables
+11. [Observer Generator](docs/12-OBSERVER-GENERATOR.md) — CLI tool to scaffold
+    observer classes for models
 
 ## License
 

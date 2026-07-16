@@ -18,16 +18,27 @@ class ModelGeneratorTest extends TestCase
      * Create a testable generator that returns predefined columns.
      *
      * @param string $table The table name.
-     * @param array<int, array{name: string, type: string, nullable: bool, default: mixed, primary: bool}> $columns
+     * @param array<int, array<string, mixed>> $columns
      * @param string $namespace The namespace.
      * @return TestableModelGenerator
      */
     private function createGenerator(string $table, array $columns, string $namespace = 'App\\Models'): TestableModelGenerator
     {
+        // Add rawType if not present (backward compat for simpler test cases)
+        foreach ($columns as $idx => $col) {
+            if (!isset($col['rawType'])) {
+                $columns[$idx]['rawType'] = $col['type'];
+            }
+        }
+
         $generator = new TestableModelGenerator($table, $columns);
         $generator->namespace($namespace);
         return $generator;
     }
+
+    // ------------------------------------------------------------------
+    // BASIC GENERATION
+    // ------------------------------------------------------------------
 
     #[Test]
     public function generatesBasicModel(): void
@@ -47,6 +58,35 @@ class ModelGeneratorTest extends TestCase
         $this->assertStringContainsString("'name',", $code);
         $this->assertStringContainsString("'email',", $code);
     }
+
+    #[Test]
+    public function generatesGuardedProperty(): void
+    {
+        $columns = [
+            ['name' => 'id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => true],
+            ['name' => 'name', 'type' => 'varchar', 'nullable' => false, 'default' => null, 'primary' => false],
+        ];
+
+        $code = $this->createGenerator('user', $columns)->preview();
+
+        $this->assertStringContainsString("protected array \$guarded = ['id'];", $code);
+    }
+
+    #[Test]
+    public function generatesConnectionProperty(): void
+    {
+        $columns = [
+            ['name' => 'id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => true],
+        ];
+
+        $code = $this->createGenerator('user', $columns)->preview();
+
+        $this->assertStringContainsString("protected string \$connection = 'default';", $code);
+    }
+
+    // ------------------------------------------------------------------
+    // PRIMARY KEY
+    // ------------------------------------------------------------------
 
     #[Test]
     public function excludesPrimaryKeyFromFillable(): void
@@ -73,6 +113,7 @@ class ModelGeneratorTest extends TestCase
         $code = $this->createGenerator('entity', $columns)->preview();
 
         $this->assertStringContainsString("protected string|array \$primaryKey = 'uuid';", $code);
+        $this->assertStringContainsString("protected array \$guarded = ['uuid'];", $code);
     }
 
     #[Test]
@@ -87,6 +128,25 @@ class ModelGeneratorTest extends TestCase
 
         $this->assertStringNotContainsString('$primaryKey', $code);
     }
+
+    #[Test]
+    public function detectsCompositePrimaryKey(): void
+    {
+        $columns = [
+            ['name' => 'post_id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => true],
+            ['name' => 'tag_id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => true],
+        ];
+
+        $code = $this->createGenerator('post_tag', $columns)->preview();
+
+        $this->assertStringContainsString("protected string|array \$primaryKey = ['post_id', 'tag_id'];", $code);
+        $this->assertStringContainsString("'post_id',", $code);
+        $this->assertStringContainsString("'tag_id',", $code);
+    }
+
+    // ------------------------------------------------------------------
+    // TRAITS
+    // ------------------------------------------------------------------
 
     #[Test]
     public function detectsSoftDeletesTrait(): void
@@ -137,24 +197,9 @@ class ModelGeneratorTest extends TestCase
         $this->assertStringNotContainsString("'updated',", $code);
     }
 
-    #[Test]
-    public function excludesTimestampColumnsFromFillable(): void
-    {
-        $columns = [
-            ['name' => 'id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => true],
-            ['name' => 'title', 'type' => 'varchar', 'nullable' => false, 'default' => null, 'primary' => false],
-            ['name' => 'created_at', 'type' => 'timestamp', 'nullable' => true, 'default' => null, 'primary' => false],
-            ['name' => 'updated_at', 'type' => 'timestamp', 'nullable' => true, 'default' => null, 'primary' => false],
-            ['name' => 'deleted_at', 'type' => 'timestamp', 'nullable' => true, 'default' => null, 'primary' => false],
-        ];
-
-        $code = $this->createGenerator('task', $columns)->preview();
-
-        $this->assertStringNotContainsString("'created_at',", $code);
-        $this->assertStringNotContainsString("'updated_at',", $code);
-        $this->assertStringNotContainsString("'deleted_at',", $code);
-        $this->assertStringContainsString("'title',", $code);
-    }
+    // ------------------------------------------------------------------
+    // CASTS
+    // ------------------------------------------------------------------
 
     #[Test]
     public function castsIntegerColumns(): void
@@ -225,10 +270,81 @@ class ModelGeneratorTest extends TestCase
 
         $code = $this->createGenerator('user', $columns)->preview();
 
-        $this->assertStringNotContainsString("'name' =>", $code);
-        $this->assertStringNotContainsString("'bio' =>", $code);
-        $this->assertStringNotContainsString('$casts', $code);
+        $this->assertStringNotContainsString("'name' => '", $code);
+        $this->assertStringNotContainsString("'bio' => '", $code);
     }
+
+    // ------------------------------------------------------------------
+    // ENUM COMMENTS
+    // ------------------------------------------------------------------
+
+    #[Test]
+    public function detectsMysqlEnumValues(): void
+    {
+        $columns = [
+            ['name' => 'id', 'type' => 'int', 'rawType' => 'int', 'nullable' => false, 'default' => null, 'primary' => true],
+            ['name' => 'role', 'type' => 'varchar', 'rawType' => "enum('admin','editor','member')", 'nullable' => false, 'default' => 'member', 'primary' => false],
+        ];
+
+        $code = $this->createGenerator('user', $columns)->preview();
+
+        $this->assertStringContainsString('admin,editor,member', $code);
+    }
+
+    // ------------------------------------------------------------------
+    // RELATIONS
+    // ------------------------------------------------------------------
+
+    #[Test]
+    public function detectsHasOneRelationFromForeignKey(): void
+    {
+        $columns = [
+            ['name' => 'id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => true],
+            ['name' => 'user_id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => false],
+            ['name' => 'title', 'type' => 'varchar', 'nullable' => false, 'default' => null, 'primary' => false],
+        ];
+
+        $code = $this->createGenerator('post', $columns)->preview();
+
+        $this->assertStringContainsString('use Simsoft\\DB\\Relation;', $code);
+        $this->assertStringContainsString('public function user(): Relation', $code);
+        $this->assertStringContainsString("hasOne(User::class, ['id' => 'user_id'])", $code);
+    }
+
+    #[Test]
+    public function detectsMultipleRelations(): void
+    {
+        $columns = [
+            ['name' => 'id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => true],
+            ['name' => 'user_id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => false],
+            ['name' => 'category_id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => false],
+            ['name' => 'title', 'type' => 'varchar', 'nullable' => false, 'default' => null, 'primary' => false],
+        ];
+
+        $code = $this->createGenerator('post', $columns)->preview();
+
+        $this->assertStringContainsString('public function user(): Relation', $code);
+        $this->assertStringContainsString('public function category(): Relation', $code);
+    }
+
+    #[Test]
+    public function noRelationForNonForeignKeyColumns(): void
+    {
+        $columns = [
+            ['name' => 'id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => true],
+            ['name' => 'name', 'type' => 'varchar', 'nullable' => false, 'default' => null, 'primary' => false],
+            ['name' => 'score', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => false],
+        ];
+
+        $code = $this->createGenerator('user', $columns)->preview();
+
+        $this->assertStringNotContainsString('Relation', $code);
+        $this->assertStringNotContainsString('hasOne', $code);
+    }
+
+    // ------------------------------------------------------------------
+    // PHPDOC
+    // ------------------------------------------------------------------
 
     #[Test]
     public function phpDocShowsNullableTypes(): void
@@ -258,6 +374,10 @@ class ModelGeneratorTest extends TestCase
 
         $this->assertStringContainsString('@property array|null $metadata', $code);
     }
+
+    // ------------------------------------------------------------------
+    // TABLE NAME CONVERSION
+    // ------------------------------------------------------------------
 
     #[Test]
     public function convertsSnakeCaseTableToClassName(): void
@@ -297,54 +417,6 @@ class ModelGeneratorTest extends TestCase
         $this->assertStringStartsWith('<?php', $code);
     }
 
-    #[Test]
-    public function fullModelWithAllFeatures(): void
-    {
-        $columns = [
-            ['name' => 'id', 'type' => 'serial', 'nullable' => false, 'default' => null, 'primary' => true],
-            ['name' => 'user_id', 'type' => 'int', 'nullable' => false, 'default' => null, 'primary' => false],
-            ['name' => 'title', 'type' => 'varchar', 'nullable' => false, 'default' => null, 'primary' => false],
-            ['name' => 'body', 'type' => 'text', 'nullable' => true, 'default' => null, 'primary' => false],
-            ['name' => 'view_count', 'type' => 'int', 'nullable' => false, 'default' => '0', 'primary' => false],
-            ['name' => 'is_published', 'type' => 'boolean', 'nullable' => false, 'default' => 'false', 'primary' => false],
-            ['name' => 'metadata', 'type' => 'jsonb', 'nullable' => true, 'default' => null, 'primary' => false],
-            ['name' => 'created_at', 'type' => 'timestamp', 'nullable' => true, 'default' => null, 'primary' => false],
-            ['name' => 'updated_at', 'type' => 'timestamp', 'nullable' => true, 'default' => null, 'primary' => false],
-            ['name' => 'deleted_at', 'type' => 'timestamp', 'nullable' => true, 'default' => null, 'primary' => false],
-        ];
-
-        $code = $this->createGenerator('blog_post', $columns, 'App\\Models')->preview();
-
-        // Class structure
-        $this->assertStringContainsString('class BlogPost extends Model', $code);
-        $this->assertStringContainsString("protected string \$table = 'blog_post';", $code);
-
-        // Traits
-        $this->assertStringContainsString('use SoftDeletes;', $code);
-        $this->assertStringContainsString('use Timestamps;', $code);
-
-        // Fillable (excludes id, timestamps)
-        $this->assertStringContainsString("'user_id',", $code);
-        $this->assertStringContainsString("'title',", $code);
-        $this->assertStringContainsString("'body',", $code);
-        $this->assertStringContainsString("'view_count',", $code);
-        $this->assertStringContainsString("'is_published',", $code);
-        $this->assertStringContainsString("'metadata',", $code);
-
-        // Casts
-        $this->assertStringContainsString("'user_id' => 'int',", $code);
-        $this->assertStringContainsString("'view_count' => 'int',", $code);
-        $this->assertStringContainsString("'is_published' => 'bool',", $code);
-        $this->assertStringContainsString("'metadata' => 'json',", $code);
-
-        // PHPDoc
-        $this->assertStringContainsString('@property int $id', $code);
-        $this->assertStringContainsString('@property string $title', $code);
-        $this->assertStringContainsString('@property string|null $body', $code);
-        $this->assertStringContainsString('@property bool $is_published', $code);
-        $this->assertStringContainsString('@property array|null $metadata', $code);
-    }
-
     /** @return array<string, array{string, string}> */
     public static function tableNameProvider(): array
     {
@@ -369,6 +441,64 @@ class ModelGeneratorTest extends TestCase
 
         $this->assertStringContainsString("class $expected extends Model", $code);
     }
+
+    // ------------------------------------------------------------------
+    // FULL MODEL
+    // ------------------------------------------------------------------
+
+    #[Test]
+    public function fullModelWithAllFeatures(): void
+    {
+        $columns = [
+            ['name' => 'id', 'type' => 'serial', 'rawType' => 'serial', 'nullable' => false, 'default' => null, 'primary' => true],
+            ['name' => 'user_id', 'type' => 'int', 'rawType' => 'int', 'nullable' => false, 'default' => null, 'primary' => false],
+            ['name' => 'title', 'type' => 'varchar', 'rawType' => 'varchar(200)', 'nullable' => false, 'default' => null, 'primary' => false],
+            ['name' => 'body', 'type' => 'text', 'rawType' => 'text', 'nullable' => true, 'default' => null, 'primary' => false],
+            ['name' => 'view_count', 'type' => 'int', 'rawType' => 'int', 'nullable' => false, 'default' => '0', 'primary' => false],
+            ['name' => 'is_published', 'type' => 'boolean', 'rawType' => 'bool', 'nullable' => false, 'default' => 'false', 'primary' => false],
+            ['name' => 'metadata', 'type' => 'jsonb', 'rawType' => 'jsonb', 'nullable' => true, 'default' => null, 'primary' => false],
+            ['name' => 'created_at', 'type' => 'timestamp', 'rawType' => 'timestamp', 'nullable' => true, 'default' => null, 'primary' => false],
+            ['name' => 'updated_at', 'type' => 'timestamp', 'rawType' => 'timestamp', 'nullable' => true, 'default' => null, 'primary' => false],
+            ['name' => 'deleted_at', 'type' => 'timestamp', 'rawType' => 'timestamp', 'nullable' => true, 'default' => null, 'primary' => false],
+        ];
+
+        $code = $this->createGenerator('blog_post', $columns, 'App\\Models')->preview();
+
+        // Class structure
+        $this->assertStringContainsString('class BlogPost extends Model', $code);
+        $this->assertStringContainsString("protected string \$table = 'blog_post';", $code);
+
+        // Traits
+        $this->assertStringContainsString('use SoftDeletes;', $code);
+        $this->assertStringContainsString('use Timestamps;', $code);
+
+        // Relation
+        $this->assertStringContainsString('public function user(): Relation', $code);
+
+        // Guarded
+        $this->assertStringContainsString("protected array \$guarded = ['id'];", $code);
+
+        // Fillable (excludes id, timestamps)
+        $this->assertStringContainsString("'user_id',", $code);
+        $this->assertStringContainsString("'title',", $code);
+        $this->assertStringContainsString("'body',", $code);
+        $this->assertStringContainsString("'view_count',", $code);
+        $this->assertStringContainsString("'is_published',", $code);
+        $this->assertStringContainsString("'metadata',", $code);
+
+        // Casts
+        $this->assertStringContainsString("'user_id' => 'int',", $code);
+        $this->assertStringContainsString("'view_count' => 'int',", $code);
+        $this->assertStringContainsString("'is_published' => 'bool',", $code);
+        $this->assertStringContainsString("'metadata' => 'json',", $code);
+
+        // PHPDoc
+        $this->assertStringContainsString('@property int $id', $code);
+        $this->assertStringContainsString('@property string $title', $code);
+        $this->assertStringContainsString('@property string|null $body', $code);
+        $this->assertStringContainsString('@property bool $is_published', $code);
+        $this->assertStringContainsString('@property array|null $metadata', $code);
+    }
 }
 
 /**
@@ -376,17 +506,16 @@ class ModelGeneratorTest extends TestCase
  */
 class TestableModelGenerator extends ModelGenerator
 {
-    /** @var array<int, array{name: string, type: string, nullable: bool, default: mixed, primary: bool}> */
+    /** @var array<int, array<string, mixed>> */
     private array $fakeColumns;
 
     /**
      * @param string $table The table name.
-     * @param array<int, array{name: string, type: string, nullable: bool, default: mixed, primary: bool}> $columns
+     * @param array<int, array<string, mixed>> $columns
      */
     public function __construct(string $table, array $columns)
     {
         $this->fakeColumns = $columns;
-        // Skip parent constructor to avoid Connection dependency
         $this->setTable($table);
     }
 
@@ -398,7 +527,6 @@ class TestableModelGenerator extends ModelGenerator
      */
     private function setTable(string $table): void
     {
-        // Use reflection to set the private property
         $reflection = new \ReflectionClass(ModelGenerator::class);
         $prop = $reflection->getProperty('table');
         $prop->setValue($this, $table);

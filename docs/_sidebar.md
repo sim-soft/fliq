@@ -31,6 +31,7 @@
 
 - **Tooling**
     - [Model Generator](11-MODEL-GENERATOR.md)
+  - [Observer Generator](12-OBSERVER-GENERATOR.md)
 
 <div style="text-align:center;margin:20px 0">
     <a href="https://github.com/sim-soft" target="_blank" style="text-decoration:none">
