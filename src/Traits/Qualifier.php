@@ -148,13 +148,34 @@ trait Qualifier
             self::validateIdentifier($alias);
         }
 
+        // Handle schema-qualified table names (e.g., "public.users")
+        $quotedTable = $this->quoteTableName($table);
+
         if ($alias === null) {
-            $this->alias($table);
-            return $this->quote($table);
+            // Use just the table name (without schema) as the alias for column resolution
+            $parts = explode('.', $table);
+            $this->alias(end($parts));
+            return $quotedTable;
         }
 
         $this->alias($alias);
-        return $this->quote($table) . ' ' . $this->quote($alias);
+        return $quotedTable . ' ' . $this->quote($alias);
+    }
+
+    /**
+     * Quote a table name, handling schema-qualified names (schema.table).
+     *
+     * @param string $table The table name, optionally schema-qualified.
+     * @return string The quoted table reference.
+     */
+    private function quoteTableName(string $table): string
+    {
+        if (!str_contains($table, '.')) {
+            return $this->quote($table);
+        }
+
+        $parts = explode('.', $table, 2);
+        return $this->quote($parts[0]) . '.' . $this->quote($parts[1]);
     }
 
     /**

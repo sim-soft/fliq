@@ -101,6 +101,32 @@ User::find()->active()->admins()->get();
 
 Aliases: `whereJsonContains`, `whereJsonDoesntContain`, `whereJsonContainsKey`, `whereJsonDoesntContainKey`, `whereJsonLength`
 
+## Array Columns
+
+| Task                 | Code                                             |
+|----------------------|--------------------------------------------------|
+| Array contains       | `->arrayContains('tags', 'php')`                 |
+| Array contains (int) | `->arrayContains('role_ids', 5, 'int')`          |
+| Array overlaps       | `->arrayOverlaps('tags', ['php', 'go'])`         |
+| Or array contains    | `->orArrayContains('tags', 'python')`            |
+| Or array overlaps    | `->orArrayOverlaps('skills', ['docker', 'k8s'])` |
+
+Aliases: `whereArrayContains`, `whereArrayOverlaps`, `orWhereArrayContains`,
+`orWhereArrayOverlaps`
+
+## CASE WHEN Expressions
+
+| Task              | Code                                                                     |
+|-------------------|--------------------------------------------------------------------------|
+| Value comparison  | `CaseExpression::when('score', '>', 90)->then('A')`                      |
+| Multiple WHENs    | `->andWhen('score', '>', 70)->then('B')`                                 |
+| Column comparison | `CaseExpression::whenColumn('score', '>', 'min_score')->then('pass')`    |
+| Raw condition     | `CaseExpression::whenRaw('age BETWEEN ? AND ?', [18,30])->then('young')` |
+| ELSE value        | `->else('F')`                                                            |
+| Alias (SELECT)    | `->as('grade')`                                                          |
+| In select()       | `User::find()->select('name', CaseExpression::when(...)->as('grade'))`   |
+| In orderByRaw     | `->orderByRaw((string) CaseExpression::when(...)->then(1)->else(2))`     |
+
 ## Relations
 
 | Task            | Code                                                    |
@@ -274,6 +300,56 @@ User::transaction(function () {
 | Dump and die       | `->dd()`                                               |
 | Dump (continue)    | `->dump()`                                             |
 | Tap (inspect)      | `->tap(fn($query) => error_log($query->getFullSQL()))` |
+| Explain            | `->explain()`                                          |
+| Explain analyze    | `->explain(analyze: true)`                             |
+| Explain JSON       | `->explain(format: 'json')`                            |
+
+## Row-Level Locking
+
+| Task                   | Code                      |
+|------------------------|---------------------------|
+| FOR UPDATE             | `->forUpdate()`           |
+| FOR SHARE              | `->forShare()`            |
+| FOR UPDATE NOWAIT      | `->forUpdateNoWait()`     |
+| FOR UPDATE SKIP LOCKED | `->forUpdateSkipLocked()` |
+
+## Full-Text Search
+
+| Task                | Code                                                       |
+|---------------------|------------------------------------------------------------|
+| MySQL MATCH AGAINST | `MatchAgainst(['title'])->mustHave(['PHP'])`               |
+| PG plain search     | `->whereFulltext(['title', 'body'], 'database')`           |
+| PG phrase search    | `->whereFulltext('title', 'query builder', 'phrase')`      |
+| PG websearch        | `->whereFulltext('body', '"exact" -exclude', 'websearch')` |
+| Or fulltext         | `->orWhereFulltext('body', 'optimization')`                |
+
+## RETURNING (PostgreSQL)
+
+| Task              | Code                                         |
+|-------------------|----------------------------------------------|
+| Insert returning  | `(new Insert(...))->returning('id')`         |
+| Update returning  | `(new Update(...))->returning('id', 'name')` |
+| Delete returning  | `(new Delete(...))->returning('id')`         |
+| Get returned rows | `$builder->getReturningResult()`             |
+
+## Advisory Locks (PostgreSQL)
+
+| Task                        | Code                                      |
+|-----------------------------|-------------------------------------------|
+| Session lock (blocking)     | `$driver->advisoryLock(12345)`            |
+| Session lock (try)          | `$driver->advisoryLockTry(12345)`         |
+| Session unlock              | `$driver->advisoryUnlock(12345)`          |
+| Transaction lock (blocking) | `$driver->advisoryLockTransaction(99)`    |
+| Transaction lock (try)      | `$driver->advisoryLockTransactionTry(99)` |
+
+## LISTEN / NOTIFY (PostgreSQL)
+
+| Task              | Code                                        |
+|-------------------|---------------------------------------------|
+| Subscribe         | `$driver->listen('channel_name')`           |
+| Unsubscribe       | `$driver->unlisten('channel_name')`         |
+| Send notification | `$driver->notify('channel_name', $payload)` |
+| Poll for message  | `$driver->getNotification(1000)`            |
 
 ## Connection
 
@@ -284,3 +360,21 @@ User::transaction(function () {
 | Disconnect       | `Connection::disconnect('mysql')`                                    |
 | Reconnect        | `Connection::reconnect('mysql')`                                     |
 | Reset all        | `Connection::reset()`                                                |
+
+## Code Generators (CLI)
+
+| Task                   | Command                                                          |
+|------------------------|------------------------------------------------------------------|
+| Generate one model     | `vendor/bin/fliq make:model User --config=config/db.php`         |
+| Generate all models    | `vendor/bin/fliq make:model --all --config=config/db.php`        |
+| Custom class name      | `vendor/bin/fliq make:model Profile --table=user_profile`        |
+| Exclude tables         | `vendor/bin/fliq make:model --all --exclude=migrations,sessions` |
+| Dry run                | `vendor/bin/fliq make:model --all --dry-run`                     |
+| Preview code           | `vendor/bin/fliq make:model User --preview`                      |
+| Force overwrite        | `vendor/bin/fliq make:model User --force`                        |
+| Generate one observer  | `vendor/bin/fliq make:observer User`                             |
+| Generate all observers | `vendor/bin/fliq make:observer --all`                            |
+| Specific events only   | `vendor/bin/fliq make:observer Order --events=creating,deleting` |
+| Programmatic model     | `ModelGenerator::fromTable('user')->generate()`                  |
+| Programmatic observer  | `ObserverGenerator::forModel('User')->generate()`                |
+| List all tables        | `ModelGenerator::listTables('mysql')`                            |

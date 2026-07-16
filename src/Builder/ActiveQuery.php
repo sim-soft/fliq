@@ -79,6 +79,9 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /** @var int Cache TTL in seconds. 0 means no caching. */
     protected int $cacheTtl = 0;
 
+    /** @var string|null Row-level lock type (e.g., 'update', 'share', 'noWait', 'skipLocked'). */
+    protected ?string $lockType = null;
+
     /**
      * Constructor.
      *
@@ -491,9 +494,19 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string|Raw ...$attributes the list of attribute value to be select
      * @return static
      */
-    public function select(string|Raw ...$attributes): static
+    public function select(string|Raw|Clause ...$attributes): static
     {
         foreach ($attributes as $attribute) {
+            if ($attribute instanceof Clause) {
+                $attribute->alias($this->getAlias());
+                $attribute->setPlaceHolder($this->getPlaceHolder());
+                $this->selects[] = (string)$attribute;
+                if ($attribute->getBinds()) {
+                    $this->appendBinds($attribute->getBinds());
+                }
+                continue;
+            }
+
             $this->selects[] = $attribute instanceof Raw
                 ? (string)$attribute
                 : $this->queryAttribute($attribute);
@@ -507,7 +520,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string|Raw ...$attributes List of SELECT attributes
      * @return static
      */
-    public function selectDistinct(string|Raw ...$attributes): static
+    public function selectDistinct(string|Raw|Clause ...$attributes): static
     {
         $this->select(...$attributes);
         return $this->distinct();
@@ -1690,6 +1703,81 @@ class ActiveQuery implements Executable, Updatable, Deletable
         return $this->limit($maxPerPage, --$currentPage * $maxPerPage);
     }
 
+    // ------------------------------------------------------------------
+    // ROW-LEVEL LOCKING
+    // ------------------------------------------------------------------
+
+    /**
+     * Add a FOR UPDATE lock to the query.
+     *
+     * Acquires an exclusive row-level lock. Other transactions cannot modify
+     * the selected rows until this transaction completes.
+     *
+     * @return static
+     */
+    public function forUpdate(): static
+    {
+        $this->lockType = 'update';
+        return $this;
+    }
+
+    /**
+     * Add a FOR SHARE lock to the query.
+     *
+     * Acquires a shared row-level lock. Other transactions can read but
+     * cannot modify the selected rows until this transaction completes.
+     *
+     * @return static
+     */
+    public function forShare(): static
+    {
+        $this->lockType = 'share';
+        return $this;
+    }
+
+    /**
+     * Add a FOR UPDATE NOWAIT lock to the query.
+     *
+     * Like forUpdate(), but returns an error immediately if the row is
+     * already locked instead of waiting for the lock to be released.
+     *
+     * @return static
+     */
+    public function forUpdateNoWait(): static
+    {
+        $this->lockType = 'noWait';
+        return $this;
+    }
+
+    /**
+     * Add a FOR UPDATE SKIP LOCKED to the query.
+     *
+     * Like forUpdate(), but skips rows that are already locked by other
+     * transactions instead of waiting. Useful for job queue patterns.
+     *
+     * @return static
+     */
+    public function forUpdateSkipLocked(): static
+    {
+        $this->lockType = 'skipLocked';
+        return $this;
+    }
+
+    /**
+     * Get the lock clause SQL.
+     *
+     * @return string|null
+     */
+    public function getLockSQL(): ?string
+    {
+        if ($this->lockType === null) {
+            return null;
+        }
+
+        $lockClause = $this->getGrammar()->lockSQL($this->lockType);
+        return $lockClause !== '' ? $lockClause : null;
+    }
+
     /**
      * Add a UNION query.
      *
@@ -1786,6 +1874,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
             $this->getHavingSQL(),
             $this->getOrderSQL(),
             $this->getLimitSQL(),
+            $this->getLockSQL(),
         ];
 
         foreach ($clauses as $clause) {
@@ -2349,8 +2438,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function jsonHas(string $column, string $logicalOperator = 'AND'): static
     {
         [$col, $path] = $this->parseJsonPath($column);
-        $jsonPath = $path === '' ? '$' : '$.' . $path;
-        $sql = "JSON_CONTAINS_PATH(" . $this->qualifyJsonColumn($col) . ", 'one', '$jsonPath')";
+        $sql = $this->getGrammar()->jsonKeyExists($this->qualifyJsonColumn($col), $path);
 
         if ($this->conditions && end($this->conditions) !== '(') {
             $this->conditions[] = $logicalOperator;
@@ -2370,8 +2458,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function jsonMissing(string $column, string $logicalOperator = 'AND'): static
     {
         [$col, $path] = $this->parseJsonPath($column);
-        $jsonPath = $path === '' ? '$' : '$.' . $path;
-        $sql = "NOT JSON_CONTAINS_PATH(" . $this->qualifyJsonColumn($col) . ", 'one', '$jsonPath')";
+        $sql = 'NOT ' . $this->getGrammar()->jsonKeyExists($this->qualifyJsonColumn($col), $path);
 
         if ($this->conditions && end($this->conditions) !== '(') {
             $this->conditions[] = $logicalOperator;
@@ -2613,6 +2700,181 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function orWhereJsonContains(string $column, mixed $value): static
     {
         return $this->jsonContains($column, $value, 'OR');
+    }
+
+    // ------------------------------------------------------------------
+    // FULLTEXT SEARCH
+    // ------------------------------------------------------------------
+
+    /**
+     * Add a full-text search condition.
+     *
+     * PostgreSQL: Uses to_tsvector/to_tsquery with configurable mode.
+     * MySQL: Uses MATCH...AGAINST in BOOLEAN MODE via Grammar.
+     *
+     * @param array<int, string>|string $columns Column(s) to search.
+     * @param string $term The search term.
+     * @param string $mode The search mode: 'plain', 'phrase', or 'websearch'.
+     * @param string $language The text search config/language. Default: 'english'.
+     * @param string $logicalOperator The logical operator.
+     * @return static
+     */
+    public function whereFulltext(
+        array|string $columns,
+        string       $term,
+        string       $mode = 'plain',
+        string       $language = 'english',
+        string       $logicalOperator = 'AND'
+    ): static
+    {
+        $cols = is_array($columns) ? $columns : [$columns];
+        $qualifiedCols = array_map(fn($col) => $this->queryAttribute($col), $cols);
+        $sql = $this->getGrammar()->fulltextSearch($qualifiedCols, $mode, $language);
+        $this->addConditionSQL($sql, $term, $logicalOperator);
+        return $this;
+    }
+
+    /**
+     * Or variant of whereFulltext.
+     *
+     * @param array<int, string>|string $columns Column(s) to search.
+     * @param string $term The search term.
+     * @param string $mode The search mode: 'plain', 'phrase', or 'websearch'.
+     * @param string $language The text search config/language. Default: 'english'.
+     * @return static
+     */
+    public function orWhereFulltext(
+        array|string $columns,
+        string       $term,
+        string       $mode = 'plain',
+        string       $language = 'english'
+    ): static
+    {
+        return $this->whereFulltext($columns, $term, $mode, $language, 'OR');
+    }
+
+    // ------------------------------------------------------------------
+    // ARRAY COLUMN QUERIES (PostgreSQL)
+    // ------------------------------------------------------------------
+
+    /**
+     * Check if an array column contains a value.
+     *
+     * PostgreSQL: column @> ARRAY[?]::type[]
+     * MySQL fallback: JSON_CONTAINS(column, ?, '$')
+     *
+     * @param string $column The array column name.
+     * @param mixed $value The value to check for.
+     * @param string $type The PG array element type (text, int, varchar, etc.).
+     * @param string $logicalOperator The logical operator.
+     * @return static
+     */
+    public function arrayContains(string $column, mixed $value, string $type = 'text', string $logicalOperator = 'AND'): static
+    {
+        $col = $this->queryAttribute($column);
+        $sql = $this->getGrammar()->arrayContains($col, $type);
+        $this->addConditionSQL($sql, $value, $logicalOperator);
+        return $this;
+    }
+
+    /**
+     * Or variant of arrayContains.
+     *
+     * @param string $column The array column name.
+     * @param mixed $value The value to check for.
+     * @param string $type The PG array element type.
+     * @return static
+     */
+    public function orArrayContains(string $column, mixed $value, string $type = 'text'): static
+    {
+        return $this->arrayContains($column, $value, $type, 'OR');
+    }
+
+    /**
+     * Check if an array column overlaps with given values (has any match).
+     *
+     * PostgreSQL: column && ARRAY[?, ?]::type[]
+     * MySQL fallback: JSON_OVERLAPS(column, JSON_ARRAY(?, ?))
+     *
+     * @param string $column The array column name.
+     * @param array<int, mixed> $values The values to check for overlap.
+     * @param string $type The PG array element type (text, int, varchar, etc.).
+     * @param string $logicalOperator The logical operator.
+     * @return static
+     */
+    public function arrayOverlaps(string $column, array $values, string $type = 'text', string $logicalOperator = 'AND'): static
+    {
+        $col = $this->queryAttribute($column);
+        $sql = $this->getGrammar()->arrayOverlaps($col, count($values), $type);
+        $this->addConditionSQL($sql, $values, $logicalOperator);
+        return $this;
+    }
+
+    /**
+     * Or variant of arrayOverlaps.
+     *
+     * @param string $column The array column name.
+     * @param array<int, mixed> $values The values to check for overlap.
+     * @param string $type The PG array element type.
+     * @return static
+     */
+    public function orArrayOverlaps(string $column, array $values, string $type = 'text'): static
+    {
+        return $this->arrayOverlaps($column, $values, $type, 'OR');
+    }
+
+    /**
+     * Alias for arrayContains.
+     *
+     * @param string $column The array column name.
+     * @param mixed $value The value to check for.
+     * @param string $type The PG array element type.
+     * @param string $logicalOperator The logical operator.
+     * @return static
+     */
+    public function whereArrayContains(string $column, mixed $value, string $type = 'text', string $logicalOperator = 'AND'): static
+    {
+        return $this->arrayContains($column, $value, $type, $logicalOperator);
+    }
+
+    /**
+     * Alias for orArrayContains.
+     *
+     * @param string $column The array column name.
+     * @param mixed $value The value to check for.
+     * @param string $type The PG array element type.
+     * @return static
+     */
+    public function orWhereArrayContains(string $column, mixed $value, string $type = 'text'): static
+    {
+        return $this->arrayContains($column, $value, $type, 'OR');
+    }
+
+    /**
+     * Alias for arrayOverlaps.
+     *
+     * @param string $column The array column name.
+     * @param array<int, mixed> $values The values to check for overlap.
+     * @param string $type The PG array element type.
+     * @param string $logicalOperator The logical operator.
+     * @return static
+     */
+    public function whereArrayOverlaps(string $column, array $values, string $type = 'text', string $logicalOperator = 'AND'): static
+    {
+        return $this->arrayOverlaps($column, $values, $type, $logicalOperator);
+    }
+
+    /**
+     * Alias for orArrayOverlaps.
+     *
+     * @param string $column The array column name.
+     * @param array<int, mixed> $values The values to check for overlap.
+     * @param string $type The PG array element type.
+     * @return static
+     */
+    public function orWhereArrayOverlaps(string $column, array $values, string $type = 'text'): static
+    {
+        return $this->arrayOverlaps($column, $values, $type, 'OR');
     }
 
     /**

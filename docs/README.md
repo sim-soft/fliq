@@ -4,6 +4,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sim-soft/fliq/blob/main/LICENSE)
 [![PHP 8.4+](https://img.shields.io/badge/PHP-8.4%2B-8892BF.svg)](https://www.php.net/releases/8.4/en.php)
+[![PHPStan Level 8](https://img.shields.io/badge/PHPStan-Level%208-brightgreen.svg)](https://phpstan.org/)
+[![Tests](https://img.shields.io/badge/Tests-passing-brightgreen.svg)]()
 
 A high-performance PHP Active Record / ORM for MySQL, MariaDB, PostgreSQL, and
 SQLite. Zero framework dependencies, minimal footprint, maximum speed. An
@@ -83,11 +85,17 @@ Requires PHP 8.4+ with `ext-pdo`.
 - WHERE, IN, BETWEEN, LIKE, EXISTS, REGEX conditions
 - JOIN (inner, left, right, cross) with dot notation
 - JSON column queries with auto `->` path notation
+- Array column queries: `arrayContains()`, `arrayOverlaps()` (PostgreSQL native,
+  MySQL JSON fallback)
 - Sub-queries, unions, aggregations (count, sum, avg, min, max)
 - Raw expressions: `selectRaw()`, `whereRaw()`, `orderByRaw()`, `havingRaw()`
 - Date filters: `whereDate()`, `whereMonth()`, `whereYear()`, `whereTime()`
 - Multi-column conditions: `whereAny()`, `whereAll()`, `whereNone()`
+- Full-text search: `whereFulltext()` (PostgreSQL tsvector, MySQL MATCH AGAINST)
+- Row-level locking: `forUpdate()`, `forShare()`, `forUpdateNoWait()`,
+  `forUpdateSkipLocked()`
 - Conditional clauses: `when()`, `unless()`, `scope()`, `tap()`
+- RETURNING clause on INSERT/UPDATE/DELETE (PostgreSQL)
 
 ### Active Record
 
@@ -120,15 +128,21 @@ Requires PHP 8.4+ with `ext-pdo`.
 - Query logging with timing (`QueryLogger`)
 - Index advisor — suggests missing indexes from logged queries
 - `dd()` and `dump()` — inspect generated SQL during development
+- `explain()` — get query execution plan (EXPLAIN ANALYZE)
 - Query result caching with pluggable drivers
+- **Model Generator** — CLI tool to create Model files from database tables
+- **Observer Generator** — CLI tool to create Observer classes for model
+  lifecycle events
 
 ### Database Support
 
 - MySQL 5.7+ / MariaDB 10.3+ (PDO and MySQLi drivers)
-- PostgreSQL 12+ (PDO driver)
+- PostgreSQL 12+ (PDO driver) — advisory locks, LISTEN/NOTIFY, native arrays,
+  full-text (tsvector)
 - SQLite 3.39+ (PDO driver)
 - Read/write connection splitting
-- Prepared statement caching
+- Prepared statement caching (configurable size, enable/disable)
+- Schema-qualified table references (PostgreSQL)
 - Persistent connections
 
 ## Performance
@@ -154,16 +168,19 @@ and other ORMs.
 
 ## Documentation
 
-| Guide                                        | Topics                                             |
-|----------------------------------------------|----------------------------------------------------|
-| [Getting Started](01-GETTING-STARTED.md)     | Connections, drivers, raw queries, DB facade       |
-| [Query Builder](02-QUERY-BUILDER.md)         | WHERE, JOIN, JSON, aggregation, scopes, unions     |
-| [Active Record](03-ACTIVE-RECORD.md)         | Models, CRUD, casting, events, soft deletes        |
-| [Relations](04-RELATION.md)                  | hasOne, hasMany, viaTable, eager loading, whereHas |
-| [Advanced Features](05-ADVANCED-FEATURES.md) | Caching, pagination, batch, index advisor          |
-| [Collections](06-COLLECTIONS.md)             | filter, map, reduce, indexBy, groupBy              |
-| [Comparison](07-COMPARISON.md)               | Benchmarks, FLIQ vs Eloquent/Doctrine/Yii3         |
-| [Cheatsheet](08-CHEATSHEET.md)               | Quick reference for all operations                 |
+| Guide                                          | Topics                                             |
+|------------------------------------------------|----------------------------------------------------|
+| [Getting Started](01-GETTING-STARTED.md)       | Connections, drivers, raw queries, DB facade       |
+| [Query Builder](02-QUERY-BUILDER.md)           | WHERE, JOIN, JSON, aggregation, scopes, unions     |
+| [Active Record](03-ACTIVE-RECORD.md)           | Models, CRUD, casting, events, soft deletes        |
+| [Relations](04-RELATION.md)                    | hasOne, hasMany, viaTable, eager loading, whereHas |
+| [Advanced Features](05-ADVANCED-FEATURES.md)   | Caching, pagination, batch, index advisor          |
+| [Collections](06-COLLECTIONS.md)               | filter, map, reduce, indexBy, groupBy              |
+| [Comparison](07-COMPARISON.md)                 | Benchmarks, FLIQ vs Eloquent/Doctrine/Yii3         |
+| [Cheatsheet](08-CHEATSHEET.md)                 | Quick reference for all operations                 |
+| [PostgreSQL Guide](10-POSTGRESQL.md)           | PG features, production guidance, PgBouncer        |
+| [Model Generator](11-MODEL-GENERATOR.md)       | CLI tool to scaffold models from database tables   |
+| [Observer Generator](12-OBSERVER-GENERATOR.md) | CLI tool to scaffold observer classes for models   |
 
 ## Links
 

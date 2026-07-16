@@ -132,4 +132,101 @@ class MySQLGrammar implements Grammar
     {
         return "TIME($column)";
     }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function insertIgnoreFullSQL(string $table, array $columns, string $placeholders): ?string
+    {
+        return null; // MySQL uses INSERT IGNORE keyword directly
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function returningSQL(string $column): string
+    {
+        return ''; // MySQL does not support RETURNING
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function returningColumnsSQL(array $columns): string
+    {
+        return ''; // MySQL does not support RETURNING
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsReturning(): bool
+    {
+        return false;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function jsonKeyExists(string $column, string $path): string
+    {
+        $jsonPath = '$.' . $path;
+        return "JSON_CONTAINS_PATH($column, 'one', '$jsonPath')";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function lockSQL(string $lockType): string
+    {
+        return match ($lockType) {
+            'share' => 'FOR SHARE',
+            default => 'FOR UPDATE',
+        };
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function fulltextSearch(array $columns, string $mode = 'plain', string $language = 'english'): string
+    {
+        // MySQL uses MATCH...AGAINST syntax handled by MatchAgainst condition
+        $cols = implode(', ', $columns);
+        return "MATCH($cols) AGAINST(? IN BOOLEAN MODE)";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsFulltext(): bool
+    {
+        return true;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function arrayContains(string $column, string $type = 'text'): string
+    {
+        // MySQL does not support native array columns; use JSON_CONTAINS instead
+        return "JSON_CONTAINS($column, ?, '$')";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function arrayOverlaps(string $column, int $count, string $type = 'text'): string
+    {
+        // MySQL does not support native array columns; use JSON_OVERLAPS (8.0.17+)
+        $placeholders = implode(',', array_fill(0, $count, '?'));
+        return "JSON_OVERLAPS($column, JSON_ARRAY($placeholders))";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsArrayColumns(): bool
+    {
+        return false;
+    }
 }

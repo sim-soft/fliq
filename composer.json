@@ -57,6 +57,9 @@
     "optimize-autoloader": true,
     "sort-packages": true
   },
+  "bin": [
+    "bin/fliq"
+  ],
   "scripts": {
     "qc": [
       "phpstan analyse --memory-limit=512M",

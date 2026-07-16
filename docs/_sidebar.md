@@ -26,6 +26,13 @@
 - **Quick Reference**
     - [Cheatsheet](08-CHEATSHEET.md)
 
+- **PostgreSQL**
+    - [Production Guide](10-POSTGRESQL.md)
+
+- **Tooling**
+    - [Model Generator](11-MODEL-GENERATOR.md)
+  - [Observer Generator](12-OBSERVER-GENERATOR.md)
+
 <div style="text-align:center;margin:20px 0">
     <a href="https://github.com/sim-soft" target="_blank" style="text-decoration:none">
         <img src="img/logo/simsoft.webp" alt="Simsoft" width="100">

@@ -168,4 +168,132 @@ class PostgresGrammar implements Grammar
     {
         return "$column::time";
     }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function insertIgnoreFullSQL(string $table, array $columns, string $placeholders): ?string
+    {
+        $quotedColumns = array_map(fn($col) => $this->quoteIdentifier($col), $columns);
+
+        return "INSERT INTO $table ("
+            . implode(', ', $quotedColumns)
+            . ") VALUES ($placeholders) ON CONFLICT DO NOTHING";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function returningSQL(string $column): string
+    {
+        return "RETURNING " . $this->quoteIdentifier($column);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function returningColumnsSQL(array $columns): string
+    {
+        if (empty($columns)) {
+            return 'RETURNING *';
+        }
+
+        $quoted = array_map(fn($col) => $this->quoteIdentifier($col), $columns);
+        return 'RETURNING ' . implode(', ', $quoted);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsReturning(): bool
+    {
+        return true;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function jsonKeyExists(string $column, string $path): string
+    {
+        $parts = explode('.', $path);
+
+        if (count($parts) === 1) {
+            return "jsonb_exists($column, '$parts[0]')";
+        }
+
+        // For nested paths, navigate to the parent then check key
+        $lastKey = array_pop($parts);
+        $expr = $column;
+        foreach ($parts as $part) {
+            $expr .= " -> '$part'";
+        }
+
+        return "jsonb_exists($expr, '$lastKey')";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function lockSQL(string $lockType): string
+    {
+        return match ($lockType) {
+            'share' => 'FOR SHARE',
+            'noWait' => 'FOR UPDATE NOWAIT',
+            'skipLocked' => 'FOR UPDATE SKIP LOCKED',
+            default => 'FOR UPDATE',
+        };
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function fulltextSearch(array $columns, string $mode = 'plain', string $language = 'english'): string
+    {
+        $tsvectors = array_map(
+            fn($col) => "to_tsvector('$language', $col)",
+            $columns
+        );
+        $tsvector = count($tsvectors) === 1 ? $tsvectors[0] : implode(' || ', $tsvectors);
+
+        $queryFunc = match ($mode) {
+            'phrase' => "phraseto_tsquery('$language', ?)",
+            'websearch' => "websearch_to_tsquery('$language', ?)",
+            default => "plainto_tsquery('$language', ?)",
+        };
+
+        return "$tsvector @@ $queryFunc";
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsFulltext(): bool
+    {
+        return true;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function arrayContains(string $column, string $type = 'text'): string
+    {
+        return "$column @> ARRAY[?]::$type" . '[]';
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function arrayOverlaps(string $column, int $count, string $type = 'text'): string
+    {
+        $placeholders = implode(',', array_fill(0, $count, '?'));
+        return "$column && ARRAY[$placeholders]::$type" . '[]';
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsArrayColumns(): bool
+    {
+        return true;
+    }
 }

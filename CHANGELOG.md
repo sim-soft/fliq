@@ -2,6 +2,85 @@
 
 All notable changes to `simsoft/fliq` are documented here.
 
+## [2.0.4] - 2025-07-16
+
+### Added
+
+**PostgreSQL — Production Grade**
+
+- `RETURNING` clause on INSERT (reliable `lastInsertId` without sequence names)
+- `RETURNING` clause on UPDATE/DELETE (`returning()` method +
+  `getReturningResult()`)
+- `INSERT ... ON CONFLICT DO NOTHING` for `insertOrIgnore()` /
+  `DB::insertOrIgnore()`
+- `FOR UPDATE`, `FOR SHARE`, `FOR UPDATE NOWAIT`, `FOR UPDATE SKIP LOCKED`
+  row-level locking
+- `whereFulltext()` / `orWhereFulltext()` — PostgreSQL full-text search via
+  `to_tsvector`/`to_tsquery`
+- `arrayContains()` / `arrayOverlaps()` — native PG array column queries (`@>`,
+  `&&`)
+- `jsonHas()` / `jsonMissing()` now uses `jsonb_exists()` on PostgreSQL
+- Advisory locks: `advisoryLock()`, `advisoryLockTry()`, `advisoryUnlock()`,
+  `advisoryLockTransaction()`, `advisoryLockTransactionTry()`
+- LISTEN/NOTIFY: `listen()`, `unlisten()`, `notify()`, `getNotification()`
+- Statement cache configurability: `statement_cache`, `statement_cache_size`
+  config + `enableStatementCache()`, `disableStatementCache()`
+- Schema-qualified table references (`"schema"."table"` quoting)
+- Boolean casting handles PostgreSQL `'t'`/`'f'`/`'true'`/`'false'` strings
+
+**Query Builder**
+
+- `explain()` / `explain(analyze: true, format: 'json')` — query execution plan
+  for all drivers
+- `forUpdate()`, `forShare()`, `forUpdateNoWait()`, `forUpdateSkipLocked()` —
+  row-level locking
+- `whereFulltext(columns, term, mode, language)` — full-text search (PG:
+  tsvector, MySQL: MATCH AGAINST)
+- `arrayContains(column, value, type)` / `arrayOverlaps(column, values, type)` —
+  array column queries
+- `CaseExpression` — fluent CASE WHEN THEN ELSE END builder with `when()`,
+  `whenColumn()`, `whenRaw()`, alias support via `->as()`
+
+**Code Generators (CLI)**
+
+- `vendor/bin/fliq make:model <ClassName>` — generate Model from database table
+- `vendor/bin/fliq make:model --all` — generate models for all tables
+- `vendor/bin/fliq make:observer <ModelName>` — generate Observer class
+- `vendor/bin/fliq make:observer --all` — generate observers for all models
+- Auto-detection: relations (`*_id` → `hasOne`), traits (SoftDeletes,
+  Timestamps), casts, `$guarded`, composite PKs, enum comments
+- Config auto-discovery (`config/db.php`, `config/database.php`)
+- `--exclude`, `--dry-run`, `--preview`, `--force`, `--verbose`, colored output
+- Namespace auto-detection from `composer.json` PSR-4 mapping
+
+**Documentation**
+
+- `docs/10-POSTGRESQL.md` — full PostgreSQL production guide
+- `docs/11-MODEL-GENERATOR.md` — Model generator tutorial
+- `docs/12-OBSERVER-GENERATOR.md` — Observer generator tutorial
+
+### Changed
+
+- PostgreSQL driver no longer labeled "beta"
+- `Model::insert()` uses `RETURNING` on PostgreSQL for reliable auto-increment
+  ID retrieval
+- `jsonHas()` / `jsonMissing()` now use Grammar interface (`jsonKeyExists()`)
+  instead of hardcoded MySQL SQL
+- LIKE methods auto-use `ILIKE` / `NOT ILIKE` on PostgreSQL when
+  case-insensitive (verified, no change needed)
+
+### Fixed
+
+- `INSERT IGNORE` on PostgreSQL now generates `ON CONFLICT DO NOTHING` (was
+  producing bare `INSERT`)
+- `PDO::lastInsertId()` on PostgreSQL now works via `RETURNING` (was unreliable
+  without sequence name)
+- Boolean cast `(bool)'f'` no longer incorrectly returns `true` on PostgreSQL
+- Schema-qualified tables now quote correctly (`"public"."users"` not
+  `"public.users"`)
+
+---
+
 ## [1.1.0] - 2025-07-01
 
 ### Added
@@ -50,7 +129,7 @@ Initial release.
 - Fluent query builder (SELECT, INSERT, UPDATE, DELETE, UPSERT)
 - Active Record pattern with hasOne/hasMany/viaTable relations
 - PDO driver (MySQL/MariaDB) and MySQLi driver
-- PostgreSQL driver (beta)
+- PostgreSQL driver
 - Eager loading with dot notation and constraints
 - Soft deletes and timestamps traits
 - Collection with lazy/chunked iteration

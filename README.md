@@ -4,6 +4,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sim-soft/fliq/blob/main/LICENSE)
 [![PHP 8.4+](https://img.shields.io/badge/PHP-8.4%2B-8892BF.svg)](https://www.php.net/releases/8.4/en.php)
+[![PHPStan Level 8](https://img.shields.io/badge/PHPStan-Level%208-brightgreen.svg)](https://phpstan.org/)
+[![Tests](https://img.shields.io/badge/Tests-passing-brightgreen.svg)]()
 [![Docs](https://img.shields.io/badge/Docs-online-green.svg)](https://sim-soft.github.io/fliq/)
 
 A high-performance Active Record / ORM for MySQL, MariaDB, PostgreSQL, and SQLite. Zero framework dependencies, minimal footprint, maximum speed.
@@ -136,6 +138,7 @@ $post->delete();
 - [Conditional Queries](#conditional-queries)
 - [JSON Column Queries](#json-column-queries)
 - [Multi-Column Conditions](#multi-column-conditions)
+- [Row-Level Locking](#row-level-locking)
 - [Transactions](#transactions)
 - [Soft Deletes & Timestamps](#soft-deletes--timestamps)
 - [Model Events](#model-events)
@@ -219,6 +222,23 @@ User::transaction(function () {
 // Return false (or don't return true) to roll back
 ```
 
+### Row-Level Locking
+
+```php
+$driver->transaction(function () {
+    /* FOR UPDATE — exclusive lock for safe concurrent writes */
+    $job = Job::find()->where('status', 'pending')->limit(1)->forUpdate()->first();
+    $job->update(['status' => 'processing']);
+    return true;
+});
+
+/* FOR UPDATE SKIP LOCKED — job queue pattern (skip rows locked by other workers) */
+$job = Job::find()->where('status', 'pending')->forUpdateSkipLocked()->first();
+```
+
+Available: `forUpdate()`, `forShare()`, `forUpdateNoWait()`,
+`forUpdateSkipLocked()`
+
 ### Soft Deletes & Timestamps
 
 ```php
@@ -286,7 +306,59 @@ $slowest = QueryLogger::getSlowestQuery();
 
 // Index advisor
 IndexAdvisor::suggestSQL();
+
+// EXPLAIN query plans
+$plan = User::find()->where('role', 'admin')->explain(analyze: true);
 ```
+
+### Model Generator
+
+Generate Model files directly from your database schema — no boilerplate by
+hand:
+
+```bash
+# Generate a single model
+vendor/bin/fliq make:model User --config=config/db.php
+
+# Generate all models at once
+vendor/bin/fliq make:model --all --config=config/db.php
+```
+
+Or use it in PHP code:
+
+```php
+use Simsoft\DB\Generator\ModelGenerator;
+
+ModelGenerator::fromTable('user')->namespace('App\\Models')->generate();
+ModelGenerator::generateAll(namespace: 'App\\Models');
+```
+
+The generator introspects your tables and creates models with `$connection`,
+`$table`, `$fillable`, `$casts`, PHPDoc properties, and auto-detected traits (
+`SoftDeletes`, `Timestamps`).
+
+### Observer Generator
+
+Generate Observer classes to organize your model lifecycle logic:
+
+```bash
+# Generate an observer with all lifecycle events
+vendor/bin/fliq make:observer User
+
+# Only specific events
+vendor/bin/fliq make:observer Order --events=creating,updating,deleting
+```
+
+Or use it in PHP code:
+
+```php
+use Simsoft\DB\Generator\ObserverGenerator;
+
+ObserverGenerator::forModel('User')->generate();
+```
+
+The observer validates that the Model exists before generating, and creates
+method stubs for events like `creating`, `updated`, `deleting`, etc.
 
 ## Documentation
 
@@ -300,6 +372,12 @@ IndexAdvisor::suggestSQL();
 6. [Collections](docs/06-COLLECTIONS.md) — Lazy iteration, filter, map, reduce, indexBy, groupBy, batch processing
 7. [Comparison](docs/07-COMPARISON.md) — Feature comparison with Eloquent, Doctrine, Yii3, Cycle, Propel
 8. [Cheatsheet](docs/08-CHEATSHEET.md) — Quick reference for all common operations
+9. [PostgreSQL Guide](docs/10-POSTGRESQL.md) — PG-specific features, production
+   guidance, PgBouncer
+10. [Model Generator](docs/11-MODEL-GENERATOR.md) — CLI tool to scaffold models
+    from database tables
+11. [Observer Generator](docs/12-OBSERVER-GENERATOR.md) — CLI tool to scaffold
+    observer classes for models
 
 ## License
 

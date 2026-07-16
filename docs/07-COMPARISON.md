@@ -8,34 +8,34 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 
 ### Query Building (no DB execution, 10,000 iterations)
 
-| Operation | Time per query | Memory |
-|-----------|:--------------:|:------:|
-| Simple SELECT (`where('status', 1)`) | 6.9μs | 448 bytes/object |
-| Complex WHERE (5 conditions) | 9.1μs | — |
-| JOIN + GROUP BY + HAVING + ORDER BY + LIMIT | 9.3μs | — |
+| Operation                                   | Time per query |      Memory      |
+|---------------------------------------------|:--------------:|:----------------:|
+| Simple SELECT (`where('status', 1)`)        |     6.9μs      | 448 bytes/object |
+| Complex WHERE (5 conditions)                |     9.1μs      |        —         |
+| JOIN + GROUP BY + HAVING + ORDER BY + LIMIT |     9.3μs      |        —         |
 
 ### Database Execution (MySQL, 1,000 iterations)
 
-| Operation | Time per query |
-|-----------|:--------------:|
-| `findByPk(1)` | 1.09ms |
-| `find()->where()->first()` | 1.15ms |
-| `find()->get()->all()` (10 rows) | 1.26ms |
+| Operation                        | Time per query |
+|----------------------------------|:--------------:|
+| `findByPk(1)`                    |     1.09ms     |
+| `find()->where()->first()`       |     1.15ms     |
+| `find()->get()->all()` (10 rows) |     1.26ms     |
 
 ### Model Hydration
 
-| Operation | Time | Memory |
-|-----------|:----:|:------:|
-| 1,000 models hydrated | 0.67ms total | 543KB |
-| Per model | 0.67μs | 536 bytes |
+| Operation             |     Time     |  Memory   |
+|-----------------------|:------------:|:---------:|
+| 1,000 models hydrated | 0.67ms total |   543KB   |
+| Per model             |    0.67μs    | 536 bytes |
 
 ### Memory Footprint
 
-| Object | Size |
-|--------|:----:|
-| ActiveQuery instance | 448 bytes |
-| Model instance | 536 bytes |
-| Peak memory (full benchmark) | 6 MB |
+| Object                       |   Size    |
+|------------------------------|:---------:|
+| ActiveQuery instance         | 448 bytes |
+| Model instance               | 536 bytes |
+| Peak memory (full benchmark) |   6 MB    |
 
 ## Performance
 
@@ -62,14 +62,17 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 
 ## Query Builder Features
 
-| Feature                         |  FLIQ  | Eloquent | Doctrine | Yii3 AR | Cycle ORM | Propel ORM |
-|---------------------------------|:------:|:--------:|:--------:|:-------:|:---------:|:----------:|
-| Fluent query builder            |   ✅    |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
-| Scopes / when / unless          |   ✅    |    ✅     |    ❌     | Partial |     ❌     |  Partial   |
-| whereAny / whereAll / whereNone |   ✅    |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
-| Upsert                          |   ✅    |    ✅     |    ❌     |    ❌    |     ❌     |     ✅      |
-| Sub-queries                     |   ✅    |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
-| Unions                          |   ✅    |    ✅     |    ✅     |    ✅    |     ✅     |     ❌      |
+| Feature                           | FLIQ | Eloquent | Doctrine | Yii3 AR | Cycle ORM | Propel ORM |
+|-----------------------------------|:----:|:--------:|:--------:|:-------:|:---------:|:----------:|
+| Fluent query builder              |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
+| Scopes / when / unless            |  ✅   |    ✅     |    ❌     | Partial |     ❌     |  Partial   |
+| whereAny / whereAll / whereNone   |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
+| Upsert                            |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ✅      |
+| Sub-queries                       |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
+| Unions                            |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ❌      |
+| Row-level locking (FOR UPDATE)    |  ✅   |    ✅     |    ✅     |    ❌    |     ✅     |     ❌      |
+| RETURNING on INSERT/UPDATE/DELETE |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
+| Fluent CASE WHEN builder          |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
 
 ## JSON Support
 
@@ -78,6 +81,7 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 | JSON where (auto -> notation) |  ✅   |    ✅     |    ❌     |    ❌    |  Partial  |     ❌      |
 | JSON contains / length / key  |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
 | JSON column casts             |  ✅   |    ✅     |    ✅     |    ❌    |     ✅     |     ❌      |
+| Array column queries (PG)     |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
 
 ## Active Record Features
 
@@ -96,10 +100,16 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 
 | Feature                   | FLIQ | Eloquent | Doctrine | Yii3 AR | Cycle ORM | Propel ORM |
 |---------------------------|:----:|:--------:|:--------:|:-------:|:---------:|:----------:|
-| Full-text search (MATCH)  |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
+| Full-text search          |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
+| Full-text search (PG FTS) |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
 | Cursor (unbuffered)       |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
 | N+1 query detection       |  ✅   | Package  |    ❌     |    ❌    |     ❌     |     ❌      |
 | Query logging with timing |  ✅   |    ✅     |    ✅     |    ❌    |     ❌     |     ❌      |
+| Advisory locks (PG)       |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
+| LISTEN / NOTIFY (PG)      |  ✅   |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
+| EXPLAIN / query plans     |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
+| Model generator (CLI)     |  ✅   |    ✅     |    ✅     |    ✅    |     ✅     |     ✅      |
+| Observer generator (CLI)  |  ✅   |    ✅     |    ❌     |    ❌    |     ❌     |     ❌      |
 
 ## Summary
 
