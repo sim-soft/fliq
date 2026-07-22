@@ -17,15 +17,8 @@ use Simsoft\DB\Builder\Update;
  *       use SoftDeletes;
  *   }
  *
- * The trait overrides find() to auto-exclude soft-deleted records.
- * If your model needs a custom find(), override it and call softDeleteScope():
- *
- *   public static function find(): ActiveQuery {
- *       $query = new ActiveQuery(static::class);
- *       (new static())->softDeleteScope($query);
- *       // ...your custom logic...
- *       return $query;
- *   }
+ * The soft delete scope is applied automatically by Model::find().
+ * Works with custom query classes (scope approach) without any extra configuration.
  */
 trait SoftDeletes
 {
@@ -146,29 +139,13 @@ trait SoftDeletes
     }
 
     /**
-     * Override find() to auto-exclude soft-deleted records.
-     *
-     * Also applies any registered global scopes.
-     *
-     * @return ActiveQuery
-     */
-    public static function find(): ActiveQuery
-    {
-        $model = new static();
-        $query = new ActiveQuery(static::class);
-        $model->softDeleteScope($query);
-        static::applyGlobalScopes($query);
-        return $query;
-    }
-
-    /**
      * Get a query that includes soft-deleted records.
      *
      * @return ActiveQuery
      */
     public static function withTrashed(): ActiveQuery
     {
-        return new ActiveQuery(static::class);
+        return new ActiveQuery(static::class, withScopes: false);
     }
 
     /**
@@ -179,7 +156,7 @@ trait SoftDeletes
     public static function onlyTrashed(): ActiveQuery
     {
         $model = new static();
-        $query = new ActiveQuery(static::class);
+        $query = new ActiveQuery(static::class, withScopes: false);
         $query->notNull($model->getDeletedAtColumn());
         return $query;
     }

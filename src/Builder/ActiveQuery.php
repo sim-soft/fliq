@@ -86,11 +86,15 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * Constructor.
      *
      * @param string|Model|null $modelClass The model class
+     * @param bool $withScopes Whether to apply model scopes (soft delete, global).
      */
-    public function __construct(protected string|null|Model $modelClass = null)
+    public function __construct(protected string|null|Model $modelClass = null, bool $withScopes = true)
     {
         if ($this->modelClass instanceof Model) {
             $this->from($this->modelClass);
+            if ($withScopes) {
+                $this->applyModelScopes($this->modelClass);
+            }
             return;
         }
 
@@ -98,7 +102,25 @@ class ActiveQuery implements Executable, Updatable, Deletable
             /** @var Model $instance */
             $instance = new $this->modelClass();
             $this->from($instance);
+            if ($withScopes) {
+                $this->applyModelScopes($instance);
+            }
         }
+    }
+
+    /**
+     * Apply soft delete scope and global scopes from the model.
+     *
+     * @param Model $model The model instance.
+     * @return void
+     */
+    private function applyModelScopes(Model $model): void
+    {
+        if (method_exists($model, 'softDeleteScope')) {
+            $model->softDeleteScope($this);
+        }
+
+        $model::applyGlobalScopes($this);
     }
 
     /**
