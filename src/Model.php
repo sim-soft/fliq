@@ -417,7 +417,7 @@ abstract class Model implements ArrayAccess
      * @param ActiveQuery $query The query to apply scopes to.
      * @return void
      */
-    protected static function applyGlobalScopes(ActiveQuery $query): void
+    public static function applyGlobalScopes(ActiveQuery $query): void
     {
         foreach (static::$globalScopes[static::class] ?? [] as $scope) {
             $scope($query);
@@ -431,7 +431,7 @@ abstract class Model implements ArrayAccess
      */
     public static function withoutGlobalScopes(): ActiveQuery
     {
-        return new ActiveQuery(get_called_class());
+        return new ActiveQuery(get_called_class(), withScopes: false);
     }
 
     /**
@@ -442,7 +442,12 @@ abstract class Model implements ArrayAccess
      */
     public static function withoutGlobalScope(string $name): ActiveQuery
     {
-        $query = new ActiveQuery(get_called_class());
+        $query = new ActiveQuery(get_called_class(), withScopes: false);
+
+        // Apply soft delete scope still
+        static::applySoftDeleteScope($query);
+
+        // Apply all global scopes except the named one
         foreach (static::$globalScopes[static::class] ?? [] as $scopeName => $scope) {
             if ($scopeName !== $name) {
                 $scope($query);
@@ -454,13 +459,27 @@ abstract class Model implements ArrayAccess
     /**
      * Get query object.
      *
+     * Scopes (soft delete, global) are applied automatically by ActiveQuery constructor.
+     *
      * @return ActiveQuery
      */
     public static function find(): ActiveQuery
     {
-        $query = new ActiveQuery(get_called_class());
-        static::applyGlobalScopes($query);
-        return $query;
+        return new ActiveQuery(get_called_class());
+    }
+
+    /**
+     * Apply soft delete scope if the model uses SoftDeletes trait.
+     *
+     * @param ActiveQuery $query The query to scope.
+     * @return void
+     */
+    public static function applySoftDeleteScope(ActiveQuery $query): void
+    {
+        $model = new static();
+        if (method_exists($model, 'softDeleteScope')) {
+            $model->softDeleteScope($query);
+        }
     }
 
     /**
