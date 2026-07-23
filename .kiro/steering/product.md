@@ -27,9 +27,13 @@ simsoft/fliq (FLIQ — **F**ast, **L**ightweight, **I**ndependent **Q**uery Buil
 
 ## Philosophy
 
-- Performance first: minimal allocations, direct SQL compilation
-- Simplicity over magic: explicit API, no hidden queries
+- **Secure by default**: prepared statements only, identifier validation, no raw
+  interpolation paths
+- **High performance**: minimal allocations, direct SQL compilation, zero
+  overhead abstractions
+- **Ease of use**: fluent chainable API, sensible defaults, minimal boilerplate
+- **Easy to learn**: Eloquent-familiar naming, consistent patterns,
+  comprehensive docs with SQL output shown
 - Standalone: no framework coupling
 - SOLID + GRASP, trait composition
 - Model encapsulation: attributes/query logic inside models only
-- Prepared statements only — never interpolate user values
