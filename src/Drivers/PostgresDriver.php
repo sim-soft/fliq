@@ -80,9 +80,11 @@ class PostgresDriver extends Driver
                 $options
             );
 
-            // Set charset and search path
-            $this->connection->exec("SET NAMES '{$this->config['charset']}'");
-            $this->connection->exec("SET search_path TO '{$this->config['schema']}'");
+            // Set charset and search path (validated to prevent injection)
+            $charset = preg_replace('/[^a-zA-Z0-9_]/', '', (string)$this->config['charset']);
+            $schema = preg_replace('/[^a-zA-Z0-9_]/', '', (string)$this->config['schema']);
+            $this->connection->exec("SET NAMES '$charset'");
+            $this->connection->exec("SET search_path TO '$schema'");
         } catch (PDOException $exception) {
             $this->addError($exception->getMessage());
         }
@@ -458,8 +460,9 @@ class PostgresDriver extends Driver
             return $conn->exec("NOTIFY $identifier") !== false;
         }
 
-        $escaped = str_replace("'", "''", $payload);
-        return $conn->exec("NOTIFY $identifier, '$escaped'") !== false;
+        // Use a prepared statement to safely bind the payload and prevent injection
+        $stmt = $conn->prepare("SELECT pg_notify(?, ?)");
+        return $stmt->execute([$identifier, $payload]);
     }
 
     /**

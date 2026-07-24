@@ -63,7 +63,11 @@ class PDODriver extends Driver
                 PDO::ATTR_EMULATE_PREPARES => false,
                 PDO::ATTR_STRINGIFY_FETCHES => false,
                 PDO::ATTR_TIMEOUT => (int)$this->config['timeout'],
-                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES '{$this->config['charset']}' COLLATE '{$this->config['collation']}'",
+                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES '"
+                    . preg_replace('/[^a-zA-Z0-9_]/', '', (string)$this->config['charset'])
+                    . "' COLLATE '"
+                    . preg_replace('/[^a-zA-Z0-9_]/', '', (string)$this->config['collation'])
+                    . "'",
             ];
 
             if (!empty($this->config['persistent'])) {
