@@ -417,6 +417,15 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $foreignKey = (string)array_key_first($on);
         $localKey = (string)current($on);
 
+        // Strip table/alias prefix from foreign key if it matches the join table or alias
+        // e.g., ['s.supp_idx' => 'supp_idx'] with alias 's' → foreignKey becomes 'supp_idx'
+        if (str_contains($foreignKey, '.')) {
+            $fkParts = explode('.', $foreignKey, 2);
+            if ($fkParts[0] === $table || $fkParts[0] === $alias) {
+                $foreignKey = $fkParts[1];
+            }
+        }
+
         if ($table === $alias) {
             $quotedTable = $this->quote($table);
             $this->joins[$table] = "$join $quotedTable ON $quotedTable." . $this->quote($foreignKey) . " = " . $this->queryAttribute($localKey);

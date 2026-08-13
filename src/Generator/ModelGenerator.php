@@ -28,6 +28,9 @@ class ModelGenerator
     /** @var bool Whether to overwrite existing files */
     private bool $force = false;
 
+    /** @var string|null Custom class name (overrides table-derived name) */
+    private ?string $customClassName = null;
+
     /** @var array<int, string> Tables to exclude from generateAll */
     private static array $excludedTables = [];
 
@@ -92,6 +95,18 @@ class ModelGenerator
     }
 
     /**
+     * Set a custom class name (overrides the table-derived name).
+     *
+     * @param string $className The desired class name.
+     * @return static
+     */
+    public function className(string $className): static
+    {
+        $this->customClassName = $className;
+        return $this;
+    }
+
+    /**
      * Set tables to exclude from generateAll.
      *
      * @param array<int, string> $tables Table names to skip.
@@ -109,7 +124,7 @@ class ModelGenerator
      */
     public function generate(): string|false
     {
-        $className = $this->tableToClassName($this->table);
+        $className = $this->customClassName ?? $this->tableToClassName($this->table);
         $filePath = $this->outputDir . DIRECTORY_SEPARATOR . $className . '.php';
 
         if (!$this->force && file_exists($filePath)) {
@@ -210,7 +225,7 @@ class ModelGenerator
      */
     public function preview(): string
     {
-        $className = $this->tableToClassName($this->table);
+        $className = $this->customClassName ?? $this->tableToClassName($this->table);
         $columns = $this->introspectColumns();
 
         return $this->buildClassCode($className, $columns);

@@ -106,6 +106,7 @@ function handleMakeModel(?string $className, array $options, bool $verbose): nev
     }
 
     $generator = ModelGenerator::fromTable($table, $connection)
+            ->className($className)
             ->namespace($namespace)
             ->outputDir($outputDir)
             ->force($force);
