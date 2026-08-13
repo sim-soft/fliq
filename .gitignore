@@ -82,6 +82,4 @@ nbproject/
 .kiro/sessions/
 .kiro/history/
 /.vscode/settings.json
-/phpstan_output.txt
-/test_output.txt
-/test_result.txt
+/*.txt

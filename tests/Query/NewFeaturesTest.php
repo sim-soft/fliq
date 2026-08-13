@@ -112,6 +112,27 @@ class NewFeaturesTest extends TestCase
                 'SELECT `u`.* FROM `user` `u` INNER JOIN `profile` AS `p` ON `p`.`user_id` = `u`.`id` WHERE `profile`.`verified` = ?',
                 [true],
             ],
+            'join on key with alias prefix stripped' => [
+                (new ActiveQuery())
+                    ->from('user u')
+                    ->leftJoin('profile p', ['p.user_id' => 'id']),
+                'SELECT `u`.* FROM `user` `u` LEFT JOIN `profile` AS `p` ON `p`.`user_id` = `u`.`id`',
+                null,
+            ],
+            'join on key with table name prefix stripped' => [
+                (new ActiveQuery())
+                    ->from('user u')
+                    ->leftJoin('profile p', ['profile.user_id' => 'id']),
+                'SELECT `u`.* FROM `user` `u` LEFT JOIN `profile` AS `p` ON `p`.`user_id` = `u`.`id`',
+                null,
+            ],
+            'join on key without alias (no prefix to strip)' => [
+                (new ActiveQuery())
+                    ->from('user')
+                    ->leftJoin('profile', ['profile.user_id' => 'id']),
+                'SELECT `user`.* FROM `user` LEFT JOIN `profile` ON `profile`.`user_id` = `user`.`id`',
+                null,
+            ],
             'where null auto-detection' => [
                 (new ActiveQuery())
                     ->from('user')
