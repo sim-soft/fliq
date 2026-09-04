@@ -2,7 +2,7 @@
 
 > **F**ast, **L**ightweight, **I**ndependent **Q**uery Builder
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/simsoft/fliq.svg)](https://packagist.org/packages/simsoft/fliq)
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/simsoft/fliq.svg?label=Packagist)](https://packagist.org/packages/simsoft/fliq)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sim-soft/fliq/blob/main/LICENSE)
 [![PHP 8.4+](https://img.shields.io/badge/PHP-8.4%2B-8892BF.svg)](https://www.php.net/releases/8.4/en.php)
 [![PHPStan Level 8](https://img.shields.io/badge/PHPStan-Level%208-brightgreen.svg)](https://phpstan.org/)
