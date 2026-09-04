@@ -3,6 +3,7 @@
 namespace Simsoft\DB\Builder;
 
 use Closure;
+use InvalidArgumentException;
 use Simsoft\DB\Builder\Clauses\Clause;
 use Simsoft\DB\Builder\Conditions\BetweenDateCondition;
 use Simsoft\DB\Builder\Conditions\Condition;
@@ -417,7 +418,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $foreignKey = (string)array_key_first($on);
         $localKey = (string)current($on);
 
-        // Strip table/alias prefix from foreign key if it matches the join table or alias
+        // Strip a table / alias prefix from a foreign key if it matches the join table or alias
         // e.g., ['s.supp_idx' => 'supp_idx'] with alias 's' → foreignKey becomes 'supp_idx'
         if (str_contains($foreignKey, '.')) {
             $fkParts = explode('.', $foreignKey, 2);
@@ -522,7 +523,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Select statement.
      *
-     * @param string|Raw ...$attributes the list of attribute value to be select
+     * @param string|Raw|Clause ...$attributes
      * @return static
      */
     public function select(string|Raw|Clause ...$attributes): static
@@ -548,7 +549,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Select distinct statement
      *
-     * @param string|Raw ...$attributes List of SELECT attributes
+     * @param string|Raw|Clause ...$attributes
      * @return static
      */
     public function selectDistinct(string|Raw|Clause ...$attributes): static
@@ -590,6 +591,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         [$operator, $value] = $this->normaliseOperatorValue($operator, $value);
+        $operator = $this->validateOperator((string)$operator);
 
         // Fast path: a simple string attribute with scalar value (the most common case)
         // Avoids Condition object allocation entirely
@@ -966,6 +968,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         bool $negate,
         string $logicalOperator
     ): static {
+        $operator = $this->validateOperator($operator);
         $parts = [];
         foreach ($columns as $column) {
             $parts[] = $this->queryAttribute($column) . " $operator ?";
@@ -1606,7 +1609,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $condition = (new Condition($attribute, $value))
-            ->operator($operator ?? '=')
+            ->operator($this->validateOperator($operator ?? '='))
             ->setPlaceHolder($this->getPlaceHolder());
 
         // Eagerly build and collect binds
@@ -1654,7 +1657,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         if (is_array($attribute)) {
             foreach ($attribute as $col => $dir) {
-                $this->orderBys[] = $this->queryAttribute($col) . ' ' . strtoupper($dir);
+                $this->orderBys[] = $this->queryAttribute($col) . ' ' . $this->normaliseDirection($dir);
             }
             return $this;
         }
@@ -1664,13 +1667,23 @@ class ActiveQuery implements Executable, Updatable, Deletable
             return $this;
         }
 
-        $dir = strtoupper($direction);
-        if ($dir !== 'ASC' && $dir !== 'DESC') {
-            $dir = 'ASC';
-        }
-
-        $this->orderBys[] = $this->queryAttribute($attribute) . ' ' . $dir;
+        $this->orderBys[] = $this->queryAttribute($attribute) . ' ' . $this->normaliseDirection($direction);
         return $this;
+    }
+
+    /**
+     * Normalize a sort direction to a safe keyword.
+     *
+     * Only ASC and DESC are permitted; anything else falls back to ASC. This
+     * prevents arbitrary SQL from reaching the ORDER BY clause when the
+     * direction originates from user input (e.g., a `?sort=` parameter).
+     *
+     * @param string $direction The requested sort direction.
+     * @return string Either 'ASC' or 'DESC'.
+     */
+    private function normaliseDirection(string $direction): string
+    {
+        return strtoupper(trim($direction)) === 'DESC' ? 'DESC' : 'ASC';
     }
 
     /**
@@ -1689,12 +1702,17 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *
      * @param int $max the maximum records to be returned
      * @param null|int $offset the offset value
+     * @throws InvalidArgumentException If the limit or offset is negative.
      */
     public function limit(int $max, ?int $offset = null): static
     {
+        if ($max < 0) {
+            throw new InvalidArgumentException("Limit must not be negative, $max given.");
+        }
+
         $this->limit = $max;
         if ($offset) {
-            $this->offset = $offset;
+            $this->offset = $this->validateOffset($offset);
         }
 
         return $this;
@@ -1714,23 +1732,45 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * Offset statement.
      *
      * @param int $value the offset value
+     * @throws InvalidArgumentException If the offset is negative.
      */
     public function offset(int $value): static
     {
-        $this->offset = $value;
+        $this->offset = $this->validateOffset($value);
 
         return $this;
     }
 
     /**
+     * Validate an offset value.
+     *
+     * @param int $offset The offset to validate.
+     * @return int The validated offset.
+     * @throws InvalidArgumentException If the offset is negative.
+     */
+    private function validateOffset(int $offset): int
+    {
+        if ($offset < 0) {
+            throw new InvalidArgumentException("Offset must not be negative, $offset given.");
+        }
+
+        return $offset;
+    }
+
+    /**
      * Limit per page statement.
      *
-     * @param int $currentPage the current page
+     * @param int $currentPage the current page (1-based)
      * @param int $maxPerPage the max records returned per current page
      * @return static
+     * @throws InvalidArgumentException If the page number is below 1.
      */
     public function page(int $currentPage, int $maxPerPage = 50): static
     {
+        if ($currentPage < 1) {
+            throw new InvalidArgumentException("Page must be 1 or greater, $currentPage given.");
+        }
+
         return $this->limit($maxPerPage, --$currentPage * $maxPerPage);
     }
 
@@ -2197,6 +2237,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $col = $this->queryAttribute($column);
+        $operator = $this->validateOperator($operator);
         $sql = $this->getGrammar()->dateExtract($col) . " $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
         return $this;
@@ -2234,6 +2275,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $col = $this->queryAttribute($column);
+        $operator = $this->validateOperator((string)$operator);
         $sql = $this->getGrammar()->monthExtract($col) . " $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
         return $this;
@@ -2271,6 +2313,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $col = $this->queryAttribute($column);
+        $operator = $this->validateOperator((string)$operator);
         $sql = $this->getGrammar()->yearExtract($col) . " $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
         return $this;
@@ -2308,6 +2351,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $col = $this->queryAttribute($column);
+        $operator = $this->validateOperator($operator);
         $sql = $this->getGrammar()->timeExtract($col) . " $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
         return $this;
@@ -2337,6 +2381,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function whereColumn(string $first, string $operator, string $second, string $logicalOperator = 'AND'): static
     {
+        $operator = $this->validateOperator($operator);
         $sql = $this->queryAttribute($first) . " $operator " . $this->queryAttribute($second);
 
         if ($this->conditions && end($this->conditions) !== '(') {
@@ -2359,6 +2404,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function whereJson(string $column, string $operator, mixed $value, string $logicalOperator = 'AND'): static
     {
         [$col, $path] = $this->parseJsonPath($column);
+        $operator = $this->validateOperator($operator);
         $extract = $this->getGrammar()->jsonExtract($this->qualifyJsonColumn($col), $path);
         $sql = "$extract $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
@@ -2578,6 +2624,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function whereJsonLength(string $column, string $operator, int $value, string $logicalOperator = 'AND'): static
     {
         [$col, $path] = $this->parseJsonPath($column);
+        $operator = $this->validateOperator($operator);
         $lengthExpr = $this->getGrammar()->jsonLength($this->qualifyJsonColumn($col), $path);
         $sql = "$lengthExpr $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
@@ -2792,7 +2839,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * Check if an array column contains a value.
      *
      * PostgreSQL: column @> ARRAY[?]::type[]
-     * MySQL fallback: JSON_CONTAINS(column, ?, '$')
+     * MySQL fallback: JSON_CONTAINS(column, '$')
      *
      * @param string $column The array column name.
      * @param mixed $value The value to check for.
@@ -2824,8 +2871,8 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Check if an array column overlaps with given values (has any match).
      *
-     * PostgreSQL: column && ARRAY[?, ?]::type[]
-     * MySQL fallback: JSON_OVERLAPS(column, JSON_ARRAY(?, ?))
+     * PostgreSQL: column && ARRAY[?,?]::type[]
+     * MySQL fallback: JSON_OVERLAPS(column, JSON_ARRAY(?,?))
      *
      * @param string $column The array column name.
      * @param array<int, mixed> $values The values to check for overlap.

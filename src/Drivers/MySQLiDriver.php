@@ -182,7 +182,9 @@ class MySQLiDriver extends Driver
         }
 
         try {
-            return $this->connection->ping();
+            // mysqli::ping() is deprecated as of PHP 8.4 — a trivial query
+            // checks liveness the same way, matching the other drivers.
+            return $this->connection->query('SELECT 1') !== false;
         } catch (\Throwable) {
             return false;
         }

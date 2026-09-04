@@ -227,6 +227,7 @@ class CaseExpression extends Clause
     private function addWhen(string $column, string $operator, mixed $value): void
     {
         $qualifiedCol = $this->queryAttribute($column);
+        $operator = $this->validateOperator($operator);
         $placeholder = $this->getPlaceHolder() ?: '?';
         $this->pendingCondition = "$qualifiedCol $operator $placeholder";
         $this->pendingBinds = [$value];
@@ -244,6 +245,7 @@ class CaseExpression extends Clause
     {
         $leftCol = $this->queryAttribute($column);
         $rightCol = $this->queryAttribute($otherColumn);
+        $operator = $this->validateOperator($operator);
         $this->pendingCondition = "$leftCol $operator $rightCol";
         $this->pendingBinds = [];
     }

@@ -22,7 +22,7 @@ class Condition extends Clause
      */
     public function operator(string $operator): self
     {
-        $this->operator = $operator;
+        $this->operator = $this->validateOperator($operator);
         return $this;
     }
 
@@ -65,7 +65,7 @@ class Condition extends Clause
         $sql = [];
         if (array_is_list($this->attribute)) {
             foreach ($this->attribute as [$field, $operator, $value]) {
-                $upperOp = strtoupper($operator);
+                $upperOp = $this->validateOperator($operator);
                 if (in_array($upperOp, ['IN', 'NOT IN'])) {
                     $sql[] = "{$this->queryAttribute($field)} $upperOp ("
                         . implode(',', array_fill(0, count($value), $this->getPlaceHolder()))

@@ -65,6 +65,17 @@ User::find()->active()->admins()->get();
 | Cursor          | `User::find()->cursor()`                            |
 | Chunk by ID     | `->chunkById(100, fn($batch) => ...)`               |
 
+### Rules worth knowing
+
+| Rule                                                                      | If broken                    |
+|---------------------------------------------------------------------------|------------------------------|
+| Operators must be on the [whitelist](02-QUERY-BUILDER.md#which-operators-can-i-use) (`=`, `LIKE`, `IN`, `BETWEEN`, …) | `InvalidArgumentException`   |
+| `limit()` / `offset()` must not be negative                               | `InvalidArgumentException`   |
+| `page()` starts at `1`, not `0`                                           | `InvalidArgumentException`   |
+| Sort direction is `ASC` or `DESC`                                         | Silently falls back to `ASC` |
+
+Clamp anything that comes from a URL: `$page = max(1, (int)($_GET['page'] ?? 1));`
+
 ## Conditions
 
 | Task              | Code                                               |

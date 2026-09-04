@@ -204,7 +204,9 @@ echo $user->name; // original value from DB
 
 ## Mass Assignment Protection
 
-The `$fillable` array defines which attributes can be mass-assigned via `fill()`. The `$guarded` array defines attributes that cannot be mass-assigned (primary keys are always guarded).
+The `$fillable` array defines which attributes can be mass-assigned. The
+`$guarded` array defines attributes that cannot be mass-assigned (primary keys
+are always guarded).
 
 ```php
 class User extends Model
@@ -218,6 +220,27 @@ class User extends Model
     protected array $guarded = ['role', 'is_admin'];
 }
 ```
+
+These rules are applied by the constructor, `fill()`, and `update()` — so
+passing a
+request payload straight into any of them is safe:
+
+```php
+/* 'is_admin' is guarded and is silently dropped */
+$user->update($_POST);
+```
+
+Direct assignment is *not* mass assignment. Attributes you set yourself are
+trusted, which is how you deliberately write a guarded column:
+
+```php
+$user->is_admin = true;  // trusted — explicit in your code
+$user->save();
+```
+
+> **Warning:** `updateAttributes()`, `updateAll()`, and `updateBatch()` bypass
+> these rules and write every attribute given to them. Never hand them
+> unvalidated external input.
 
 ## Composite Primary Keys
 
@@ -436,16 +459,20 @@ Use hooks for model internals. Use events for app-level concerns.
 
 > **Warning:** The following methods bypass the model lifecycle entirely. No events, hooks, or dirty tracking will run.
 
-| Method                     | What it does                     | Skips                                     |
-|----------------------------|----------------------------------|-------------------------------------------|
-| `updateAttributes([...])`  | Direct UPDATE on a single record | Events, hooks, dirty tracking, validation |
-| `updateAll([...], $query)` | Bulk UPDATE on multiple records  | Events, hooks, dirty tracking, validation |
-| `updateCounter('col', 1)`  | Atomic increment/decrement       | Events, hooks, dirty tracking, validation |
-| `deleteAll($condition)`    | Bulk DELETE                      | Events, hooks                             |
-| `insertBatch([...])`       | Bulk INSERT                      | Events, hooks, dirty tracking, validation |
-| `updateBatch([...])`       | Bulk CASE WHEN UPDATE            | Events, hooks, dirty tracking, validation |
+| Method                     | What it does                     | Skips                                                                     |
+|----------------------------|----------------------------------|---------------------------------------------------------------------------|
+| `updateAttributes([...])`  | Direct UPDATE on a single record | Events, hooks, dirty tracking, validation, **mass assignment protection** |
+| `updateAll([...], $query)` | Bulk UPDATE on multiple records  | Events, hooks, dirty tracking, validation, **mass assignment protection** |
+| `updateCounter('col', 1)`  | Atomic increment/decrement       | Events, hooks, dirty tracking, validation                                 |
+| `deleteAll($condition)`    | Bulk DELETE                      | Events, hooks                                                             |
+| `insertBatch([...])`       | Bulk INSERT                      | Events, hooks, dirty tracking, validation, **mass assignment protection** |
+| `updateBatch([...])`       | Bulk CASE WHEN UPDATE            | Events, hooks, dirty tracking, validation, **mass assignment protection** |
 
 Only `save()` and `delete()` fire events. If you need events on bulk operations, iterate and call `save()`/`delete()` on each model individually (at the cost of performance).
+
+The methods marked above write every attribute they are given. Use `save()` or
+`update()` for anything derived from external input — see
+[Mass Assignment Protection](#mass-assignment-protection).
 
 ## Transactions
 
