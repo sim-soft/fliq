@@ -2,6 +2,7 @@
 
 namespace Integration;
 
+use InvalidArgumentException;
 use Models\Order;
 use Models\Post;
 use Models\User;
@@ -228,6 +229,48 @@ class QueryTest extends DatabaseTestCase
         $this->assertCount(3, $page1);
         $this->assertCount(3, $page2);
         $this->assertNotEquals($page1[0]['id'], $page2[0]['id']);
+    }
+
+    #[Test]
+    public function negativeLimitIsRejected(): void
+    {
+        // A negative limit made hasLimit() report "no limit", so Collection
+        // silently paginated and returned the whole table instead of erroring.
+        $this->expectException(InvalidArgumentException::class);
+        User::find()->limit(-5);
+    }
+
+    #[Test]
+    public function negativeOffsetAndInvalidPageAreRejected(): void
+    {
+        $rejections = [
+            'offset' => static fn() => User::find()->limit(5)->offset(-3),
+            'limit offset arg' => static fn() => User::find()->limit(5, -2),
+            'page zero' => static fn() => User::find()->page(0),
+            'page negative' => static fn() => User::find()->page(-1),
+        ];
+
+        foreach ($rejections as $case => $attempt) {
+            try {
+                $attempt();
+                $this->fail("$case was accepted");
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    #[Test]
+    public function validLimitsStillApply(): void
+    {
+        // limit(0) means "no limit" and must not throw
+        $this->assertStringNotContainsString('LIMIT', User::find()->limit(0)->getSQL());
+
+        // An explicit limit is honoured rather than silently paginated
+        $this->assertCount(3, User::find()->limit(3)->get()->all());
+
+        $paged = User::find()->orderBy('id')->page(2, 4)->get()->all();
+        $this->assertCount(4, $paged);
     }
 
     // ------------------------------------------------------------------

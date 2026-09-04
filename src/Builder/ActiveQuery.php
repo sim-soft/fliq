@@ -3,6 +3,7 @@
 namespace Simsoft\DB\Builder;
 
 use Closure;
+use InvalidArgumentException;
 use Simsoft\DB\Builder\Clauses\Clause;
 use Simsoft\DB\Builder\Conditions\BetweenDateCondition;
 use Simsoft\DB\Builder\Conditions\Condition;
@@ -1701,12 +1702,17 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *
      * @param int $max the maximum records to be returned
      * @param null|int $offset the offset value
+     * @throws InvalidArgumentException If the limit or offset is negative.
      */
     public function limit(int $max, ?int $offset = null): static
     {
+        if ($max < 0) {
+            throw new InvalidArgumentException("Limit must not be negative, $max given.");
+        }
+
         $this->limit = $max;
         if ($offset) {
-            $this->offset = $offset;
+            $this->offset = $this->validateOffset($offset);
         }
 
         return $this;
@@ -1726,23 +1732,45 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * Offset statement.
      *
      * @param int $value the offset value
+     * @throws InvalidArgumentException If the offset is negative.
      */
     public function offset(int $value): static
     {
-        $this->offset = $value;
+        $this->offset = $this->validateOffset($value);
 
         return $this;
     }
 
     /**
+     * Validate an offset value.
+     *
+     * @param int $offset The offset to validate.
+     * @return int The validated offset.
+     * @throws InvalidArgumentException If the offset is negative.
+     */
+    private function validateOffset(int $offset): int
+    {
+        if ($offset < 0) {
+            throw new InvalidArgumentException("Offset must not be negative, $offset given.");
+        }
+
+        return $offset;
+    }
+
+    /**
      * Limit per page statement.
      *
-     * @param int $currentPage the current page
+     * @param int $currentPage the current page (1-based)
      * @param int $maxPerPage the max records returned per current page
      * @return static
+     * @throws InvalidArgumentException If the page number is below 1.
      */
     public function page(int $currentPage, int $maxPerPage = 50): static
     {
+        if ($currentPage < 1) {
+            throw new InvalidArgumentException("Page must be 1 or greater, $currentPage given.");
+        }
+
         return $this->limit($maxPerPage, --$currentPage * $maxPerPage);
     }
 

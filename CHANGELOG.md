@@ -28,6 +28,18 @@ All notable changes to `simsoft/fliq` are documented here.
   `whereJson()`, `whereJsonLength()`, `whereDate()` / `whereMonth()` /
   `whereYear()` / `whereTime()`, and `CaseExpression::when()` / `whenColumn()`.
 
+**Query Builder**
+
+- **A negative `limit()` silently returned every row** — `hasLimit()` tested
+  `$limit > 0`, so a negative limit reported that no limit was set and
+  `Collection` fell back to paginating the full result set. `limit(-5)` returned
+  the entire table while `getSQL()` displayed `LIMIT -5`. Negative values are now
+  rejected by `limit()` and `offset()`, and `page()` requires a page of 1 or
+  greater (`page(0)` previously computed a negative offset).
+- `mysqli::ping()` is deprecated in PHP 8.4 and emitted a deprecation notice on
+  every reconnect check; `MySQLiDriver::ping()` now issues `SELECT 1`, matching
+  the PDO, PostgreSQL and SQLite drivers.
+
 ### Changed
 
 - `Model::update()` now filters its argument through the mass assignment rules.
@@ -44,6 +56,9 @@ All notable changes to `simsoft/fliq` are documented here.
   `NOT REGEXP` and `RLIKE`. Word operators are case-insensitive, and the
   `where('col', 'value')` shorthand is unaffected. **This is breaking** for code
   passing any other operator — use `Raw` for expressions outside this set.
+- `limit()`, `offset()` and `page()` now throw `InvalidArgumentException` on
+  negative or out-of-range values instead of generating invalid SQL or silently
+  ignoring the limit. `limit(0)` still means "no limit" and is unchanged.
 
 ### Tests
 
@@ -51,6 +66,8 @@ All notable changes to `simsoft/fliq` are documented here.
   valid directions), `update()` mass assignment (guarded attributes stripped,
   directly-assigned attributes preserved), and operator whitelisting (rejection
   across every condition method, and valid comparisons still accepted)
+- 3 query builder tests covering negative `limit()` / `offset()`, invalid
+  `page()` numbers, and valid limits still applying (including `limit(0)`)
 
 ---
 
