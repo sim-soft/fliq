@@ -2,6 +2,7 @@
 
 namespace Integration;
 
+use InvalidArgumentException;
 use Models\User;
 use PHPUnit\Framework\Attributes\Test;
 use Simsoft\DB\Builder\ActiveQuery;
@@ -163,6 +164,60 @@ class SecurityTest extends DatabaseTestCase
         $this->assertStringStartsWith('2020-01-01', (string)$row['deleted_at']);
 
         $reloaded->updateAttributes(['deleted_at' => null]);
+    }
+
+    #[Test]
+    public function comparisonOperatorIsRestrictedToAWhitelist(): void
+    {
+        // The operator is interpolated into SQL and cannot be bound, so an
+        // attacker-supplied operator (e.g., from a ?op= parameter) must be rejected.
+        $this->expectException(InvalidArgumentException::class);
+        User::find()->where('id', 'UNION SELECT', 1)->getSQL();
+    }
+
+    #[Test]
+    public function operatorWhitelistCoversEveryConditionMethod(): void
+    {
+        $attacks = [
+            'having' => static fn() => User::find()->groupBy('id')->having('id', 'UNION SELECT', 1),
+            'whereColumn' => static fn() => User::find()->whereColumn('id', 'UNION SELECT', 'id'),
+            'whereAny' => static fn() => User::find()->whereAny(['id', 'score'], 'UNION SELECT', 1),
+            'whereJson' => static fn() => User::find()->whereJson('meta->a', 'UNION SELECT', 1),
+            'whereDate' => static fn() => User::find()->whereDate('created_at', 'UNION SELECT', '2024-01-01'),
+        ];
+
+        foreach ($attacks as $method => $attack) {
+            try {
+                $attack();
+                $this->fail("$method accepted an invalid operator");
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    #[Test]
+    public function operatorWhitelistStillAllowsValidComparisons(): void
+    {
+        // Shorthand — the value sits in the operator position and must not be rejected
+        $this->assertStringContainsString(
+            '= ?',
+            User::find()->where('username', 'alice')->getSQL()
+        );
+
+        // Symbol and word operators, in either case
+        $this->assertStringContainsString('> ?', User::find()->where('score', '>', 5)->getSQL());
+        $this->assertStringContainsString('LIKE ?', User::find()->where('username', 'like', 'a%')->getSQL());
+
+        // Null comparison still collapses to IS NULL rather than hitting the whitelist
+        $this->assertStringContainsString(
+            'IS NULL',
+            User::find()->where('deleted_at', null)->getSQL()
+        );
+
+        // And a whitelisted operator still returns correct rows
+        $highScorers = User::find()->where('score', '>=', 0)->get()->all();
+        $this->assertNotEmpty($highScorers);
     }
 
     #[Test]

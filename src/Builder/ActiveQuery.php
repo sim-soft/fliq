@@ -590,6 +590,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         [$operator, $value] = $this->normaliseOperatorValue($operator, $value);
+        $operator = $this->validateOperator((string)$operator);
 
         // Fast path: a simple string attribute with scalar value (the most common case)
         // Avoids Condition object allocation entirely
@@ -966,6 +967,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         bool $negate,
         string $logicalOperator
     ): static {
+        $operator = $this->validateOperator($operator);
         $parts = [];
         foreach ($columns as $column) {
             $parts[] = $this->queryAttribute($column) . " $operator ?";
@@ -1606,7 +1608,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $condition = (new Condition($attribute, $value))
-            ->operator($operator ?? '=')
+            ->operator($this->validateOperator($operator ?? '='))
             ->setPlaceHolder($this->getPlaceHolder());
 
         // Eagerly build and collect binds
@@ -2207,6 +2209,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $col = $this->queryAttribute($column);
+        $operator = $this->validateOperator($operator);
         $sql = $this->getGrammar()->dateExtract($col) . " $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
         return $this;
@@ -2244,6 +2247,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $col = $this->queryAttribute($column);
+        $operator = $this->validateOperator((string)$operator);
         $sql = $this->getGrammar()->monthExtract($col) . " $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
         return $this;
@@ -2281,6 +2285,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $col = $this->queryAttribute($column);
+        $operator = $this->validateOperator((string)$operator);
         $sql = $this->getGrammar()->yearExtract($col) . " $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
         return $this;
@@ -2318,6 +2323,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         $col = $this->queryAttribute($column);
+        $operator = $this->validateOperator($operator);
         $sql = $this->getGrammar()->timeExtract($col) . " $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
         return $this;
@@ -2347,6 +2353,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function whereColumn(string $first, string $operator, string $second, string $logicalOperator = 'AND'): static
     {
+        $operator = $this->validateOperator($operator);
         $sql = $this->queryAttribute($first) . " $operator " . $this->queryAttribute($second);
 
         if ($this->conditions && end($this->conditions) !== '(') {
@@ -2369,6 +2376,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function whereJson(string $column, string $operator, mixed $value, string $logicalOperator = 'AND'): static
     {
         [$col, $path] = $this->parseJsonPath($column);
+        $operator = $this->validateOperator($operator);
         $extract = $this->getGrammar()->jsonExtract($this->qualifyJsonColumn($col), $path);
         $sql = "$extract $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);
@@ -2588,6 +2596,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function whereJsonLength(string $column, string $operator, int $value, string $logicalOperator = 'AND'): static
     {
         [$col, $path] = $this->parseJsonPath($column);
+        $operator = $this->validateOperator($operator);
         $lengthExpr = $this->getGrammar()->jsonLength($this->qualifyJsonColumn($col), $path);
         $sql = "$lengthExpr $operator ?";
         $this->addConditionSQL($sql, $value, $logicalOperator);

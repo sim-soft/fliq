@@ -13,6 +13,15 @@ use Simsoft\DB\Grammar\Grammar;
  */
 trait Qualifier
 {
+    /** @var array<int, string> Comparison operators permitted in generated SQL */
+    private const ALLOWED_OPERATORS = [
+        '=', '!=', '<>', '>', '>=', '<', '<=', '<=>',
+        'LIKE', 'NOT LIKE', 'ILIKE', 'NOT ILIKE',
+        'IN', 'NOT IN', 'IS', 'IS NOT',
+        'BETWEEN', 'NOT BETWEEN',
+        'REGEXP', 'NOT REGEXP', 'RLIKE',
+    ];
+
     /** @var null|string The table alias */
     protected ?string $alias = null;
 
@@ -192,6 +201,32 @@ trait Qualifier
                 "Invalid identifier: '$identifier'. Only alphanumeric characters, underscores, and dots are allowed."
             );
         }
+    }
+
+    /**
+     * Validate a comparison operator against a whitelist.
+     *
+     * Operators are interpolated into SQL and cannot be parameter-bound, so an
+     * unvalidated operator is a structural injection vector — e.g., passing
+     * 'UNION SELECT' would replace the comparison entirely.
+     *
+     * @param string $operator The operator to validate.
+     * @return string The normalized (uppercased where applicable) operator.
+     * @throws InvalidArgumentException If the operator is not recognized.
+     */
+    protected function validateOperator(string $operator): string
+    {
+        $normalised = strtoupper(trim($operator));
+
+        // Symbol operators are returned as-is; word operators are uppercased.
+        if (in_array($normalised, self::ALLOWED_OPERATORS, true)) {
+            return $normalised;
+        }
+
+        throw new InvalidArgumentException(
+            "Invalid operator: '$operator'. Allowed operators: "
+            . implode(', ', self::ALLOWED_OPERATORS) . '.'
+        );
     }
 
     /**

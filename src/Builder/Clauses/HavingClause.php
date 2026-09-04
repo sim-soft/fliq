@@ -21,7 +21,7 @@ class HavingClause extends Clause
      */
     public function operator(string $operator): self
     {
-        $this->operator = $operator;
+        $this->operator = $this->validateOperator($operator);
         return $this;
     }
 

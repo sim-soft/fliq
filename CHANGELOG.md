@@ -18,6 +18,15 @@ All notable changes to `simsoft/fliq` are documented here.
   `orderBy(['id' => $_GET['sort']])` could append arbitrary SQL. Both the array
   and scalar forms now normalise to `ASC` / `DESC`, with anything else falling
   back to `ASC`.
+- **Comparison operator injection** — operators are interpolated into SQL rather
+  than bound, and were accepted unvalidated, so an operator taken from request
+  data (`where('id', $_GET['op'], 1)`) could replace the comparison outright:
+  `'UNION SELECT'` turned the comparison into `WHERE id UNION SELECT ?`. Operators are now
+  checked against a whitelist and rejected with `InvalidArgumentException`.
+  This affected every condition method, not just `where()`: `orWhere()`,
+  `having()`, `whereColumn()`, `whereAny()` / `whereAll()` / `whereNone()`,
+  `whereJson()`, `whereJsonLength()`, `whereDate()` / `whereMonth()` /
+  `whereYear()` / `whereTime()`, and `CaseExpression::when()` / `whenColumn()`.
 
 ### Changed
 
@@ -29,12 +38,19 @@ All notable changes to `simsoft/fliq` are documented here.
 - `updateAttributes()`, `updateAll()`, `insertBatch()` and `updateBatch()`
   documented as bypassing mass assignment protection, alongside the lifecycle
   hooks they already skipped. Never pass unvalidated external input to them.
+- Condition methods now accept only whitelisted comparison operators: `=`, `!=`,
+  `<>`, `>`, `>=`, `<`, `<=`, `<=>`, `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`,
+  `IN`, `NOT IN`, `IS`, `IS NOT`, `BETWEEN`, `NOT BETWEEN`, `REGEXP`,
+  `NOT REGEXP` and `RLIKE`. Word operators are case-insensitive, and the
+  `where('col', 'value')` shorthand is unaffected. **This is breaking** for code
+  passing any other operator — use `Raw` for expressions outside this set.
 
 ### Tests
 
-- 4 security tests covering `ORDER BY` direction whitelisting (rejection and
-  valid directions) and `update()` mass assignment (guarded attributes stripped,
-  directly-assigned attributes preserved)
+- 7 security tests covering `ORDER BY` direction whitelisting (rejection and
+  valid directions), `update()` mass assignment (guarded attributes stripped,
+  directly-assigned attributes preserved), and operator whitelisting (rejection
+  across every condition method, and valid comparisons still accepted)
 
 ---
 
