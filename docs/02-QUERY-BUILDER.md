@@ -24,6 +24,7 @@
 - [Sub-queries](#sub-queries)
 - [Collections](#collections)
 - [Raw Expressions](#raw-expressions)
+- [Security: how your values are protected](#security-how-your-values-are-protected)
 - [Date Filters](#date-filters)
 - [Scopes](#scopes)
 - [Conditional Clauses](#conditional-clauses)
@@ -154,6 +155,61 @@ $users = (new ActiveQuery())
     ->on('mysql')
     ->get();
 ```
+
+### Which operators can I use?
+
+The middle argument of `where()` is the **comparison operator**. Only these are
+accepted:
+
+| Kind       | Operators                                            |
+|------------|------------------------------------------------------|
+| Comparison | `=`, `!=`, `<>`, `>`, `>=`, `<`, `<=`, `<=>`         |
+| Pattern    | `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`             |
+| Set        | `IN`, `NOT IN`                                       |
+| Null       | `IS`, `IS NOT`                                       |
+| Range      | `BETWEEN`, `NOT BETWEEN`                             |
+| Regex      | `REGEXP`, `NOT REGEXP`, `RLIKE`                      |
+
+Word operators are case-insensitive — `'like'` and `'LIKE'` both work.
+
+Anything else throws an `InvalidArgumentException`:
+
+```php
+$users = User::find()->where('age', 'BIGGER THAN', 25)->get();
+// InvalidArgumentException: Invalid operator: 'BIGGER THAN'.
+```
+
+**Why the restriction?** Values are sent to the database separately from the
+query (see [Security](#security-how-your-values-are-protected) below), but the
+operator becomes part of the SQL text itself. If your app let a visitor choose
+the operator, an unchecked value could rewrite the whole query:
+
+```php
+/* DANGEROUS if the operator came from a URL like ?op=... */
+$users = User::find()->where('id', $_GET['op'], 1)->get();
+```
+
+FLIQ rejects the bad operator instead of running it. You still need to validate
+the *column* name yourself if that comes from user input.
+
+If you need an expression the list doesn't cover, use `Raw` and bind your
+values with `?`:
+
+```php
+$users = User::find()->where(new Raw('{score} <=> ?', [50]))->get();
+```
+
+### The two-argument shortcut
+
+When you only pass two arguments, FLIQ assumes you meant `=`:
+
+```php
+User::find()->where('status', 'active');   /* WHERE `status` = ? */
+User::find()->where('status', '=', 'active'); /* identical */
+```
+
+So `where('status', 'active')` is *not* treated as the operator `'active'` —
+the shortcut is applied first. Both forms are safe.
 
 ## Null Conditions
 
@@ -1002,6 +1058,53 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
+### Sort direction: `ASC` or `DESC` only
+
+The direction is part of the SQL text, so — like the operator in `where()` — it
+is checked against a short list. `ASC` and `DESC` are accepted in any case
+(`'asc'`, `'Desc'`); **anything else quietly falls back to `ASC`** rather than
+erroring:
+
+```php
+User::find()->orderBy('id', 'DESC');   /* ORDER BY `id` DESC */
+User::find()->orderBy('id', 'desc');   /* ORDER BY `id` DESC — same */
+User::find()->orderBy('id', 'sideways'); /* ORDER BY `id` ASC — fallback */
+```
+
+This makes a sort direction taken straight from a URL safe to pass through:
+
+```php
+/* A visitor sending ?sort=DESC;DROP TABLE user gets plain ASC, not a broken query */
+User::find()->orderBy('created_at', $_GET['sort'] ?? 'ASC')->get();
+```
+
+Both forms are guarded the same way, including the array form
+(`orderBy(['id' => 'DESC'])`). For a sort expression the keywords can't
+express, use `orderByRaw()`.
+
+### Limit and page numbers must make sense
+
+`limit()`, `offset()` and `page()` reject values that can't produce a sensible
+query, so a bad number fails loudly instead of silently returning the wrong
+rows:
+
+```php
+User::find()->limit(10);      /* fine */
+User::find()->limit(0);       /* fine — 0 means "no limit" */
+User::find()->page(1, 25);    /* fine — pages start at 1 */
+
+User::find()->limit(-5);      /* InvalidArgumentException */
+User::find()->offset(-1);     /* InvalidArgumentException */
+User::find()->page(0);        /* InvalidArgumentException — there is no page 0 */
+```
+
+If a page number comes from a URL, clamp it before passing it on:
+
+```php
+$page = max(1, (int)($_GET['page'] ?? 1));
+$users = User::find()->page($page, 25)->get();
+```
+
 ## Join Clauses
 
 Methods: `join()`, `leftJoin()`, `rightJoin()`, `crossJoin()`, `leftOuterJoin()`, `rightOuterJoin()`
@@ -1237,6 +1340,86 @@ $users = User::find()
     ->whereColumn('updated_at', '>', 'created_at')
     ->get();
 ```
+
+---
+
+## Security: how your values are protected
+
+If you're new to SQL injection: the danger is a visitor typing something that
+stops being *data* and starts being *SQL*. The classic example is a login form
+where someone enters `' OR '1'='1` as their username and gets in.
+
+### Values are never pasted into the SQL
+
+FLIQ sends your query and your values to the database **separately**. The query
+contains a `?` where each value goes, and the database treats whatever arrives
+as plain text — never as SQL:
+
+```php
+$username = "' OR '1'='1";   // someone trying their luck
+
+$user = User::find()->where('username', $username)->first();
+/* Sent as: SELECT ... WHERE `username` = ?
+   with the value: ' OR '1'='1
+   Result: no match. Nothing is executed. */
+```
+
+You do **not** need to escape, quote, or sanitise values before passing them
+in. Doing so usually just stores mangled data. This applies to every method
+that takes a value: `where()`, `in()`, `between()`, `like()`, `having()`, the
+JSON methods, and join ON values.
+
+### What isn't a value
+
+Some parts of a query can't be sent separately — they *are* the SQL. FLIQ
+checks these against fixed lists instead:
+
+| Part                        | Protection                                   |
+|-----------------------------|----------------------------------------------|
+| Values                      | Sent separately as `?` — always safe         |
+| Operators (`>`, `LIKE`, …)  | [Whitelist](#which-operators-can-i-use); invalid ones throw |
+| Sort direction              | [`ASC`/`DESC` only](#sort-direction-asc-or-desc-only); anything else becomes `ASC` |
+| Limit / offset / page       | [Must be non-negative](#limit-and-page-numbers-must-make-sense); invalid ones throw |
+| Table names                 | Validated when the table is set              |
+
+### The part you own: column names
+
+Column names are quoted but **not** validated against a list, because they can
+legitimately be `*`, `user.*`, `COUNT(*)`, or a JSON path. So if a column name
+comes from user input, check it yourself against columns you expect:
+
+```php
+/* Don't hand a URL parameter straight to the builder */
+$sort = $_GET['sort'] ?? 'created_at';
+
+/* Do check it against a list you control */
+$allowed = ['created_at', 'username', 'score'];
+$sort = in_array($sort, $allowed, true) ? $sort : 'created_at';
+
+$users = User::find()->orderBy($sort, $_GET['dir'] ?? 'ASC')->get();
+```
+
+The direction needs no such check — it's already restricted to `ASC`/`DESC`.
+
+### `Raw` hands the responsibility back to you
+
+`Raw` and the `*Raw()` methods insert your SQL text as-is. That's the point of
+them — but it means **you** are responsible for anything you interpolate. Bind
+values with `?` and never build the string with user input:
+
+```php
+/* SAFE — the value is bound */
+User::find()->whereRaw('{salary} * 12 > ?', [$_GET['min']])->get();
+
+/* UNSAFE — the value becomes part of the SQL */
+User::find()->whereRaw('{salary} * 12 > ' . $_GET['min'])->get();
+```
+
+### Mass assignment
+
+Writing whole request arrays to a model has its own protections — see
+[Mass Assignment Protection](03-ACTIVE-RECORD.md#mass-assignment-protection)
+in the Active Record guide.
 
 ---
 

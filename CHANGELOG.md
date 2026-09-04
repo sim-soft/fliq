@@ -69,6 +69,16 @@ All notable changes to `simsoft/fliq` are documented here.
 - 3 query builder tests covering negative `limit()` / `offset()`, invalid
   `page()` numbers, and valid limits still applying (including `limit(0)`)
 
+### Documentation
+
+- New "Security: how your values are protected" section in the query builder
+  guide, covering value binding, which parts of a query are validated instead of
+  bound, validating column names that come from user input, and the
+  responsibility that comes with `Raw`.
+- The operator whitelist, the `ASC` / `DESC` fallback and the `limit()` /
+  `offset()` / `page()` constraints are now documented where they are used, in
+  the query builder guide and the cheatsheet.
+
 ---
 
 ## [2.0.6] - 2026-08-13
