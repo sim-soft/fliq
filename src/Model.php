@@ -598,6 +598,28 @@ abstract class Model implements ArrayAccess
      */
     public function fill(array $attributes): static
     {
+        foreach ($this->filterMassAssignable($attributes) as $attribute => $value) {
+            $this->{$attribute} = $value;
+        }
+        return $this;
+    }
+
+    /**
+     * Apply mass assignment rules to an array of attributes.
+     *
+     * Resolves attribute aliases, strips `$guarded` attributes (primary keys
+     * are always guarded), and — when `$fillable` is non-empty — restricts the
+     * result to the fillable whitelist.
+     *
+     * Use this for any attribute array that originates outside the
+     * application (request payloads, API bodies). Attributes set by direct
+     * assignment are trusted and are not subject to these rules.
+     *
+     * @param array<string, mixed> $attributes The attribute => value pairs to filter.
+     * @return array<string, mixed> The attributes safe to assign.
+     */
+    protected function filterMassAssignable(array $attributes): array
+    {
         foreach ($this->aliasAttributes as $alias => $attribute) {
             if (array_key_exists($alias, $attributes)) {
                 $attributes[$attribute] = $attributes[$alias];
@@ -614,10 +636,7 @@ abstract class Model implements ArrayAccess
             $attributes = array_intersect_key($attributes, array_flip($this->fillable));
         }
 
-        foreach ($attributes as $attribute => $value) {
-            $this->{$attribute} = $value;
-        }
-        return $this;
+        return $attributes;
     }
 
     /**
@@ -1056,13 +1075,24 @@ abstract class Model implements ArrayAccess
     /**
      * Perform update operation.
      *
+     * Attributes passed here are treated as mass assignment and are filtered
+     * through `$fillable`/`$guarded`, making `$model->update($request)` safe.
+     * Attributes already set by direct assignment (and therefore tracked as
+     * dirty) are trusted and always included.
+     *
+     * To write a guarded attribute deliberately, assign it directly and call
+     * `save()`, or use `updateAttributes()` to bypass these rules.
+     *
      * @param array<string, mixed> $attributes Attributes to be updated. Array of Attribute => Value pairs.
      * @return bool
      */
     public function update(array $attributes = []): bool
     {
         if ($this->exists()) {
-            $attributes = array_merge(array_intersect_key($this->attributes, $this->dirtyAttributes), $attributes);
+            $attributes = array_merge(
+                array_intersect_key($this->attributes, $this->dirtyAttributes),
+                $this->filterMassAssignable($attributes)
+            );
             if ($attributes === []) { // nothing to update
                 return true;
             }
@@ -1080,7 +1110,11 @@ abstract class Model implements ArrayAccess
     }
 
     /**
-     * Update attributes.
+     * Update attributes directly, bypassing the model lifecycle.
+     *
+     * Security: this method does NOT apply `$fillable`/`$guarded` filtering —
+     * every supplied attribute is written. Never pass unvalidated external
+     * input (e.g. `$_POST`) to it; use `update()` for that.
      *
      * @param array<string, mixed> $attributes Array of Attribute => Value pairs.
      * @return bool

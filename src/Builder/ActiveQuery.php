@@ -417,7 +417,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $foreignKey = (string)array_key_first($on);
         $localKey = (string)current($on);
 
-        // Strip table/alias prefix from foreign key if it matches the join table or alias
+        // Strip a table / alias prefix from a foreign key if it matches the join table or alias
         // e.g., ['s.supp_idx' => 'supp_idx'] with alias 's' → foreignKey becomes 'supp_idx'
         if (str_contains($foreignKey, '.')) {
             $fkParts = explode('.', $foreignKey, 2);
@@ -522,7 +522,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Select statement.
      *
-     * @param string|Raw ...$attributes the list of attribute value to be select
+     * @param string|Raw|Clause ...$attributes
      * @return static
      */
     public function select(string|Raw|Clause ...$attributes): static
@@ -548,7 +548,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Select distinct statement
      *
-     * @param string|Raw ...$attributes List of SELECT attributes
+     * @param string|Raw|Clause ...$attributes
      * @return static
      */
     public function selectDistinct(string|Raw|Clause ...$attributes): static
@@ -1654,7 +1654,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         if (is_array($attribute)) {
             foreach ($attribute as $col => $dir) {
-                $this->orderBys[] = $this->queryAttribute($col) . ' ' . strtoupper($dir);
+                $this->orderBys[] = $this->queryAttribute($col) . ' ' . $this->normaliseDirection($dir);
             }
             return $this;
         }
@@ -1664,13 +1664,23 @@ class ActiveQuery implements Executable, Updatable, Deletable
             return $this;
         }
 
-        $dir = strtoupper($direction);
-        if ($dir !== 'ASC' && $dir !== 'DESC') {
-            $dir = 'ASC';
-        }
-
-        $this->orderBys[] = $this->queryAttribute($attribute) . ' ' . $dir;
+        $this->orderBys[] = $this->queryAttribute($attribute) . ' ' . $this->normaliseDirection($direction);
         return $this;
+    }
+
+    /**
+     * Normalize a sort direction to a safe keyword.
+     *
+     * Only ASC and DESC are permitted; anything else falls back to ASC. This
+     * prevents arbitrary SQL from reaching the ORDER BY clause when the
+     * direction originates from user input (e.g., a `?sort=` parameter).
+     *
+     * @param string $direction The requested sort direction.
+     * @return string Either 'ASC' or 'DESC'.
+     */
+    private function normaliseDirection(string $direction): string
+    {
+        return strtoupper(trim($direction)) === 'DESC' ? 'DESC' : 'ASC';
     }
 
     /**
@@ -2792,7 +2802,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * Check if an array column contains a value.
      *
      * PostgreSQL: column @> ARRAY[?]::type[]
-     * MySQL fallback: JSON_CONTAINS(column, ?, '$')
+     * MySQL fallback: JSON_CONTAINS(column, '$')
      *
      * @param string $column The array column name.
      * @param mixed $value The value to check for.
@@ -2824,8 +2834,8 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Check if an array column overlaps with given values (has any match).
      *
-     * PostgreSQL: column && ARRAY[?, ?]::type[]
-     * MySQL fallback: JSON_OVERLAPS(column, JSON_ARRAY(?, ?))
+     * PostgreSQL: column && ARRAY[?,?]::type[]
+     * MySQL fallback: JSON_OVERLAPS(column, JSON_ARRAY(?,?))
      *
      * @param string $column The array column name.
      * @param array<int, mixed> $values The values to check for overlap.
