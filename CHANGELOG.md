@@ -2,7 +2,89 @@
 
 All notable changes to `simsoft/fliq` are documented here.
 
-## [2.0.4] - 2025-07-16
+## [Unreleased]
+
+### Fixed
+
+**Security**
+
+- **Mass assignment bypass in `Model::update()`** — attributes passed to
+  `update()` were written straight to the database without consulting
+  `$fillable` / `$guarded`, so `$user->update($_POST)` could set guarded columns
+  (including the primary key). The rules are now applied to the supplied
+  attributes, matching the constructor and `fill()`.
+- **`ORDER BY` direction injection** — the array form of `orderBy()` only
+  uppercased the direction instead of whitelisting it, so
+  `orderBy(['id' => $_GET['sort']])` could append arbitrary SQL. Both the array
+  and scalar forms now normalise to `ASC` / `DESC`, with anything else falling
+  back to `ASC`.
+
+### Changed
+
+- `Model::update()` now filters its argument through the mass assignment rules.
+  Attributes set directly (`$model->column = $value`) remain trusted and are
+  still written, as are attributes set by lifecycle hooks such as the
+  `Timestamps` trait. **This is breaking** for code that relied on `update()`
+  writing columns outside `$fillable` — use `updateAttributes()` for those.
+- `updateAttributes()`, `updateAll()`, `insertBatch()` and `updateBatch()`
+  documented as bypassing mass assignment protection, alongside the lifecycle
+  hooks they already skipped. Never pass unvalidated external input to them.
+
+### Tests
+
+- 4 security tests covering `ORDER BY` direction whitelisting (rejection and
+  valid directions) and `update()` mass assignment (guarded attributes stripped,
+  directly-assigned attributes preserved)
+
+---
+
+## [2.0.6] - 2026-08-13
+
+### Fixed
+
+- **`join()` with a table alias produced a wrong ON clause** — a qualified
+  foreign key matching the join table or its alias (`['s.supp_idx' =>
+  'supp_idx']` with alias `s`) was quoted whole, generating an invalid column
+  reference; the prefix is now stripped before quoting
+- **`make:model <ClassName>` ignored the supplied class name** — the generator
+  always derived the class name from the table, so the file was written under
+  the derived name; `ModelGenerator::className()` now overrides it in both
+  `generate()` and `preview()`
+
+---
+
+## [2.0.5] - 2026-07-22
+
+### Fixed
+
+- **`SoftDeletes` trait silently overrode `Model::find()`** — a model defining
+  its own `find()` (or using a custom query class) lost the soft delete scope
+  entirely, returning trashed records. The scope is now applied by the
+  `ActiveQuery` constructor instead of by a trait-level `find()` override, so it
+  survives any custom `find()`.
+- **`withoutGlobalScope()` dropped the soft delete scope** — excluding one named
+  global scope also discarded soft delete filtering; the soft delete scope is
+  now re-applied independently.
+
+**Security**
+
+- **Connection charset/collation interpolated into SQL** — `charset`,
+  `collation` and `schema` config values were interpolated into `SET NAMES` /
+  `SET search_path` unsanitised; now stripped to `[a-zA-Z0-9_]` in the PDO and
+  PostgreSQL drivers
+- **`NOTIFY` payload escaped by hand** — `str_replace("'", "''", ...)` replaced
+  with a prepared `SELECT pg_notify(?, ?)`
+
+### Changed
+
+- `ActiveQuery::__construct()` accepts `withScopes` to opt out of automatic
+  scope application
+- `Model::applyGlobalScopes()` visibility raised from `protected` to `public`
+  so `ActiveQuery` can invoke it
+
+---
+
+## [2.0.4] - 2026-07-16
 
 ### Added
 
@@ -81,7 +163,21 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ---
 
-## [1.1.0] - 2025-07-01
+## [1.0.0] - 2026-05-20
+
+Initial release.
+
+- Fluent query builder (SELECT, INSERT, UPDATE, DELETE, UPSERT)
+- Active Record pattern with hasOne/hasMany/viaTable relations
+- PDO driver (MySQL/MariaDB) and MySQLi driver
+- PostgreSQL driver
+- Eager loading with dot notation and constraints
+- Soft deletes and timestamps traits
+- Collection with lazy/chunked iteration
+- JSON column queries
+- Fulltext search (MATCH AGAINST)
+- Query logging and N+1 detection
+- PHPStan level 8, PHPMD, PSR-12
 
 ### Added
 
@@ -119,21 +215,3 @@ All notable changes to `simsoft/fliq` are documented here.
 ### Tests
 
 - 321 integration tests covering: CRUD, relationships, eager loading, soft deletes, timestamps, collections, JSON queries, fulltext search, GROUP BY/HAVING/JOIN, query monitoring/logging, security (SQL injection resistance), upsert execution, MySQLi driver
-
----
-
-## [1.0.0] - 2025-01-01
-
-Initial release.
-
-- Fluent query builder (SELECT, INSERT, UPDATE, DELETE, UPSERT)
-- Active Record pattern with hasOne/hasMany/viaTable relations
-- PDO driver (MySQL/MariaDB) and MySQLi driver
-- PostgreSQL driver
-- Eager loading with dot notation and constraints
-- Soft deletes and timestamps traits
-- Collection with lazy/chunked iteration
-- JSON column queries
-- Fulltext search (MATCH AGAINST)
-- Query logging and N+1 detection
-- PHPStan level 8, PHPMD, PSR-12
