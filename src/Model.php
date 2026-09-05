@@ -913,7 +913,7 @@ abstract class Model implements ArrayAccess
         }
 
         $this->beforeSave();
-        $saved = $isNew ? $this->insert() : $this->update();
+        $saved = $isNew ? $this->insert() : $this->performUpdate();
 
         if ($saved) {
             $this->afterSave();
@@ -1080,6 +1080,11 @@ abstract class Model implements ArrayAccess
      * Attributes already set by direct assignment (and therefore tracked as
      * dirty) are trusted and always included.
      *
+     * The `beforeSave()` hook runs first, so traits that maintain columns
+     * automatically — `Timestamps` and its `updated_at` in particular — apply
+     * here just as they do for `save()`. Events are not fired; call `save()`
+     * when you need those.
+     *
      * To write a guarded attribute deliberately, assign it directly and call
      * `save()`, or use `updateAttributes()` to bypass these rules.
      *
@@ -1088,25 +1093,43 @@ abstract class Model implements ArrayAccess
      */
     public function update(array $attributes = []): bool
     {
-        if ($this->exists()) {
-            $attributes = array_merge(
-                array_intersect_key($this->attributes, $this->dirtyAttributes),
-                $this->filterMassAssignable($attributes)
-            );
-            if ($attributes === []) { // nothing to update
-                return true;
-            }
-
-            $result = (new Update($this->getTable(), $attributes, static::find()->where($this->getPKs())))
-                ->withConnection($this->getConnectionName())->execute();
-
-            if ($result) {
-                $this->dirtyAttributes = [];
-            }
-
-            return $result;
+        if (!$this->exists()) {
+            return false;
         }
-        return false;
+
+        $this->beforeSave();
+
+        return $this->performUpdate($attributes);
+    }
+
+    /**
+     * Write the pending changes for an existing record.
+     *
+     * Split out from update() so that save(), which has already run
+     * beforeSave(), does not run it a second time.
+     *
+     * @param array<string, mixed> $attributes Mass-assignable attributes to apply.
+     * @return bool
+     */
+    private function performUpdate(array $attributes = []): bool
+    {
+        $attributes = array_merge(
+            array_intersect_key($this->attributes, $this->dirtyAttributes),
+            $this->filterMassAssignable($attributes)
+        );
+
+        if ($attributes === []) { // nothing to update
+            return true;
+        }
+
+        $result = (new Update($this->getTable(), $attributes, static::find()->where($this->getPKs())))
+            ->withConnection($this->getConnectionName())->execute();
+
+        if ($result) {
+            $this->dirtyAttributes = [];
+        }
+
+        return $result;
     }
 
     /**

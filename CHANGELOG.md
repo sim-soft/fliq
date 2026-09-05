@@ -75,6 +75,11 @@ All notable changes to `simsoft/fliq` are documented here.
   first one's rows. Verified end to end: a query against database B returned
   database A's data. The connection name is now part of the key, which matters
   most for multi-tenant setups that keep tenants apart by connection.
+- **`update()` left `updated_at` stale** — `update()` wrote its columns without
+  running `beforeSave()`, so the `Timestamps` trait never fired and the row's
+  other columns changed while `updated_at` kept its old value. `save()` was
+  unaffected, which made the two paths disagree about the same record.
+  `beforeSave()` now runs on both, exactly once per write.
 
 **Query Builder**
 
@@ -84,6 +89,10 @@ All notable changes to `simsoft/fliq` are documented here.
   the entire table while `getSQL()` displayed `LIMIT -5`. Negative values are now
   rejected by `limit()` and `offset()`, and `page()` requires a page of 1 or
   greater (`page(0)` previously computed a negative offset).
+- **`getTotalPages()` divided by an unchecked page size** — `getTotalPages(0)`
+  raised an uncaught `DivisionByZeroError` and a negative size returned a
+  negative page count (`getTotalPages(-5)` gave `-2`), which a paginator would
+  then loop over. Both are now rejected, matching `limit()` and `page()`.
 - `mysqli::ping()` is deprecated in PHP 8.4 and emitted a deprecation notice on
   every reconnect check; `MySQLiDriver::ping()` now issues `SELECT 1`, matching
   the PDO, PostgreSQL and SQLite drivers.
@@ -107,6 +116,14 @@ All notable changes to `simsoft/fliq` are documented here.
 - `limit()`, `offset()` and `page()` now throw `InvalidArgumentException` on
   negative or out-of-range values instead of generating invalid SQL or silently
   ignoring the limit. `limit(0)` still means "no limit" and is unchanged.
+- `getTotalPages()` now throws `InvalidArgumentException` when the page size is
+  below 1. **This is breaking** for callers passing `0` or a negative size,
+  though the previous behaviour was a fatal error or a negative page count.
+  Unlike `limit()`, `0` is not "no limit" here — a page has to hold something.
+- `Model::update()` now runs `beforeSave()`, so lifecycle traits apply to it as
+  they do to `save()`. **This is breaking** for a `beforeSave()` override with
+  side effects that assumed `update()` would skip it. Model events are still not
+  fired by `update()`; call `save()` when you need those.
 
 ### Tests
 
@@ -126,6 +143,10 @@ All notable changes to `simsoft/fliq` are documented here.
   depth counter unwinds to zero after both success and failure
 - 2 cache tests covering key separation by connection and an end-to-end check
   that two databases holding the same table never serve each other's rows
+- 2 timestamp tests covering `update()` advancing `updated_at` while leaving
+  `created_at` alone, and an explicitly assigned `updated_at` surviving it
+- 2 aggregation tests covering the rejected page sizes and that valid ones still
+  count correctly, including a query matching no rows
 
 ### Documentation
 

@@ -66,6 +66,64 @@ class TimestampsTest extends DatabaseTestCase
     }
 
     #[Test]
+    public function updateAlsoAdvancesUpdatedAt(): void
+    {
+        // update() skipped beforeSave(), so Timestamps never ran and the row
+        // kept a stale updated_at while its other columns changed.
+        $task = new Task();
+        $task->user_id = 1;
+        $task->title = 'Timestamp update() test';
+        $task->priority = 'medium';
+        $task->status = 'todo';
+        $task->save();
+
+        $createdAt = $task->created_at;
+        $updatedAt = $task->updated_at;
+
+        usleep(1100000); // 1.1 seconds, so the new timestamp differs
+
+        $this->assertTrue($task->update(['status' => 'in_progress']));
+
+        $refreshed = Task::findByPk($task->id);
+        $this->assertNotNull($refreshed);
+
+        $this->assertEquals('in_progress', $refreshed->status);
+        $this->assertEquals($createdAt, $refreshed->created_at);
+        $this->assertGreaterThan($updatedAt, $refreshed->updated_at);
+
+        // Cleanup
+        $refreshed->forceDelete();
+    }
+
+    #[Test]
+    public function updateKeepsAnExplicitUpdatedAt(): void
+    {
+        // Timestamps only fills in what the caller has not set, and update()
+        // must respect that too.
+        $customTime = '2020-06-15 12:00:00';
+
+        $task = new Task();
+        $task->user_id = 1;
+        $task->title = 'Explicit updated_at test';
+        $task->priority = 'low';
+        $task->status = 'todo';
+        $task->save();
+
+        // updated_at is not fillable, so it is set by direct assignment
+        $task->updated_at = $customTime;
+        $this->assertTrue($task->update(['status' => 'done']));
+
+        $refreshed = Task::findByPk($task->id);
+        $this->assertNotNull($refreshed);
+
+        $this->assertEquals('done', $refreshed->status);
+        $this->assertEquals($customTime, $refreshed->updated_at);
+
+        // Cleanup
+        $refreshed->forceDelete();
+    }
+
+    #[Test]
     public function manualTimestampIsNotOverwritten(): void
     {
         $customTime = '2020-06-15 12:00:00';

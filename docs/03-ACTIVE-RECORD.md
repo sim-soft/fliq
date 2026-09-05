@@ -665,7 +665,23 @@ $post->title = 'Updated';
 $post->save();
 /* updated_at = '2025-05-11 10:35:00' (auto-updated) */
 // created_at unchanged
+
+$post->update(['title' => 'Updated again']);
+/* updated_at = '2025-05-11 10:40:00' — update() maintains it too */
 ```
+
+Both `save()` and `update()` run `beforeSave()`, so the trait applies either
+way. Assigning the column yourself takes precedence — the trait only fills in
+what you have not set:
+
+```php
+$post->updated_at = '2024-01-01 00:00:00';
+$post->save(); // keeps your value
+```
+
+The methods listed under
+[Methods That Do NOT Fire Events](#methods-that-do-not-fire-events) skip hooks
+entirely, so they leave `updated_at` alone. Set it yourself when using those.
 
 Override column names or disable one:
 

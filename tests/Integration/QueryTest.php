@@ -285,6 +285,38 @@ class QueryTest extends DatabaseTestCase
     }
 
     #[Test]
+    public function totalPagesRejectsNonPositivePerPage(): void
+    {
+        // perPage 0 used to raise DivisionByZeroError and a negative perPage
+        // returned a negative page count, both from an unguarded division.
+        $rejections = [
+            'zero' => static fn() => User::find()->getTotalPages(0),
+            'negative' => static fn() => User::find()->getTotalPages(-5),
+        ];
+
+        foreach ($rejections as $case => $attempt) {
+            try {
+                $attempt();
+                $this->fail("perPage $case was accepted");
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    #[Test]
+    public function totalPagesCountsPages(): void
+    {
+        // 10 users over 3 per page is 4 pages, the last one partial
+        $this->assertEquals(4, User::find()->getTotalPages(3));
+        $this->assertEquals(1, User::find()->getTotalPages(10));
+        $this->assertEquals(1, User::find()->getTotalPages(100));
+
+        // A query matching nothing has no pages
+        $this->assertEquals(0, User::find()->where('username', '__no_such_user__')->getTotalPages(3));
+    }
+
+    #[Test]
     public function countWithCondition(): void
     {
         $count = User::find()->where('status_code', 1)->count();
