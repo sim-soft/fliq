@@ -1134,18 +1134,17 @@ result set yourself if an empty search should instead return nothing.
 ## Ordering, Grouping, Limit & Offset
 
 ```php
-/* SELECT `t`.`first_name`, `t`.`last_name`, COUNT(*) AS count FROM `user` `t`
-   GROUP BY `t`.`first_name`, `t`.`last_name`
-   HAVING `count` > ?
-   ORDER BY `t`.`first_name` ASC, `t`.`last_name` DESC
+/* SELECT `t`.`role`, COUNT(*) AS total FROM `user` `t`
+   GROUP BY `t`.`role`
+   HAVING COUNT(*) > ?
+   ORDER BY `t`.`role` ASC
    LIMIT 30, 20 */
 $users = (new ActiveQuery())
     ->from('user t')
-    ->select('first_name', 'last_name', new Raw('COUNT(*) AS count'))
-    ->groupBy('first_name', 'last_name')
-    ->having('count', '>', 1)
-    ->orderBy('first_name')
-    ->orderBy('last_name', 'DESC')
+    ->select('role', new Raw('COUNT(*) AS total'))
+    ->groupBy('role')
+    ->having(new Raw('COUNT(*)'), '>', 1)
+    ->orderBy('role')
     ->limit(20, 30)
     ->on('mysql')
     ->get();
@@ -1174,6 +1173,76 @@ $users = (new ActiveQuery())
     ->on('mysql')
     ->get();
 ```
+
+### `HAVING`: one expression, several conditions
+
+`GROUP BY` takes a list, but `HAVING` takes a single boolean expression. Repeated
+calls are joined with `AND`, or with `OR` through `orHaving()` and
+`orHavingRaw()` — the same way `where()` and `orWhere()` build the `WHERE`
+clause:
+
+```php
+/* HAVING COUNT(*) > ? AND MAX(`score`) > ? */
+$q->groupBy('role')
+  ->having(new Raw('COUNT(*)'), '>', 1)
+  ->having(new Raw('MAX(score)'), '>', 80);
+
+/* HAVING COUNT(*) > ? OR MAX(`score`) > ? */
+$q->groupBy('role')
+  ->having(new Raw('COUNT(*)'), '>', 5)
+  ->orHaving(new Raw('MAX(score)'), '>', 90);
+```
+
+#### Filtering on an aggregate
+
+A plain string attribute is qualified with the table alias, as everywhere else
+in the builder. That is what you want for a real column, but a `SELECT` alias is
+not one — `having('total', '>', 1)` builds `` `t`.`total` > ? `` and the server
+answers `Unknown column 't.total' in 'having clause'`. Repeat the aggregate in a
+`Raw`, or name the alias through `havingRaw()`:
+
+```php
+/* HAVING COUNT(*) > ? */
+$q->select('role', new Raw('COUNT(*) AS total'))
+  ->groupBy('role')
+  ->having(new Raw('COUNT(*)'), '>', 1);
+
+/* HAVING total > ? — MySQL resolves the select alias here */
+$q->select('role', new Raw('COUNT(*) AS total'))
+  ->groupBy('role')
+  ->havingRaw('total > ?', [1]);
+```
+
+Alias resolution in `HAVING` is a MySQL extension; the standard, and Postgres,
+require the expression. Prefer the `Raw` aggregate form if you target both.
+
+#### Comparing against a `Raw` expression
+
+A `Raw` attribute given alone is used as the whole condition. Given an operator
+and a value it becomes the left-hand side of a comparison, with the value bound:
+
+```php
+$q->where(new Raw('score > 90'));              /* WHERE score > 90 */
+$q->where(new Raw('score'), '>', 90);          /* WHERE score > ?  — binds 90 */
+$q->groupBy('role')->having(new Raw('COUNT(*)'), '>', 2);
+```
+
+This holds for `where()` and `having()` alike. As always with `Raw`, the
+expression is emitted verbatim — never build one from user input; put the value
+in the operand, where it is bound.
+
+### `IS` and `IS NOT` compare against `NULL`
+
+Both operators take `NULL` on the right, not a value, in `where()` and
+`having()`:
+
+```php
+$q->where('deleted_at', 'IS', null);      /* WHERE `u`.`deleted_at` IS NULL */
+$q->where('deleted_at', 'IS NOT', null);  /* WHERE `u`.`deleted_at` IS NOT NULL */
+```
+
+Given anything else they throw `InvalidArgumentException`, since `col IS ?` is
+not a shape the server accepts. Use `=` or `!=` to compare a value.
 
 ### Sort direction: `ASC` or `DESC` only
 
@@ -1277,6 +1346,35 @@ $posts = (new ActiveQuery())
     ->on('mysql')
     ->get();
 ```
+
+### Joining a Sub-query
+
+Pass `[alias => query]` as the table. The sub-query may be an `ActiveQuery` or a
+`Raw`; either way its bind values are kept and handed over in the position the
+`JOIN` occupies, which is after `FROM` and before `WHERE`:
+
+```php
+/* SELECT `u`.`id` FROM `user` `u`
+   INNER JOIN (SELECT `post`.`user_id` FROM `post` WHERE `post`.`view_count` > ?) AS `p`
+     ON `p`.`user_id` = `u`.`id`
+   WHERE `u`.`score` > ?
+   — binds [100, 50] */
+$popular = (new ActiveQuery())
+    ->from('post')
+    ->select('user_id')
+    ->where('view_count', '>', 100);
+
+$users = (new ActiveQuery())
+    ->from('user u')
+    ->select('id')
+    ->join(['p' => $popular], ['user_id' => 'id'])
+    ->where('score', '>', 50)
+    ->on('mysql')
+    ->get();
+```
+
+The same array form works with `leftJoin()`, `rightJoin()` and the rest. The ON
+mapping is keyed by the sub-query's own column, as with a plain table.
 
 ### Joins Without an ON Clause
 

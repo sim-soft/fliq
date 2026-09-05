@@ -107,8 +107,13 @@ abstract class Aggregate extends Builder
                 $this->condition->getLimitSQL(),
             ]));
 
-            if ($this->condition->getBinds()) {
-                $this->appendBinds($this->condition->getBinds());
+            // Only the sections re-emitted above. getBinds() would also hand
+            // over the source query's SELECT and UNION values, whose
+            // placeholders are not in this statement — the driver was given
+            // more values than it had positions for and refused to run it.
+            $binds = $this->condition->getConditionBinds();
+            if ($binds !== null) {
+                $this->appendBinds($binds);
             }
 
             return $condition;

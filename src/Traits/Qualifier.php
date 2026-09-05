@@ -230,6 +230,30 @@ trait Qualifier
     }
 
     /**
+     * Reject IS and IS NOT given a value they cannot compare against.
+     *
+     * @param string $operator The validated operator.
+     * @param mixed $value The value to compare against.
+     * @return void
+     * @throws InvalidArgumentException If IS or IS NOT is given a non-null value.
+     */
+    protected function assertNullComparison(string $operator, mixed $value): void
+    {
+        // IS and IS NOT take NULL, TRUE or FALSE on their right-hand side, not
+        // a placeholder. A null value is routed to a NULL check before reaching
+        // here; anything else built `col IS ?`, which the server rejects as a
+        // syntax error naming only the position in the statement. The caller is
+        // told which operator and value are at odds instead.
+        if ($value !== null && ($operator === 'IS' || $operator === 'IS NOT')) {
+            throw new InvalidArgumentException(sprintf(
+                '"%s" compares against NULL; got %s. Use = or != to compare a value.',
+                $operator,
+                get_debug_type($value)
+            ));
+        }
+    }
+
+    /**
      * Get a qualified attribute name (used by Clause subclasses).
      *
      * @param string $attribute The attribute name.

@@ -23,6 +23,7 @@ use Simsoft\DB\Traits\Likeable;
 use Simsoft\DB\Traits\Fetchable;
 use Simsoft\DB\Traits\PlaceHolder;
 use Simsoft\DB\Traits\Qualifier;
+use Simsoft\DB\Traits\SectionBinds;
 use Simsoft\DB\Traits\TemporaryAlias;
 
 /**
@@ -33,7 +34,17 @@ use Simsoft\DB\Traits\TemporaryAlias;
  */
 class ActiveQuery implements Executable, Updatable, Deletable
 {
-    use Qualifier, Execute, PlaceHolder, Binds, Aggregation, Fetchable, TemporaryAlias, Likeable, Groupable;
+    use Qualifier, Execute, PlaceHolder, Aggregation, Fetchable, TemporaryAlias, Likeable, Groupable;
+
+    // SectionBinds supplies getBinds() and clearBinds(), which cover every
+    // section; the Binds versions cover the WHERE list alone and are reached
+    // through these aliases.
+    use SectionBinds, Binds {
+        SectionBinds::getBinds insteadof Binds;
+        SectionBinds::clearBinds insteadof Binds;
+        Binds::getBinds as private whereSectionBinds;
+        Binds::clearBinds as private clearWhereSectionBinds;
+    }
 
     /** @var null|string The table name */
     protected ?string $table = null;
@@ -53,7 +64,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /** @var array<int, string> The GROUP BY statements. */
     protected array $groupBys = [];
 
-    /** @var array<int, string> The query having */
+    /** @var array<int, string> The query having, with logical operators interleaved. */
     protected array $having = [];
 
     /** @var array<int, string> The query order */
@@ -240,10 +251,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $this->mergeSimpleList($this->orderBys, $query->orderBys);
         $this->mergeJoins($query->joins);
 
-        $queryBinds = $query->getBinds();
-        if ($queryBinds !== null) {
-            $this->appendBinds($queryBinds);
-        }
+        $this->mergeSectionBinds($query);
 
         return $this;
     }
@@ -374,7 +382,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
             $alias = (string)array_key_first($table);
             $this->table = $this->getQualifiedSubQuery((string)$subQuery, $alias);
             if ($subQuery instanceof ActiveQuery || $subQuery instanceof Raw) {
-                $this->appendBinds($subQuery->getBinds());
+                $this->appendSectionBinds($this->fromBinds, $subQuery->getBinds());
             }
             return $this;
         }
@@ -403,11 +411,10 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function join(string|array $table, array $on = [], string $type = 'INNER'): static
     {
         $alias = null;
+        $join = $type ? strtoupper($type) . ' JOIN' : 'JOIN';
 
         if (is_array($table)) {
-            $alias = (string)array_key_first($table);
-            $subQuery = current($table);
-            $table = "($subQuery) AS $alias";
+            return $this->joinSubQuery($join, $table, $on);
         }
 
         if (!str_contains($table, '(')) {
@@ -415,8 +422,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
             $table = $expressions[0];
             $alias = end($expressions);
         }
-
-        $join = $type ? strtoupper($type) . ' JOIN' : 'JOIN';
 
         if ($on === []) {
             // A CROSS JOIN pairs every row and takes no ON clause, so calling
@@ -427,6 +432,65 @@ class ActiveQuery implements Executable, Updatable, Deletable
             return $this->joinWithoutOn($join, $table, $alias);
         }
 
+        if ($table === $alias) {
+            $quotedTable = $this->quote($table);
+            $this->joins[$table] = "$join $quotedTable " . $this->onClause($quotedTable, $on, $table, $alias);
+            return $this;
+        }
+
+        $qt = $this->quote($table);
+        $qa = $this->quote((string)$alias);
+        $this->joins[(string)$alias] = "$join $qt AS $qa " . $this->onClause($qa, $on, $table, $alias);
+
+        return $this;
+    }
+
+    /**
+     * Join a sub-query given in the array form: [alias => query].
+     *
+     * @param string $join The join keyword, e.g. 'INNER JOIN'.
+     * @param array<string, string|ActiveQuery|Raw> $table The alias mapped to the sub-query.
+     * @param array<string, string> $on The matching attributes.
+     * @return static
+     */
+    private function joinSubQuery(string $join, array $table, array $on): static
+    {
+        $alias = (string)array_key_first($table);
+        $subQuery = current($table);
+
+        // The sub-query was folded into the table string and then handed to
+        // quote(), which wrapped the whole SELECT in backticks as though it
+        // were one column name — the server refused it as an over-long
+        // identifier. It was also aliased twice, `(...) AS p` AS `p`, and its
+        // bind values were dropped, so no shape of this call could ever run.
+        // The alias is the only part that is an identifier; the sub-query is
+        // parenthesised SQL and its binds are kept for the JOIN section, which
+        // getSQL() emits after FROM and before WHERE.
+        $quotedAlias = $this->quote($alias);
+        $sql = "$join (" . $subQuery . ") AS $quotedAlias";
+
+        if ($subQuery instanceof ActiveQuery || $subQuery instanceof Raw) {
+            $this->appendSectionBinds($this->joinBinds, $subQuery->getBinds());
+        }
+
+        $this->joins[$alias] = $on === []
+            ? $sql
+            : "$sql " . $this->onClause($quotedAlias, $on, $alias, $alias);
+
+        return $this;
+    }
+
+    /**
+     * Build the ON clause matching a joined table against this one.
+     *
+     * @param string $qualifier The quoted table or alias the foreign key belongs to.
+     * @param array<string, string> $on The matching attributes.
+     * @param string $table The join table, for stripping a redundant key prefix.
+     * @param string|null $alias The join alias, for stripping a redundant key prefix.
+     * @return string
+     */
+    private function onClause(string $qualifier, array $on, string $table, ?string $alias): string
+    {
         $foreignKey = (string)array_key_first($on);
         $localKey = (string)current($on);
 
@@ -439,17 +503,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
             }
         }
 
-        if ($table === $alias) {
-            $quotedTable = $this->quote($table);
-            $this->joins[$table] = "$join $quotedTable ON $quotedTable." . $this->quote($foreignKey) . " = " . $this->queryAttribute($localKey);
-            return $this;
-        }
-
-        $qt = $this->quote($table);
-        $qa = $this->quote((string)$alias);
-        $this->joins[(string)$alias] = "$join $qt AS $qa ON $qa." . $this->quote($foreignKey) . " = " . $this->queryAttribute($localKey);
-
-        return $this;
+        return "ON $qualifier." . $this->quote($foreignKey) . ' = ' . $this->queryAttribute($localKey);
     }
 
     /**
@@ -558,15 +612,22 @@ class ActiveQuery implements Executable, Updatable, Deletable
                 }
 
                 $this->selects[] = $sql;
-                if ($attribute->getBinds()) {
-                    $this->appendBinds($attribute->getBinds());
-                }
+                $this->appendSectionBinds($this->selectBinds, $attribute->getBinds());
                 continue;
             }
 
-            $this->selects[] = $attribute instanceof Raw
-                ? (string)$attribute
-                : $this->queryAttribute($attribute);
+            if ($attribute instanceof Raw) {
+                $this->selects[] = (string)$attribute;
+
+                // A Raw select expression may carry placeholders of its own —
+                // `IF(score > ?, 1, 0) AS grade`. Its binds were dropped on the
+                // floor, so the statement was left one value short and the
+                // driver refused to execute it at all.
+                $this->appendSectionBinds($this->selectBinds, $attribute->getBinds());
+                continue;
+            }
+
+            $this->selects[] = $this->queryAttribute($attribute);
         }
         return $this;
     }
@@ -629,6 +690,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
 
         [$operator, $value] = $this->normaliseOperatorValue($operator, $value);
         $operator = $this->validateOperator((string)$operator);
+        $this->assertNullComparison($operator, $value);
 
         // Fast path: a simple string attribute with scalar value (the most common case)
         // Avoids Condition object allocation entirely
@@ -1784,7 +1846,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function union(ActiveQuery $query): static
     {
         $this->unions[] = ['type' => 'UNION', 'sql' => (string)$query];
-        $this->appendBinds($query->getBinds());
+        $this->appendSectionBinds($this->unionBinds, $query->getBinds());
         return $this;
     }
 
@@ -1797,7 +1859,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function unionDistinct(ActiveQuery $query): static
     {
         $this->unions[] = ['type' => 'UNION DISTINCT', 'sql' => (string)$query];
-        $this->appendBinds($query->getBinds());
+        $this->appendSectionBinds($this->unionBinds, $query->getBinds());
         return $this;
     }
 
@@ -1810,7 +1872,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function unionAll(ActiveQuery $query): static
     {
         $this->unions[] = ['type' => 'UNION ALL', 'sql' => (string)$query];
-        $this->appendBinds($query->getBinds());
+        $this->appendSectionBinds($this->unionBinds, $query->getBinds());
         return $this;
     }
 
@@ -1996,7 +2058,12 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function getHavingSQL(): ?string
     {
-        return empty($this->having) ? null : 'HAVING ' . implode(', ', $this->having);
+        // The entries were joined with a comma, which HAVING does not accept —
+        // unlike GROUP BY, it takes one boolean expression. So a second
+        // having() call produced a syntax error and the query never ran. The
+        // logical operators are interleaved into the list as conditions are
+        // added, exactly as the WHERE list does, and joined with spaces here.
+        return empty($this->having) ? null : 'HAVING ' . implode(' ', $this->having);
     }
 
     /**

@@ -46,11 +46,7 @@ class Condition extends Clause
         }
 
         if ($this->attribute instanceof Raw) {
-            $rawBinds = $this->attribute->getBinds();
-            if ($rawBinds !== null) {
-                $this->appendBinds($rawBinds);
-            }
-            return (string)$this->attribute;
+            return $this->buildRawCondition($this->attribute);
         }
 
         $this->assertSinglePlaceholderShape();
@@ -63,6 +59,33 @@ class Condition extends Clause
         $this->appendBinds($this->value);
 
         return "{$this->queryAttribute($this->attribute)} $this->operator {$this->getPlaceHolder()}";
+    }
+
+    /**
+     * Build a condition whose left-hand side is a Raw expression.
+     *
+     * @param Raw $expression The expression standing in for the attribute.
+     * @return string
+     * @throws InvalidArgumentException If the operator needs a shape this clause cannot emit.
+     */
+    private function buildRawCondition(Raw $expression): string
+    {
+        $sql = (string)$expression;
+        $this->appendBinds($expression->getBinds() ?? []);
+
+        // The operator and value were dropped whenever the attribute was Raw,
+        // so where(new Raw('score'), '>', 90) built a bare `WHERE score` — a
+        // truthiness test matching every non-zero row, and valid SQL, so
+        // nothing reported that the comparison had gone missing. An expression
+        // given on its own still stands alone.
+        if ($this->value === null) {
+            return $sql;
+        }
+
+        $this->assertSinglePlaceholderShape();
+        $this->appendBinds($this->value);
+
+        return "$sql $this->operator {$this->getPlaceHolder()}";
     }
 
     /**

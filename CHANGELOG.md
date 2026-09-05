@@ -305,6 +305,51 @@ All notable changes to `simsoft/fliq` are documented here.
   literal operator text, which a column whose value happened to be `>` would
   have matched. The shorthand predates `operator()` validating its input. A
   null now binds like any other value.
+- **Bind values were handed over in call order, not placeholder order** —
+  placeholders are positional, but every value went into one list as the builder
+  methods were called, while `getSQL()` emits the sections in a fixed order.
+  Building a query in any other order therefore paired the values with the wrong
+  placeholders: `groupByRaw('... > ?', [50])->where('status_code', '=', 1)`
+  filtered on `status_code = 50` and grouped on `score > 1`. Both are valid SQL,
+  so there was no error and no log line — the query simply returned the wrong
+  rows. Each section now keeps its own list, joined in emission order.
+- **`HAVING` entries were joined with a comma** — `GROUP BY` takes a list but
+  `HAVING` takes one boolean expression, so a second `having()` or `havingRaw()`
+  call produced `HAVING a, b`, a syntax error that took the whole query down.
+  Entries are now joined with `AND`, or with `OR` through the new `orHaving()`
+  and `orHavingRaw()`. `orMerge()` had the same fate and is fixed with it.
+- **A `Raw` attribute discarded the operator and value beside it** —
+  `where(new Raw('score'), '>', 90)` built a bare `WHERE score`, a truthiness
+  test keeping every non-zero row. Valid SQL, so nothing reported the missing
+  comparison; it returned all ten sample users where two match. A `Raw` given
+  alone still stands as the whole condition. This affected `having()` equally.
+- **A `Raw` select expression dropped its binds** —
+  `select(new Raw('IF(score > ?, 1, 0) AS grade', [50]))` left the statement one
+  value short of its placeholders and the driver refused to execute it.
+- **`having()` never handled `IS` / `IS NOT`** — the routing added to `where()`
+  did not reach `having()`, so its own value shorthand took the operator as the
+  value and built `HAVING col = 'IS'` — matching nothing, with no error. Both
+  now build `IS [NOT] NULL`.
+- **`IS` and `IS NOT` accepted a value they cannot compare against** — given a
+  non-null value they built `col IS ?`, which the server rejects with a message
+  naming only the position in the statement. They now raise
+  `InvalidArgumentException` naming the operator and the value's type.
+- **Joining a sub-query could not run in any form** — the documented
+  `join(['alias' => $query], ...)` array form folded the sub-query into the table
+  string and quoted the whole `SELECT` as one identifier, so the server rejected
+  it as an over-long identifier name. It was also aliased twice, and the
+  sub-query's bind values were dropped. The alias is now quoted alone, the
+  sub-query parenthesised, and its binds kept for the `JOIN` section.
+- **`merge()` moved the incoming binds into the `WHERE` list** — every value was
+  appended wholesale regardless of the section it belonged to, so a merged
+  query's `HAVING` value landed behind a `WHERE` placeholder. Join binds were
+  dropped entirely. Each list is now taken into its counterpart.
+- **Aggregates were given binds for placeholders they had not emitted** —
+  `Count` and the other aggregates re-emit a source query's `JOIN`, `WHERE`,
+  `GROUP BY` and `HAVING` but write their own `SELECT`, yet took all of its
+  binds, so a source query with a `Raw` select expression left the statement
+  over-supplied and the driver refused it. They now take the condition sections
+  alone.
 
 ### Changed
 
@@ -372,6 +417,11 @@ All notable changes to `simsoft/fliq` are documented here.
   and inspecting the query log.
 - `QueryException::enableDebug()` / `disableDebug()` / `isDebug()` control
   whether the failing SQL is appended to the exception message.
+- `orHaving()` and `orHavingRaw()` join a `HAVING` condition to the previous one
+  with `OR`. `having()` and `havingRaw()` take a trailing logical operator too.
+- `ActiveQuery::getConditionBinds()` returns the binds for the filtering
+  sections alone — `JOIN`, `WHERE`, `GROUP BY`, `HAVING` — for callers that
+  re-emit a query's conditions under their own `SELECT`.
 
 ### Tests
 
@@ -511,6 +561,21 @@ All notable changes to `simsoft/fliq` are documented here.
   rather than polling once, since `NOTIFY` is asynchronous and an immediate poll
   cannot distinguish "not sent" from "not yet arrived". This takes
   `PostgresDriver` from 55.90% to 94.90% line coverage.
+- 30 tests covering grouping, `HAVING` and bind ordering — 18 asserting the
+  generated SQL and the order values reach the driver, 12 running against a live
+  database. Covers `HAVING` joined with `AND` and `OR` across `having()`,
+  `orHaving()`, `havingRaw()` and `orHavingRaw()`; a `Raw` attribute compared
+  against a value and standing alone; bind order when a section is built out of
+  emission order, for `GROUP BY`, `HAVING`, `SELECT` and `UNION`; `IS` / `IS NOT`
+  routed to a `NULL` check in `having()` and rejected when given a value; a
+  joined sub-query in both `ActiveQuery` and `Raw` form; `merge()` keeping each
+  list in its own section; `clearBinds()`; and an aggregate taking only the binds
+  for the sections it re-emits. Two of these defects produced valid SQL that
+  returned the wrong rows with no error, so the integration tests compare every
+  result against the answer the database computes for the equivalent plain SQL
+  rather than against an expected SQL string — which would have called the
+  broken forms correct. 26 of the 30 fail against the unfixed code. This takes
+  `Traits\Groupable` from 61.54% to 88.10% and `Conditions\Condition` to 100%.
 
 ### Documentation
 
@@ -560,6 +625,20 @@ All notable changes to `simsoft/fliq` are documented here.
   built but undocumented, including that it is parenthesised, that an array
   value means `IN`, that an empty value list is skipped, and that a `null`
   value binds rather than becoming an `IS NULL` check.
+- The grouping example filtered on a `SELECT` alias — `having('count', '>', 1)`.
+  A plain string attribute is qualified with the table alias, so it built
+  `` `t`.`count` > ? `` and the server answered "Unknown column 't.count' in
+  'having clause'". The example as written could not run. It now uses the `Raw`
+  aggregate form, and a new "`HAVING`: one expression, several conditions"
+  section documents the joining rule, `orHaving()` / `orHavingRaw()`, why a
+  select alias needs `havingRaw()` (and that resolving one there is a MySQL
+  extension), and comparing against a `Raw` expression in both `where()` and
+  `having()`.
+- New "`IS` and `IS NOT` compare against `NULL`" subsection, covering both
+  methods and the exception raised when given a value.
+- New "Joining a Sub-query" subsection. The `[alias => query]` array form is in
+  the `join()` signature and its docblock but appeared in no example, and never
+  worked; it is now documented with the bind ordering it implies.
 
 ---
 
