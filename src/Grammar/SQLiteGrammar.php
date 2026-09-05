@@ -9,6 +9,8 @@ namespace Simsoft\DB\Grammar;
  */
 class SQLiteGrammar implements Grammar
 {
+    use EscapesJsonPath;
+
     /**
      * {@inheritdoc}
      */
@@ -80,10 +82,10 @@ class SQLiteGrammar implements Grammar
      */
     public function jsonExtract(string $column, string $path, bool $asText = true): string
     {
-        $jsonPath = '$.' . $path;
+        $jsonPath = $this->jsonPathLiteral('$.' . $path);
 
         // SQLite json_extract returns text directly, no UNQUOTE needed
-        return "json_extract($column, '$jsonPath')";
+        return "json_extract($column, $jsonPath)";
     }
 
     /**
@@ -91,8 +93,8 @@ class SQLiteGrammar implements Grammar
      */
     public function jsonContains(string $column, string $path): string
     {
-        $jsonPath = $path === '' ? '$' : '$.' . $path;
-        return "EXISTS (SELECT 1 FROM json_each($column, '$jsonPath') WHERE json_each.value = json_extract(?, '$'))";
+        $jsonPath = $this->jsonPathLiteral($path === '' ? '$' : '$.' . $path);
+        return "EXISTS (SELECT 1 FROM json_each($column, $jsonPath) WHERE json_each.value = json_extract(?, '$'))";
     }
 
     /**
@@ -100,8 +102,8 @@ class SQLiteGrammar implements Grammar
      */
     public function jsonLength(string $column, string $path): string
     {
-        $jsonPath = $path === '' ? '$' : '$.' . $path;
-        return "json_array_length($column, '$jsonPath')";
+        $jsonPath = $this->jsonPathLiteral($path === '' ? '$' : '$.' . $path);
+        return "json_array_length($column, $jsonPath)";
     }
 
     /**
@@ -178,8 +180,8 @@ class SQLiteGrammar implements Grammar
      */
     public function jsonKeyExists(string $column, string $path): string
     {
-        $jsonPath = '$.' . $path;
-        return "json_type($column, '$jsonPath') IS NOT NULL";
+        $jsonPath = $this->jsonPathLiteral('$.' . $path);
+        return "json_type($column, $jsonPath) IS NOT NULL";
     }
 
     /**

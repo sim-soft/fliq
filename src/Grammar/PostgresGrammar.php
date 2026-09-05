@@ -9,6 +9,8 @@ namespace Simsoft\DB\Grammar;
  */
 class PostgresGrammar implements Grammar
 {
+    use EscapesJsonPath;
+
     /**
      * {@inheritdoc}
      */
@@ -85,14 +87,14 @@ class PostgresGrammar implements Grammar
 
         // For nested paths: column->'key1'->'key2'->>'leaf'
         if (count($parts) === 1) {
-            return "$column $operator '$parts[0]'";
+            return "$column $operator " . $this->jsonPathLiteral($parts[0]);
         }
 
         $expr = $column;
         $lastIndex = count($parts) - 1;
         foreach ($parts as $idx => $part) {
             $op = ($idx === $lastIndex) ? $operator : '->';
-            $expr .= " $op '$part'";
+            $expr .= " $op " . $this->jsonPathLiteral($part);
         }
 
         return $expr;
@@ -107,12 +109,12 @@ class PostgresGrammar implements Grammar
         $parts = explode('.', $path);
 
         if (count($parts) === 1) {
-            return "$column -> '$parts[0]' @> ?::jsonb";
+            return "$column -> " . $this->jsonPathLiteral($parts[0]) . ' @> ?::jsonb';
         }
 
         $expr = $column;
         foreach ($parts as $part) {
-            $expr .= " -> '$part'";
+            $expr .= ' -> ' . $this->jsonPathLiteral($part);
         }
 
         return "$expr @> ?::jsonb";
@@ -126,12 +128,12 @@ class PostgresGrammar implements Grammar
         $parts = explode('.', $path);
 
         if (count($parts) === 1) {
-            return "jsonb_array_length($column -> '$parts[0]')";
+            return "jsonb_array_length($column -> " . $this->jsonPathLiteral($parts[0]) . ')';
         }
 
         $expr = $column;
         foreach ($parts as $part) {
-            $expr .= " -> '$part'";
+            $expr .= ' -> ' . $this->jsonPathLiteral($part);
         }
 
         return "jsonb_array_length($expr)";
@@ -218,17 +220,17 @@ class PostgresGrammar implements Grammar
         $parts = explode('.', $path);
 
         if (count($parts) === 1) {
-            return "jsonb_exists($column, '$parts[0]')";
+            return "jsonb_exists($column, " . $this->jsonPathLiteral($parts[0]) . ')';
         }
 
         // For nested paths, navigate to the parent then check key
         $lastKey = array_pop($parts);
         $expr = $column;
         foreach ($parts as $part) {
-            $expr .= " -> '$part'";
+            $expr .= ' -> ' . $this->jsonPathLiteral($part);
         }
 
-        return "jsonb_exists($expr, '$lastKey')";
+        return "jsonb_exists($expr, " . $this->jsonPathLiteral($lastKey) . ')';
     }
 
     /**

@@ -7,6 +7,7 @@ use Models\User;
 use PHPUnit\Framework\Attributes\Test;
 use Simsoft\DB\Builder\ActiveQuery;
 use Simsoft\DB\Builder\Raw;
+use Simsoft\DB\Exceptions\QueryException;
 
 /**
  * Security tests — verifies SQL injection is prevented by parameter binding.
@@ -218,6 +219,71 @@ class SecurityTest extends DatabaseTestCase
         // And a whitelisted operator still returns correct rows
         $highScorers = User::find()->where('score', '>=', 0)->get()->all();
         $this->assertNotEmpty($highScorers);
+    }
+
+    #[Test]
+    public function columnNameCannotEscapeIdentifierQuoting(): void
+    {
+        // A backtick in a column name previously closed the quoting early and
+        // the remainder was parsed as SQL, returning every username.
+        $payload = 'id` FROM `user` UNION SELECT username FROM `user` -- ';
+
+        $sql = User::find()->select($payload)->getSQL();
+
+        // The backticks are doubled, so the payload stays one literal identifier.
+        $this->assertStringNotContainsString('UNION SELECT username FROM `user`', $sql);
+        $this->assertStringContainsString('``', $sql);
+
+        // And the query no longer executes.
+        $this->expectException(QueryException::class);
+        iterator_to_array(User::find()->select($payload)->get());
+    }
+
+    #[Test]
+    public function identifierQuotingLeavesValidColumnFormsIntact(): void
+    {
+        // Escaping must not disturb the forms the builder legitimately supports.
+        $this->assertStringContainsString('`user`.*', User::find()->select('*')->getSQL());
+        $this->assertStringContainsString('`user`.*', User::find()->select('user.*')->getSQL());
+        $this->assertStringContainsString('`user`.`id`', User::find()->select('id')->getSQL());
+        $this->assertStringContainsString('`user`.`id`', User::find()->select('user.id')->getSQL());
+        $this->assertStringContainsString('`user`.`id`', User::find()->select('!user.id')->getSQL());
+
+        $this->assertCount(10, User::find()->get()->all());
+    }
+
+    #[Test]
+    public function jsonPathCannotEscapeItsStringLiteral(): void
+    {
+        // JSON paths cannot be bound, so they are interpolated into a quoted
+        // literal. An unescaped quote in the path used to close that literal.
+        $payload = "meta->x' ) ) , (SELECT password FROM `user` LIMIT 1) AS leaked FROM `user` -- ";
+
+        $sql = User::find()->select($payload)->getSQL();
+
+        // The quote is doubled, so the payload stays inside the literal rather
+        // than closing it. The sub-query text is still present — as inert text.
+        $this->assertStringContainsString("'\$.x''", $sql);
+
+        // The JSON_EXTRACT call is still closed by the builder, not by the
+        // payload: the literal runs to the generated closing quote.
+        $this->assertStringEndsWith("-- ')) FROM `user`", $sql);
+
+        // Every quote in the statement is balanced.
+        $this->assertSame(0, substr_count($sql, "'") % 2);
+    }
+
+    #[Test]
+    public function jsonPathEscapingLeavesValidPathsIntact(): void
+    {
+        $this->assertStringContainsString(
+            "'$.age'",
+            User::find()->select('meta->age')->getSQL()
+        );
+        $this->assertStringContainsString(
+            "'$.profile.city'",
+            User::find()->select('meta->profile.city')->getSQL()
+        );
     }
 
     #[Test]

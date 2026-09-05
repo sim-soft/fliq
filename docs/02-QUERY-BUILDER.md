@@ -1381,12 +1381,18 @@ checks these against fixed lists instead:
 | Sort direction              | [`ASC`/`DESC` only](#sort-direction-asc-or-desc-only); anything else becomes `ASC` |
 | Limit / offset / page       | [Must be non-negative](#limit-and-page-numbers-must-make-sense); invalid ones throw |
 | Table names                 | Validated when the table is set              |
+| Column names                | Quoted and escaped, but not checked against a list |
 
 ### The part you own: column names
 
-Column names are quoted but **not** validated against a list, because they can
-legitimately be `*`, `user.*`, `COUNT(*)`, or a JSON path. So if a column name
-comes from user input, check it yourself against columns you expect:
+Column names are quoted, and any quote character inside the name is escaped so
+it cannot break out and become SQL. But they are **not** validated against a
+list of known columns, because they can legitimately be `*`, `user.*`, or a
+JSON path — there is no single pattern to check against.
+
+So a hostile column name can't inject SQL, but it can still reach the database
+as a bad query. If a column name comes from user input, check it yourself
+against the columns you expect:
 
 ```php
 /* Don't hand a URL parameter straight to the builder */

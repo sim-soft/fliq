@@ -9,6 +9,20 @@ namespace Simsoft\DB\Grammar;
  */
 class MySQLGrammar implements Grammar
 {
+    use EscapesJsonPath;
+
+    /**
+     * {@inheritdoc}
+     *
+     * MySQL also treats backslash as an escape character inside string
+     * literals (unless NO_BACKSLASH_ESCAPES is enabled), so it is doubled
+     * as well to keep the literal intact either way.
+     */
+    protected function escapeStringLiteral(string $value): string
+    {
+        return str_replace(['\\', "'"], ['\\\\', "''"], $value);
+    }
+
     /**
      * {@inheritdoc}
      */
@@ -74,13 +88,13 @@ class MySQLGrammar implements Grammar
      */
     public function jsonExtract(string $column, string $path, bool $asText = true): string
     {
-        $jsonPath = '$.' . str_replace('.', '.', $path);
+        $jsonPath = $this->jsonPathLiteral('$.' . $path);
 
         if ($asText) {
-            return "JSON_UNQUOTE(JSON_EXTRACT($column, '$jsonPath'))";
+            return "JSON_UNQUOTE(JSON_EXTRACT($column, $jsonPath))";
         }
 
-        return "JSON_EXTRACT($column, '$jsonPath')";
+        return "JSON_EXTRACT($column, $jsonPath)";
     }
 
     /**
@@ -88,8 +102,8 @@ class MySQLGrammar implements Grammar
      */
     public function jsonContains(string $column, string $path): string
     {
-        $jsonPath = $path === '' ? '$' : '$.' . $path;
-        return "JSON_CONTAINS($column, ?, '$jsonPath')";
+        $jsonPath = $this->jsonPathLiteral($path === '' ? '$' : '$.' . $path);
+        return "JSON_CONTAINS($column, ?, $jsonPath)";
     }
 
     /**
@@ -97,8 +111,8 @@ class MySQLGrammar implements Grammar
      */
     public function jsonLength(string $column, string $path): string
     {
-        $jsonPath = $path === '' ? '$' : '$.' . $path;
-        return "JSON_LENGTH($column, '$jsonPath')";
+        $jsonPath = $this->jsonPathLiteral($path === '' ? '$' : '$.' . $path);
+        return "JSON_LENGTH($column, $jsonPath)";
     }
 
     /**
@@ -170,8 +184,8 @@ class MySQLGrammar implements Grammar
      */
     public function jsonKeyExists(string $column, string $path): string
     {
-        $jsonPath = '$.' . $path;
-        return "JSON_CONTAINS_PATH($column, 'one', '$jsonPath')";
+        $jsonPath = $this->jsonPathLiteral('$.' . $path);
+        return "JSON_CONTAINS_PATH($column, 'one', $jsonPath)";
     }
 
     /**

@@ -8,6 +8,19 @@ All notable changes to `simsoft/fliq` are documented here.
 
 **Security**
 
+- **Identifier quoting could be escaped** — `quoteIdentifier()` wrapped names in
+  backticks (MySQL) or double quotes (PostgreSQL, SQLite) without escaping those
+  characters in the input, so a column name containing one closed the quoting
+  early and the rest was parsed as SQL. Passing
+  ``id` FROM `user` UNION SELECT username FROM `user` --`` as a column returned
+  every username. The quote character is now doubled, which is the standard
+  escape for all three engines.
+- **JSON paths could escape their string literal** — JSON paths cannot be bound
+  as parameters, so they are interpolated into a quoted literal; a quote in the
+  path closed it and the remainder became SQL. All 17 interpolation sites across
+  the three grammars now escape the path. MySQL also doubles backslashes, which
+  it treats as an escape character inside string literals.
+
 - **Mass assignment bypass in `Model::update()`** — attributes passed to
   `update()` were written straight to the database without consulting
   `$fillable` / `$guarded`, so `$user->update($_POST)` could set guarded columns
@@ -68,6 +81,9 @@ All notable changes to `simsoft/fliq` are documented here.
   across every condition method, and valid comparisons still accepted)
 - 3 query builder tests covering negative `limit()` / `offset()`, invalid
   `page()` numbers, and valid limits still applying (including `limit(0)`)
+- 4 security tests covering identifier-quote escaping and JSON path escaping,
+  each paired with a test that the valid forms (`*`, `user.*`, `!user.id`,
+  nested JSON paths) are unchanged
 
 ### Documentation
 
