@@ -18,6 +18,7 @@ use Simsoft\DB\Relation;
 use Simsoft\DB\Traits\Aggregation;
 use Simsoft\DB\Traits\Binds;
 use Simsoft\DB\Traits\Execute;
+use Simsoft\DB\Traits\Groupable;
 use Simsoft\DB\Traits\Likeable;
 use Simsoft\DB\Traits\Fetchable;
 use Simsoft\DB\Traits\PlaceHolder;
@@ -32,7 +33,7 @@ use Simsoft\DB\Traits\TemporaryAlias;
  */
 class ActiveQuery implements Executable, Updatable, Deletable
 {
-    use Qualifier, Execute, PlaceHolder, Binds, Aggregation, Fetchable, TemporaryAlias, Likeable;
+    use Qualifier, Execute, PlaceHolder, Binds, Aggregation, Fetchable, TemporaryAlias, Likeable, Groupable;
 
     /** @var null|string The table name */
     protected ?string $table = null;
@@ -585,11 +586,18 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Construct the query conditions.
      *
-     * @param string|array<int, array<int, mixed>>|callable|Raw|Clause $attribute the attribute
+     * Two array forms are accepted: a list of [attribute, operator, value]
+     * triplets, and a map of attribute => value where an array value means IN.
+     * Only the list form was declared, so the map form — which the method has
+     * always built, and which the array tests cover — did not type-check.
+     *
+     * @param string|array<int, array<int, mixed>>|array<string, mixed>|callable|Raw|Clause $attribute the attribute
      * @param mixed $operator the comparison operator or the attribute value
      * @param mixed $value the value for the attribute
      * @param string $logicalOperator The logical operator. Default: 'AND'.
      * @return static
+     * @throws InvalidArgumentException If the operator is not on the whitelist,
+     *     or its value does not match the shape the operator needs.
      */
     public function where(
         string|array|callable|Raw|Clause $attribute,
@@ -609,6 +617,11 @@ class ActiveQuery implements Executable, Updatable, Deletable
         // Normalize operator/value and handle NULL comparisons for string attributes
         if (is_string($attribute)) {
             $resolved = $this->resolveNullCondition($attribute, $operator, $value, $logicalOperator);
+            if ($resolved !== null) {
+                return $resolved;
+            }
+
+            $resolved = $this->resolveShapedOperator($attribute, $operator, $value, $logicalOperator);
             if ($resolved !== null) {
                 return $resolved;
             }
@@ -682,22 +695,115 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     private function resolveNullCondition(string $attribute, mixed $operator, mixed $value, string $logicalOperator): ?static
     {
-        // where('col', null) → IS NULL
-        if ($value === null && $operator === null) {
-            return $this->isNull($attribute, $logicalOperator);
+        // Only a null value can be a NULL check. A non-string operator is the
+        // where('col', $value) shorthand carrying its value in the operator
+        // slot, which the caller normalises afterwards.
+        if ($value !== null || !($operator === null || is_string($operator))) {
+            return null;
         }
 
-        // where('col', '=', null) → IS NULL
-        if ($value === null && $operator === '=') {
-            return $this->isNull($attribute, $logicalOperator);
+        // IS and IS NOT are on the documented operator whitelist, but nothing
+        // handled them: the shorthand saw a null value and took the operator
+        // as the value, so the query became `col = 'IS'` and matched nothing
+        // at all — wrong results with no error to notice. `<>` had the same
+        // fate, though `!=` was already handled.
+        return match ($operator === null ? '=' : strtoupper(trim($operator))) {
+            '=', 'IS' => $this->isNull($attribute, $logicalOperator),
+            '!=', '<>', 'IS NOT' => $this->notNull($attribute, $logicalOperator),
+            default => null,
+        };
+    }
+
+    /**
+     * Route operators whose right-hand side is not a single placeholder.
+     *
+     * @param string $attribute The attribute name.
+     * @param mixed $operator The operator.
+     * @param mixed $value The value.
+     * @param string $logicalOperator The logical operator.
+     * @return static|null Null when normal processing should continue.
+     * @throws InvalidArgumentException If a range operator is not given exactly two bounds.
+     */
+    private function resolveShapedOperator(
+        string $attribute,
+        mixed  $operator,
+        mixed  $value,
+        string $logicalOperator
+    ): ?static
+    {
+        if (!is_string($operator) || $value === null) {
+            return null;
         }
 
-        // where('col', '!=', null) → IS NOT NULL
-        if ($value === null && $operator === '!=') {
-            return $this->notNull($attribute, $logicalOperator);
+        // IN, NOT IN, BETWEEN and NOT BETWEEN are on the documented operator
+        // whitelist, so where('id', 'IN', [1, 2]) looks supported. Both paths
+        // below emit exactly one placeholder, so it built `id IN ?` and the
+        // server rejected the statement. These are the same conditions in()
+        // and between() already build correctly, so they are routed there.
+        return match (strtoupper(trim($operator))) {
+            'IN' => $this->in($attribute, $this->setValues($attribute, 'IN', $value), $logicalOperator),
+            'NOT IN' => $this->notIn($attribute, $this->setValues($attribute, 'NOT IN', $value), $logicalOperator),
+            'BETWEEN' => $this->betweenBounds($attribute, $value, true, $logicalOperator),
+            'NOT BETWEEN' => $this->betweenBounds($attribute, $value, false, $logicalOperator),
+            default => null,
+        };
+    }
+
+    /**
+     * Normalise the right-hand side of a set operator.
+     *
+     * @param string $attribute The attribute being matched, for the error message.
+     * @param string $operator The set operator.
+     * @param mixed $value The values to match against.
+     * @return array<int, mixed>|ActiveQuery|Raw The values as a list.
+     * @throws InvalidArgumentException If the value cannot form a set.
+     */
+    private function setValues(string $attribute, string $operator, mixed $value): array|ActiveQuery|Raw
+    {
+        // A set only uses the values, so keys are discarded; keeping them
+        // would leave a map here where the placeholders are positional.
+        if (is_array($value)) {
+            return array_values($value);
         }
 
-        return null;
+        if ($value instanceof ActiveQuery || $value instanceof Raw) {
+            return $value;
+        }
+
+        throw new InvalidArgumentException(sprintf(
+            '%s on "%s" needs an array, subquery or Raw expression; got %s.',
+            $operator,
+            $attribute,
+            get_debug_type($value)
+        ));
+    }
+
+    /**
+     * Apply a range condition from a two-element bounds array.
+     *
+     * @param string $attribute The attribute name.
+     * @param mixed $value The bounds.
+     * @param bool $is False to negate the range.
+     * @param string $logicalOperator The logical operator.
+     * @return static
+     * @throws InvalidArgumentException If the bounds are not exactly two values.
+     */
+    private function betweenBounds(string $attribute, mixed $value, bool $is, string $logicalOperator): static
+    {
+        $keyword = $is ? 'BETWEEN' : 'NOT BETWEEN';
+
+        if (!is_array($value) || count($value) !== 2) {
+            throw new InvalidArgumentException(sprintf(
+                '%s on "%s" needs exactly two bounds; got %s.',
+                $keyword,
+                $attribute,
+                is_array($value) ? count($value) . ' values' : get_debug_type($value)
+            ));
+        }
+
+        [$start, $end] = array_values($value);
+
+        return $this->between($attribute, $start, $end, $is, $logicalOperator);
     }
 
     /**
@@ -1455,90 +1561,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function orWhereRaw(string $statement, ?array $binds = null): static
     {
         return $this->where(new Raw($statement, $binds), logicalOperator: 'OR');
-    }
-
-    /**
-     * Group by statement.
-     *
-     * Accepts column names or Raw expressions.
-     *
-     * @param string|Raw ...$attributes The attributes or raw expressions.
-     * @return static
-     */
-    public function groupBy(string|Raw ...$attributes): static
-    {
-        foreach ($attributes as $name) {
-            if ($name instanceof Raw) {
-                $this->groupBys[] = (string)$name;
-                if ($name->getBinds()) {
-                    $this->appendBinds($name->getBinds());
-                }
-                continue;
-            }
-            $this->groupBys[] = $this->queryAttribute($name);
-        }
-
-        return $this;
-    }
-
-    /**
-     * Group by raw expression.
-     *
-     * @param string $expression The raw SQL expression.
-     * @param array<int, mixed>|null $binds Optional bind values.
-     * @return static
-     */
-    public function groupByRaw(string $expression, ?array $binds = null): static
-    {
-        $this->groupBys[] = $expression;
-        if ($binds !== null) {
-            $this->appendBinds($binds);
-        }
-        return $this;
-    }
-
-    /**
-     * Having clause.
-     *
-     * @param string|Raw $attribute The attribute or Raw expression.
-     * @param string|null $operator The comparison operator or the attribute value.
-     * @param mixed|null $value The value for the attribute.
-     * @return static
-     */
-    public function having(mixed $attribute, ?string $operator = '=', mixed $value = null): static
-    {
-        if ($value === null && $operator != '=') {
-            $value = $operator;
-            $operator = '=';
-        }
-
-        $condition = (new Condition($attribute, $value))
-            ->operator($this->validateOperator($operator ?? '='))
-            ->setPlaceHolder($this->getPlaceHolder());
-
-        // Eagerly build and collect binds
-        $this->having[] = (string)$condition;
-        if ($condition->getBinds()) {
-            $this->appendBinds($condition->getBinds());
-        }
-
-        return $this;
-    }
-
-    /**
-     * Having with raw expression.
-     *
-     * @param string $expression The raw SQL expression.
-     * @param array<int, mixed>|null $binds Optional bind values.
-     * @return static
-     */
-    public function havingRaw(string $expression, ?array $binds = null): static
-    {
-        $this->having[] = $expression;
-        if ($binds !== null) {
-            $this->appendBinds($binds);
-        }
-        return $this;
     }
 
     /**

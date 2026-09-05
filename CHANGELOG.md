@@ -271,6 +271,40 @@ All notable changes to `simsoft/fliq` are documented here.
   word, so the call added nothing and returned `$this` as though it had worked.
   A callable that cannot be rebound is now invoked as-is, receiving the query as
   its argument.
+- **`IS` and `IS NOT` compared against the operator text** — both are on the
+  documented operator whitelist, so `where('deleted_at', 'IS', null)` passed
+  validation, but nothing handled them: the two-argument shorthand saw a null
+  value, took the operator as the value, and built ``deleted_at` = 'IS'``. That
+  is valid SQL, so there was no error to notice — it simply matched the wrong
+  rows, silently. Both now build `IS [NOT] NULL`, as does `<>` against null,
+  which had the same fate while `!=` was already handled.
+- **`IN`, `NOT IN`, `BETWEEN` and `NOT BETWEEN` emitted one placeholder** —
+  these are on the same whitelist, so `where('id', 'IN', [1, 2])` looks
+  supported, but both the fast path and `Condition` built `id IN ?` and the
+  server rejected the statement. They are now routed to `in()`, `notIn()` and
+  `between()`, which already build the correct shape. A range needs exactly two
+  bounds and a set needs an array, subquery or `Raw`; anything else raises
+  `InvalidArgumentException` naming the attribute.
+- **An empty value list built `IN ()`** — both array forms of `where()` emitted
+  an empty group for an entry whose values were empty, which is a syntax error,
+  so a filter narrowed to nothing took the whole query down. The entry is now
+  skipped and the rest of the group still applies, matching `in()`.
+- **A short triplet bound null and warned** — the list form destructured each
+  `[attribute, operator, value]` entry without checking its shape, so a
+  two-element entry raised "Undefined array key 2" and then built a condition
+  matching nothing. Entries are now validated, with the error naming the
+  position at fault.
+- **A comparison against several values left the binds short** — `Condition`
+  emits one placeholder, but bound every value it was given, so
+  `where('username', 'LIKE', ['%a%', '%b%'])` failed with the driver's "must
+  consist of exactly 1 elements" rather than anything naming the attribute.
+  It now raises `InvalidArgumentException` when the shapes disagree.
+- **`Condition` discarded its operator for a null value** — a null value bound
+  the *operator* in its place and reset the operator to `=`, so a clause built
+  as `score > null` became ``score` = '>'`` — the column compared against the
+  literal operator text, which a column whose value happened to be `>` would
+  have matched. The shorthand predates `operator()` validating its input. A
+  null now binds like any other value.
 
 ### Changed
 
@@ -391,6 +425,20 @@ All notable changes to `simsoft/fliq` are documented here.
   joined to each other), and that a list with patterns in it is not swallowed
   by the guard. 6 of the 8 fail against the unfixed builder — as errors, since
   the query did not run at all.
+- 16 operator-shape tests covering every whitelisted operator whose right-hand
+  side is not a single placeholder — `IN`, `NOT IN`, `BETWEEN`, `NOT BETWEEN`,
+  `IS`, `IS NOT` and `<>` against null — plus the shape errors each now raises.
+  `Condition` was the lowest-covered file in `src` at 47.22%.
+- 14 tests for the two array forms of `where()`, covering an empty value list
+  in each, a dropped entry leaving the conditions on either side joined to each
+  other, malformed triplets, and the ordinary shapes both forms still build.
+- 10 integration tests for the same operators, checked against the answer the
+  database computes for the equivalent plain SQL. These run live because the
+  `IS` defect produced *valid* SQL: a string comparison would have called the
+  broken form correct, since only the rows it returned were wrong. Includes the
+  two null operators selecting disjoint sets that together cover the table —
+  previously both returned nothing, which would have looked consistent had each
+  been checked only against the other.
 - 2 cache tests covering key separation by connection and an end-to-end check
   that two databases holding the same table never serve each other's rows
 - 2 timestamp tests covering `update()` advancing `updated_at` while leaving
@@ -501,6 +549,17 @@ All notable changes to `simsoft/fliq` are documented here.
 - The Like Clauses section now documents what an empty pattern array does, that
   it matches `in()`, and how to get the opposite behaviour if an empty search
   should return nothing.
+- New "Operators that take more than one value" section in the Where Clauses
+  guide. The operator table listed `IN`, `BETWEEN`, `IS` and their negations,
+  but nothing said what to pass them — the array shape the set and range
+  operators need, that `IS` takes no value, which shorthands are equivalent,
+  and that the dedicated methods read better when the operator is not itself a
+  variable.
+- New "Passing several conditions at once" section covering both array forms of
+  `where()`. Only the list of triplets appeared in an example; the map form was
+  built but undocumented, including that it is parenthesised, that an array
+  value means `IN`, that an empty value list is skipped, and that a `null`
+  value binds rather than becoming an `IS NULL` check.
 
 ---
 

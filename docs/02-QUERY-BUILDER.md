@@ -156,6 +156,40 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
+### Passing several conditions at once
+
+`where()` accepts two array shapes. A **list of triplets**, each
+`[attribute, operator, value]`, joined with `AND`:
+
+```php
+/* WHERE `user`.`score` >= ? AND `user`.`id` IN (?,?) */
+$users = User::find()->where([
+    ['score', '>=', 150],
+    ['id', 'IN', [1, 2]],
+])->get();
+```
+
+Or a **map** of `attribute => value`, where an array value means `IN`. The map
+form is wrapped in parentheses, so it stays one unit next to an `OR`:
+
+```php
+/* WHERE (`user`.`role` = ? AND `user`.`id` IN (?,?)) */
+$users = User::find()->where(['role' => 'admin', 'id' => [1, 2]])->get();
+```
+
+An entry whose value list is empty adds no condition, and the rest of the
+group still applies — the same rule `in()` follows:
+
+```php
+/* WHERE (`user`.`role` = ?) — the empty id filter contributes nothing */
+$users = User::find()->where(['role' => 'admin', 'id' => []])->get();
+```
+
+In the list form every entry must be a full triplet; a shorter one throws an
+`InvalidArgumentException` naming its position. In the map form a `null` value
+is bound as a value rather than becoming an `IS NULL` check — use
+[`isNull()`](#null-conditions) for that.
+
 ### Which operators can I use?
 
 The middle argument of `where()` is the **comparison operator**. Only these are
@@ -198,6 +232,42 @@ values with `?`:
 ```php
 $users = User::find()->where(new Raw('{score} <=> ?', [50]))->get();
 ```
+
+### Operators that take more than one value
+
+`IN`, `NOT IN`, `BETWEEN` and `NOT BETWEEN` need a right-hand side that isn't a
+single value, so pass an array:
+
+```php
+/* WHERE `user`.`id` IN (?,?,?) */
+$users = User::find()->where('id', 'IN', [1, 2, 3])->get();
+
+/* WHERE `user`.`id` BETWEEN ? AND ? */
+$users = User::find()->where('id', 'BETWEEN', [2, 4])->get();
+```
+
+These are the same conditions [`in()`](#in-clauses) and
+[`between()`](#between-clauses) build, and those methods read better when you
+know the operator up front. The operator form is there for when the operator
+itself is a variable.
+
+A range needs exactly two bounds, and a set needs an array, a subquery or a
+`Raw` expression — anything else throws an `InvalidArgumentException` naming the
+attribute rather than producing SQL the server rejects. An empty set adds no
+condition at all, matching `in()`.
+
+`IS` and `IS NOT` compare against null and take no value:
+
+```php
+/* WHERE `user`.`deleted_at` IS NULL */
+$users = User::find()->where('deleted_at', 'IS', null)->get();
+```
+
+`where('col', null)` and `where('col', '=', null)` mean the same thing, as do
+`where('col', '!=', null)`, `where('col', '<>', null)` and
+`where('col', 'IS NOT', null)`. The dedicated
+[null methods](#null-conditions) are clearer if you aren't choosing the
+operator dynamically.
 
 ### The two-argument shortcut
 
