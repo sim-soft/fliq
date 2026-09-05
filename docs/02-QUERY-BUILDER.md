@@ -1195,6 +1195,54 @@ $posts = (new ActiveQuery())
     ->get();
 ```
 
+### Joins Without an ON Clause
+
+A `CROSS JOIN` pairs every row with every row, so it takes no key mapping —
+omit the second argument:
+
+```php
+/* SELECT `user`.* FROM `user` CROSS JOIN `size` */
+$combinations = (new ActiveQuery())
+    ->from('user')
+    ->crossJoin('size')
+    ->on('mysql')
+    ->get();
+
+/* Aliases still apply: ... CROSS JOIN `size` AS `s` */
+$combinations = (new ActiveQuery())
+    ->from('user')
+    ->crossJoin('size s')
+    ->on('mysql')
+    ->get();
+```
+
+Any join type called without keys omits the `ON` clause the same way.
+
+### Scoping Conditions to a Joined Table
+
+An unqualified column name resolves against the FROM table, so constraining a
+joined table normally means prefixing each column. `withAlias()` swaps the
+alias for the duration of a callback so those columns can be named plainly:
+
+```php
+/* SELECT `u`.`id` FROM `user` `u`
+   INNER JOIN `post` AS `p` ON `p`.`user_id` = `u`.`id`
+   WHERE `p`.`view_count` > ? AND `u`.`status_code` = ? */
+$users = (new ActiveQuery())
+    ->from('user u')
+    ->select('u.id')
+    ->join('post p', ['p.user_id' => 'u.id'])
+    ->withAlias('p', fn($query) => $query->where('view_count', '>', 0))
+    ->where('status_code', 1)
+    ->on('mysql')
+    ->get();
+```
+
+The alias applies only inside the callback — `status_code` above still
+resolves to `` `u` ``. It covers `select()`, `where()`, `groupBy()`,
+`having()`, and `orderBy()`, and is restored even if the callback throws.
+Names already carrying a prefix are left alone.
+
 ### Raw Expressions in Joins
 
 Use `{attribute}` placeholders inside `Raw` expressions — they resolve to the main table's qualified column:

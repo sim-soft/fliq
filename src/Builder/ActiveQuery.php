@@ -21,6 +21,7 @@ use Simsoft\DB\Traits\Execute;
 use Simsoft\DB\Traits\Fetchable;
 use Simsoft\DB\Traits\PlaceHolder;
 use Simsoft\DB\Traits\Qualifier;
+use Simsoft\DB\Traits\TemporaryAlias;
 
 /**
  * Class ActiveQuery.
@@ -30,7 +31,7 @@ use Simsoft\DB\Traits\Qualifier;
  */
 class ActiveQuery implements Executable, Updatable, Deletable
 {
-    use Qualifier, Execute, PlaceHolder, Binds, Aggregation, Fetchable;
+    use Qualifier, Execute, PlaceHolder, Binds, Aggregation, Fetchable, TemporaryAlias;
 
     /** @var null|string The table name */
     protected ?string $table = null;
@@ -415,6 +416,15 @@ class ActiveQuery implements Executable, Updatable, Deletable
 
         $join = $type ? strtoupper($type) . ' JOIN' : 'JOIN';
 
+        if ($on === []) {
+            // A CROSS JOIN pairs every row and takes no ON clause, so calling
+            // crossJoin() the documented way — with no keys — used to build one
+            // out of empty strings: `ON `post`.`` = {}`, which the server
+            // rejects outright. With no keys there is nothing to match on, so
+            // the clause is omitted entirely.
+            return $this->joinWithoutOn($join, $table, $alias);
+        }
+
         $foreignKey = (string)array_key_first($on);
         $localKey = (string)current($on);
 
@@ -436,6 +446,28 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $qt = $this->quote($table);
         $qa = $this->quote((string)$alias);
         $this->joins[(string)$alias] = "$join $qt AS $qa ON $qa." . $this->quote($foreignKey) . " = " . $this->queryAttribute($localKey);
+
+        return $this;
+    }
+
+    /**
+     * Register a join that has no ON clause, such as a CROSS JOIN.
+     *
+     * @param string $join The join keyword, e.g. 'CROSS JOIN'.
+     * @param string $table The table name.
+     * @param string|null $alias The table alias, if it differs from the table.
+     * @return static
+     */
+    private function joinWithoutOn(string $join, string $table, ?string $alias): static
+    {
+        $quotedTable = $this->quote($table);
+
+        if ($alias === null || $alias === $table) {
+            $this->joins[$table] = "$join $quotedTable";
+            return $this;
+        }
+
+        $this->joins[$alias] = "$join $quotedTable AS " . $this->quote($alias);
 
         return $this;
     }
@@ -498,26 +530,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function rightOuterJoin(string $table, array $on = []): static
     {
         return $this->join($table, $on, 'RIGHT OUTER');
-    }
-
-    /**
-     * Apply conditions with a temporary alias.
-     *
-     * @param string $alias The alias to use temporarily.
-     * @param callable $condition The condition callback.
-     * @return static
-     */
-    public function withAlias(string $alias, callable $condition): static
-    {
-        if ($condition instanceof Closure
-            && ($callable = Closure::bind($condition, $this, get_class($this)))
-        ) {
-            $backup = $this->getAlias();
-            $this->alias($alias);
-            $callable($this);
-            $this->alias($backup);
-        }
-        return $this;
     }
 
     /**

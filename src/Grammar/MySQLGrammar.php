@@ -193,8 +193,14 @@ class MySQLGrammar implements Grammar
      */
     public function lockSQL(string $lockType): string
     {
+        // NOWAIT and SKIP LOCKED have been available since MySQL 8.0. Without
+        // them here both fell through to a plain FOR UPDATE, so a caller asking
+        // to skip locked rows silently got the blocking behaviour instead — the
+        // opposite of what the job queue pattern needs.
         return match ($lockType) {
             'share' => 'FOR SHARE',
+            'noWait' => 'FOR UPDATE NOWAIT',
+            'skipLocked' => 'FOR UPDATE SKIP LOCKED',
             default => 'FOR UPDATE',
         };
     }

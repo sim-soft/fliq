@@ -212,6 +212,34 @@ All notable changes to `simsoft/fliq` are documented here.
   operator (`WHERE id = ? AND`). Either way the query failed with a syntax error
   pointing far from the call responsible. Omitting both dates now raises
   `InvalidArgumentException` naming the attribute.
+- **MySQL silently dropped `NOWAIT` and `SKIP LOCKED`** — `MySQLGrammar` only
+  recognised the shared-lock mode, so both modifiers fell through to a plain
+  `FOR UPDATE`. A caller asking to skip locked rows got the blocking behaviour
+  instead: the documented job-queue pattern
+  (`forUpdateSkipLocked()`) waited on rows another worker held rather than
+  passing over them, and `forUpdateNoWait()` blocked where it was meant to fail
+  fast — up to `innodb_lock_wait_timeout`, 50 seconds by default. Both clauses
+  have been available since MySQL 8.0 and are now emitted.
+- **`crossJoin()` built an `ON` clause out of nothing** — the `$on` parameter
+  defaults to an empty array, which is how a `CROSS JOIN` is normally written
+  since it pairs every row and has nothing to match on. The builder took the
+  first key and value of that empty array anyway, emitting
+  ``ON `post`.`` = {}`` plus PHP warnings, which the server rejects outright —
+  so the documented call could not run at all. A join given no keys now omits
+  the clause entirely.
+- **`withAlias()` never applied its alias** — an unqualified column is stored
+  deferred as `{name}` and resolved in `getSQL()` against whatever alias is
+  current *then*, which is the query's own, since `withAlias()` restores it
+  before returning. Every column named inside the callback came out qualified
+  with the `FROM` table instead of the temporary alias. Nothing failed: the
+  query ran and constrained the wrong table. Entries appended by the callback
+  are now resolved while the temporary alias still holds.
+- **`withAlias()` discarded most callables** — the parameter accepts any
+  `callable`, but only a `Closure` was acted on. An invokable object or a
+  `[$object, 'method']` pair fell past the check and was dropped without a
+  word, so the call added nothing and returned `$this` as though it had worked.
+  A callable that cannot be rebound is now invoked as-is, receiving the query as
+  its argument.
 
 ### Changed
 
@@ -304,6 +332,22 @@ All notable changes to `simsoft/fliq` are documented here.
   negation partitioning the table, grouping against a surrounding `AND` on
   either side, inclusive bounds, the half-open interval end, and the binding of
   dates. 11 of the 27 fail against the unfixed clause.
+- 10 row-locking tests covering all four lock clauses, which previously had
+  none. The behavioural ones create real contention from a second connection:
+  `SKIP LOCKED` is checked to return exactly the rows another transaction does
+  *not* hold, and `NOWAIT` to fail within seconds rather than waiting out the
+  lock timeout. Against the unfixed grammar the contention test does not merely
+  fail — it blocks until "Lock wait timeout exceeded", which is the production
+  symptom itself.
+- 8 join tests covering joins written without an `ON` clause: `crossJoin()` with
+  and without an alias, two of them side by side, every join type reaching the
+  same path, and that joins given keys are unaffected. 4 fail against the
+  unfixed builder.
+- 13 `withAlias()` tests covering the joined-table case the method exists for,
+  the alias applying only inside the callback, `select` / `groupBy` / `orderBy`
+  as well as conditions, nesting, explicit prefixes left alone, each callable
+  form, and the alias being restored when the callback throws. 10 fail against
+  the unfixed builder.
 - 2 cache tests covering key separation by connection and an end-to-end check
   that two databases holding the same table never serve each other's rows
 - 2 timestamp tests covering `update()` advancing `updated_at` while leaving
@@ -404,6 +448,13 @@ All notable changes to `simsoft/fliq` are documented here.
   forms, which were previously absent: the SQL they build, the parentheses and
   why they are needed, that at least one of the two dates is required, and that
   an interval window is half-open so consecutive windows tile without overlap.
+- New "Joins Without an ON Clause" subsection in the query builder guide.
+  `crossJoin()` previously appeared only in a bare method list, with no example
+  of the form it is normally written in.
+- New "Scoping Conditions to a Joined Table" subsection documenting
+  `withAlias()`, which was previously undocumented: what the temporary alias
+  covers, that it applies only inside the callback, and that explicitly
+  prefixed names are left alone.
 
 ---
 
