@@ -52,7 +52,11 @@ class DB
     public static function table(string|array|Model $name, ?string $connection = null): ActiveQuery
     {
         if ($name instanceof Model) {
-            return $name::find();
+            $query = $name::find();
+
+            // Only override when one was given: the model already carries its
+            // own connection, and passing null through would discard it.
+            return $connection === null ? $query : $query->withConnection($connection);
         }
 
         return (new ActiveQuery())

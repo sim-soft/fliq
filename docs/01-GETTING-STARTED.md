@@ -11,6 +11,7 @@
 - [DB Facade](#using-the-db-facade)
 - [DB Facade CRUD](#db-facade-crud-operations)
 - [DB Facade Transactions](#db-facade-transactions)
+- [DB Facade SQL-Only Mode](#db-facade-sql-only-mode)
 
 ## Connection Management
 Setup database connections.
@@ -505,6 +506,11 @@ $rows = DB::query('SELECT * FROM logs', [], 'pgsql');
 $users = DB::table('users')
     ->where('status', 1)
     ->get();
+
+// A model works too, and takes the same optional connection argument.
+// Without one, the model keeps its own connection.
+$users = DB::table(new User())->where('status', 1)->get();
+$users = DB::table(new User(), 'reporting')->get();
 ```
 
 ## DB Facade CRUD Operations
@@ -571,3 +577,39 @@ DB::transaction('mysql', function () {
 `User::transaction(fn() => ...)` instead — it automatically uses the model's
 > connection.
 > See [Transactions in Active Record](03-ACTIVE-RECORD.md#transactions).
+
+The exception a callback throws is wrapped in a `QueryException`, but it is kept
+as the previous exception, so the original cause is still reachable:
+
+```php
+try {
+    DB::transaction('mysql', fn() => throw new RuntimeException('out of stock'));
+} catch (QueryException $e) {
+    $e->getMessage();          // 'out of stock'
+    $e->getPrevious();         // the original RuntimeException
+}
+```
+
+## DB Facade SQL-Only Mode
+
+`DB::sqlOnly()` makes the write methods return their builder instead of
+executing it — useful for inspecting or logging the SQL a call would produce:
+
+```php
+DB::sqlOnly();
+
+$builder = DB::insert('users', ['name' => 'John']);
+$builder->getSQL();      // 'INSERT INTO `users` (`name`) VALUES (?)'
+$builder->getBinds();    // ['John']
+
+DB::disableSqlOnly();    // back to executing
+```
+
+Two things to know before using it:
+
+- **It is global and it stays on.** The flag is static, so it applies to every
+  `DB::` call anywhere in the process until `DB::disableSqlOnly()` is called.
+  Turn it off in a `finally` block if the code in between might throw.
+- **`raw()` and `query()` ignore it.** They do not go through the builder, so
+  they execute even in SQL-only mode. Only `insert()`, `insertOrIgnore()`, the
+  `update*()` family, the `delete*()` family and `upsert()` are affected.

@@ -53,7 +53,8 @@ User::find()->active()->admins()->get();
 | Paginate        | `User::find()->page(2, 25)->get()`                  |
 | Cursor paginate | `User::find()->cursorPaginate(25, $cursor)`         |
 | Pluck column    | `User::find()->pluck('email')`                      |
-| Raw SQL         | `DB::raw('SELECT ...', [...])`                      |
+| Raw SELECT      | `DB::query('SELECT ...', [...])` — returns rows     |
+| Raw statement   | `DB::raw('UPDATE ...', [...])` — returns bool       |
 | Upsert          | `DB::upsert('users', [...], ['email'])`             |
 | Select raw      | `->selectRaw('COUNT(*) AS total')`                  |
 | Order by raw    | `->orderByRaw('FIELD(status, 3, 1, 2)')`            |

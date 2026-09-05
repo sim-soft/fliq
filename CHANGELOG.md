@@ -143,6 +143,14 @@ All notable changes to `simsoft/fliq` are documented here.
   with no conditions instead of failing. `Query::wheer('id', 5)` therefore
   matched the whole table, so a typo in a `DELETE` or `UPDATE` would apply to
   every row. Unknown methods now throw `BadMethodCallException`.
+- **`DB::table()` ignored the connection argument for models** — the `Model`
+  overload returned `$model::find()` and dropped `$connection` on the floor,
+  while `resolveTable()` — used by every write method — honoured it. So
+  `DB::insert($model, [...], 'reporting')` wrote to `reporting` but
+  `DB::table($model, 'reporting')` read from the default connection: the same
+  argument in the same position, silently routed to a different database. The
+  override is now applied; passing no connection still leaves the model's own
+  connection intact.
 - **A relation with a `NULL` key returned the entire related table** —
   `Relation::applyConstraints()` returned early when the local key value was
   `null`, leaving the query with no condition at all. Fetching such a relation
@@ -272,6 +280,16 @@ All notable changes to `simsoft/fliq` are documented here.
   both directions — an unsaved parent and a saved row with a nullable foreign
   key — and asserts writes on a keyless relation cannot touch the table. This
   takes `Relation` from 34.58% to 100% line coverage.
+- 40 `DB` facade tests covering the execution path. The existing suite only
+  exercised `sqlOnly` mode, so every method was tested for the SQL it builds
+  and none for what it does to a database — the branch that runs in
+  production. Covers all four write families including the `IGNORE`, `QUICK`
+  and `LOW_PRIORITY` variants, `upsert()` inserting and updating, `raw()` and
+  `query()` (including that binds stay data and that both throw on bad SQL),
+  `transaction()` committing, rolling back on `false`, rolling back on an
+  exception, and preserving the original exception as `getPrevious()`, and the
+  `sqlOnly` flag applying to every write method while `raw()` / `query()`
+  deliberately bypass it. This takes `DB` from 5.45% to 100% line coverage.
 
 ### Documentation
 
