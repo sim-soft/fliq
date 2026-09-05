@@ -518,6 +518,47 @@ DB::transaction('mysql', function () {
 Both approaches auto-rollback if an exception is thrown or if the callback
 returns `false` (or doesn't return `true`).
 
+### Nesting transactions
+
+You can call `transaction()` from inside another one. This matters when a
+method that manages its own transaction gets called by another method that
+does the same — you don't have to know whether a transaction is already open.
+
+```php
+User::transaction(function () {
+    $user = new User(['username' => 'ann']);
+    $user->save();
+
+    // Some service method that wraps its own work in a transaction.
+    User::transaction(function () {
+        $log = new AuditLog(['action' => 'user.created']);
+        $log->save();
+
+        return false; // undoes only the audit log
+    });
+
+    return true; // the user is still saved
+});
+```
+
+The rules:
+
+- Only the outermost call opens a real transaction. Inner calls use
+  **savepoints**.
+- An inner rollback undoes **only its own work**. The outer transaction
+  continues.
+- An outer rollback undoes **everything**, including work that inner calls
+  "committed". Nothing is durable until the outermost call commits.
+- An exception thrown anywhere rolls back every level and propagates.
+
+Use `getTransactionLevel()` on the driver if you need to know the current
+depth — `0` means no transaction is open.
+
+> **Note:** If the database connection drops while a transaction is open, FLIQ
+> throws a `ConnectionException` rather than silently reconnecting. Reconnecting
+> would discard the work so far and let the remaining statements commit on their
+> own, which would turn an atomic block into a partial write.
+
 ## Serialization
 
 Convert models to arrays or JSON for API responses:

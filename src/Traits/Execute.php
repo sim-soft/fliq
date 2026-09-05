@@ -142,8 +142,20 @@ trait Execute
      */
     protected function getDriver(string $type = 'write'): Driver
     {
-        $name = $this->connection ?? Connection::getDefaultName();
-        return Connection::get($name, $type);
+        return Connection::get($this->resolveConnectionName(), $type);
+    }
+
+    /**
+     * Resolve the connection name, falling back to the default.
+     *
+     * Always returns a concrete name so that an unset connection and an
+     * explicitly named default resolve to the same value.
+     *
+     * @return string
+     */
+    protected function resolveConnectionName(): string
+    {
+        return $this->connection ?? Connection::getDefaultName();
     }
 
     /**
@@ -259,7 +271,7 @@ trait Execute
             return null;
         }
 
-        $key = QueryCache::generateKey($target->getSQL(), $target->getBinds());
+        $key = QueryCache::generateKey($target->getSQL(), $target->getBinds(), $this->resolveConnectionName());
         $cached = $driver->get($key);
 
         return is_array($cached) ? $cached : null;
@@ -284,7 +296,7 @@ trait Execute
             return;
         }
 
-        $key = QueryCache::generateKey($target->getSQL(), $target->getBinds());
+        $key = QueryCache::generateKey($target->getSQL(), $target->getBinds(), $this->resolveConnectionName());
         $driver->set($key, $result, $cacheTtl);
     }
 }

@@ -165,4 +165,174 @@ class TransactionTest extends TestCase
             throw new \RuntimeException('db error');
         });
     }
+
+    /**
+     * Insert a row inside the current transaction.
+     */
+    private function insert(int $id, string $name): void
+    {
+        $this->driver->execute(new \Simsoft\DB\Builder\Raw(
+            'INSERT INTO test_tx (id, name) VALUES (?, ?)',
+            [$id, $name]
+        ));
+    }
+
+    /**
+     * Get the names currently visible in the table, sorted.
+     *
+     * @return array<int, string>
+     */
+    private function names(): array
+    {
+        $rows = $this->driver->query(new \Simsoft\DB\Builder\Raw('SELECT name FROM test_tx ORDER BY id'));
+
+        return array_map(static fn(array $row): string => (string)$row['name'], $rows);
+    }
+
+    #[Test]
+    public function outerRollbackAlsoDiscardsInnerCommittedWork(): void
+    {
+        // Without savepoints the inner call committed the outer's work too, so
+        // the outer rollback had nothing left to undo and both rows survived.
+        $result = $this->driver->transaction(function () {
+            $this->insert(1, 'outer');
+
+            $inner = $this->driver->transaction(function () {
+                $this->insert(2, 'inner');
+                return true;
+            });
+            $this->assertTrue($inner);
+
+            return false;
+        });
+
+        $this->assertFalse($result);
+        $this->assertSame([], $this->names());
+    }
+
+    #[Test]
+    public function innerRollbackKeepsOuterWork(): void
+    {
+        $result = $this->driver->transaction(function () {
+            $this->insert(1, 'outer');
+
+            $inner = $this->driver->transaction(function () {
+                $this->insert(2, 'inner');
+                return false;
+            });
+            $this->assertFalse($inner);
+
+            return true;
+        });
+
+        $this->assertTrue($result);
+
+        // Only the inner savepoint was rolled back.
+        $this->assertSame(['outer'], $this->names());
+    }
+
+    #[Test]
+    public function nestedTransactionsCommitTogether(): void
+    {
+        $result = $this->driver->transaction(function () {
+            $this->insert(1, 'outer');
+
+            return $this->driver->transaction(function () {
+                $this->insert(2, 'inner');
+                return true;
+            });
+        });
+
+        $this->assertTrue($result);
+        $this->assertSame(['outer', 'inner'], $this->names());
+    }
+
+    #[Test]
+    public function exceptionInsideNestedTransactionRollsBackEverything(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('nested boom');
+
+        try {
+            $this->driver->transaction(function () {
+                $this->insert(1, 'outer');
+
+                $this->driver->transaction(function (): bool {
+                    throw new \RuntimeException('nested boom');
+                });
+
+                return true;
+            });
+        } finally {
+            $this->assertSame([], $this->names());
+            $this->assertSame(0, $this->driver->getTransactionLevel());
+        }
+    }
+
+    #[Test]
+    public function nestingIsSupportedBeyondTwoLevels(): void
+    {
+        $result = $this->driver->transaction(function () {
+            $this->insert(1, 'level1');
+
+            return $this->driver->transaction(function () {
+                $this->insert(2, 'level2');
+
+                // The deepest level rolls back on its own.
+                $this->driver->transaction(function () {
+                    $this->insert(3, 'level3');
+                    return false;
+                });
+
+                return true;
+            });
+        });
+
+        $this->assertTrue($result);
+        $this->assertSame(['level1', 'level2'], $this->names());
+    }
+
+    #[Test]
+    public function transactionLevelTracksNestingDepth(): void
+    {
+        $this->assertSame(0, $this->driver->getTransactionLevel());
+
+        $this->driver->transaction(function () {
+            $this->assertSame(1, $this->driver->getTransactionLevel());
+
+            $this->driver->transaction(function () {
+                $this->assertSame(2, $this->driver->getTransactionLevel());
+                return true;
+            });
+
+            // Releasing the savepoint returns to the outer level.
+            $this->assertSame(1, $this->driver->getTransactionLevel());
+
+            return true;
+        });
+
+        $this->assertSame(0, $this->driver->getTransactionLevel());
+    }
+
+    #[Test]
+    public function transactionLevelIsRestoredAfterAFailedTransaction(): void
+    {
+        try {
+            $this->driver->transaction(function (): bool {
+                throw new \RuntimeException('boom');
+            });
+        } catch (\RuntimeException) {
+            // expected
+        }
+
+        // A later transaction must not be mistaken for a nested one.
+        $this->assertSame(0, $this->driver->getTransactionLevel());
+
+        $this->driver->transaction(function () {
+            $this->insert(1, 'after_failure');
+            return true;
+        });
+
+        $this->assertSame(['after_failure'], $this->names());
+    }
 }

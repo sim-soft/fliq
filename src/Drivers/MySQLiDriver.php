@@ -31,6 +31,9 @@ class MySQLiDriver extends Driver
      */
     protected function connect(): void
     {
+        // A new connection carries no transaction, whatever the old one had.
+        $this->resetTransactionLevel();
+
         try {
             mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
@@ -152,22 +155,33 @@ class MySQLiDriver extends Driver
     /**
      * {@inheritdoc}
      */
-    public function transaction(callable $callback): bool
+    protected function beginTransaction(): void
     {
-        $conn = $this->getConnection();
-        $conn->begin_transaction();
+        $this->getConnection()->begin_transaction();
+    }
 
-        try {
-            if ($callback() === true) {
-                return $conn->commit();
-            }
+    /**
+     * {@inheritdoc}
+     */
+    protected function commitTransaction(): bool
+    {
+        return $this->getConnection()->commit();
+    }
 
-            $conn->rollback();
-            return false;
-        } catch (\Throwable $e) {
-            $conn->rollback();
-            throw $e;
-        }
+    /**
+     * {@inheritdoc}
+     */
+    protected function rollBackTransaction(): void
+    {
+        $this->getConnection()->rollback();
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function executeRawStatement(string $sql): void
+    {
+        $this->getConnection()->query($sql);
     }
 
     /**
@@ -198,6 +212,7 @@ class MySQLiDriver extends Driver
     public function reconnectIfNeeded(): void
     {
         if ($this->connection === null || !$this->ping()) {
+            $this->guardReconnectDuringTransaction();
             $this->connect();
         }
     }

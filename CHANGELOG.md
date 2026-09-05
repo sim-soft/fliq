@@ -50,6 +50,32 @@ All notable changes to `simsoft/fliq` are documented here.
   `whereJson()`, `whereJsonLength()`, `whereDate()` / `whereMonth()` /
   `whereYear()` / `whereTime()`, and `CaseExpression::when()` / `whenColumn()`.
 
+**Data Integrity**
+
+- **Nested transactions silently lost atomicity** — no driver tracked whether a
+  transaction was already open, so a nested `transaction()` call issued a second
+  `BEGIN`. On the default MySQLi driver that **implicitly commits** the outer
+  transaction, so the inner call permanently wrote the outer's work and a later
+  outer rollback had nothing left to undo — both rows survived a rollback that
+  should have discarded them. The PDO drivers raised
+  `There is already an active transaction` instead. Nesting is now supported on
+  all four drivers: the outermost call opens the real transaction and inner
+  calls use savepoints, so an inner rollback undoes only its own work while an
+  outer rollback still undoes everything. `getTransactionLevel()` reports the
+  current depth.
+- **Reconnecting during a transaction silently discarded it** —
+  `reconnectIfNeeded()` runs before every query and would transparently
+  re-establish a dropped connection mid-transaction, abandoning the statements
+  written so far while letting the remaining ones commit on their own. It now
+  throws `ConnectionException` instead of turning an atomic block into a partial
+  write.
+- **Cached query results leaked between connections** — the cache key was built
+  from the SQL and bind values only, so the same statement run against two
+  different databases shared one entry and the second connection was served the
+  first one's rows. Verified end to end: a query against database B returned
+  database A's data. The connection name is now part of the key, which matters
+  most for multi-tenant setups that keep tenants apart by connection.
+
 **Query Builder**
 
 - **A negative `limit()` silently returned every row** — `hasLimit()` tested
@@ -94,6 +120,12 @@ All notable changes to `simsoft/fliq` are documented here.
   PostgreSQL text search config and the array cast type — each paired with a
   test that the valid forms (`*`, `user.*`, `!user.id`, nested JSON paths,
   `double precision`) are unchanged
+- 7 transaction tests covering nesting: an outer rollback discarding work an
+  inner call committed, an inner rollback leaving the outer intact, nesting
+  beyond two levels, exception propagation from a nested call, and that the
+  depth counter unwinds to zero after both success and failure
+- 2 cache tests covering key separation by connection and an end-to-end check
+  that two databases holding the same table never serve each other's rows
 
 ### Documentation
 
@@ -104,6 +136,12 @@ All notable changes to `simsoft/fliq` are documented here.
 - The operator whitelist, the `ASC` / `DESC` fallback and the `limit()` /
   `offset()` / `page()` constraints are now documented where they are used, in
   the query builder guide and the cheatsheet.
+- New "Nesting transactions" section in the Active Record guide, covering
+  savepoint semantics, what an inner versus an outer rollback undoes, and the
+  connection-loss behaviour.
+- New "What makes a cache entry unique" section in the advanced features guide,
+  explaining that the cache key includes the connection name and why that
+  matters for multi-tenant setups.
 
 ---
 

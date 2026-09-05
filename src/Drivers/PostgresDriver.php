@@ -48,6 +48,9 @@ class PostgresDriver extends Driver
      */
     protected function connect(): void
     {
+        // A new connection carries no transaction, whatever the old one had.
+        $this->resetTransactionLevel();
+
         try {
             $this->cacheEnabled = (bool)($this->config['statement_cache'] ?? true);
             $this->maxCacheSize = (int)($this->config['statement_cache_size'] ?? 100);
@@ -174,22 +177,33 @@ class PostgresDriver extends Driver
     /**
      * {@inheritdoc}
      */
-    public function transaction(callable $callback): bool
+    protected function beginTransaction(): void
     {
-        $conn = $this->requireConnection();
-        $conn->beginTransaction();
+        $this->requireConnection()->beginTransaction();
+    }
 
-        try {
-            if ($callback() === true) {
-                return $conn->commit();
-            }
+    /**
+     * {@inheritdoc}
+     */
+    protected function commitTransaction(): bool
+    {
+        return $this->requireConnection()->commit();
+    }
 
-            $conn->rollBack();
-            return false;
-        } catch (\Throwable $e) {
-            $conn->rollBack();
-            throw $e;
-        }
+    /**
+     * {@inheritdoc}
+     */
+    protected function rollBackTransaction(): void
+    {
+        $this->requireConnection()->rollBack();
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function executeRawStatement(string $sql): void
+    {
+        $this->requireConnection()->exec($sql);
     }
 
     /**
@@ -219,6 +233,7 @@ class PostgresDriver extends Driver
     public function reconnectIfNeeded(): void
     {
         if ($this->connection === null || !$this->ping()) {
+            $this->guardReconnectDuringTransaction();
             $this->statementCache = [];
             $this->connect();
         }

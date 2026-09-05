@@ -47,6 +47,20 @@ $posts = Post::find()->where('published', true)->cache(300)->all();
 $user = User::find()->where('email', 'john@example.com')->cache(120)->first();
 ```
 
+### What makes a cache entry unique
+
+The cache key is built from the **connection name**, the SQL, and the bound
+values. Including the connection matters when you run the same query against
+more than one database — for example a tenant per connection. Two tenants
+issuing an identical query get separate cache entries, so one never sees the
+other's rows.
+
+```php
+/* Different connections, same SQL — cached separately */
+User::find()->where('status', 1)->on('tenant_a')->cache(60)->all();
+User::find()->where('status', 1)->on('tenant_b')->cache(60)->all();
+```
+
 ### Custom Cache Driver
 
 Implement `Simsoft\DB\Cache\CacheInterface`:
