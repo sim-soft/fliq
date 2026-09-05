@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\Test;
 use Simsoft\DB\Builder\ActiveQuery;
 use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Exceptions\QueryException;
+use Simsoft\DB\Grammar\PostgresGrammar;
 
 /**
  * Security tests — verifies SQL injection is prevented by parameter binding.
@@ -283,6 +284,51 @@ class SecurityTest extends DatabaseTestCase
         $this->assertStringContainsString(
             "'$.profile.city'",
             User::find()->select('meta->profile.city')->getSQL()
+        );
+    }
+
+    #[Test]
+    public function fulltextSearchConfigCannotEscapeItsStringLiteral(): void
+    {
+        // PostgreSQL's text search config is a literal, not a bindable value.
+        $grammar = new PostgresGrammar();
+        $payload = "english') , (SELECT password FROM users LIMIT 1) -- ";
+
+        $sql = $grammar->fulltextSearch(['"body"'], 'plain', $payload);
+
+        // The quote is doubled, so the payload cannot close the literal.
+        $this->assertStringContainsString("'english''", $sql);
+        $this->assertSame(0, substr_count($sql, "'") % 2);
+
+        // A valid config is unchanged.
+        $this->assertSame(
+            'to_tsvector(\'english\', "body") @@ plainto_tsquery(\'english\', ?)',
+            $grammar->fulltextSearch(['"body"'], 'plain', 'english')
+        );
+    }
+
+    #[Test]
+    public function arrayCastTypeIsRestrictedToASimpleIdentifier(): void
+    {
+        // The cast type is a bare keyword — it can be neither quoted nor bound.
+        $grammar = new PostgresGrammar();
+
+        $this->expectException(InvalidArgumentException::class);
+        $grammar->arrayContains('"tags"', 'text[] , (SELECT password FROM users) -- ');
+    }
+
+    #[Test]
+    public function arrayCastTypeStillAcceptsValidTypes(): void
+    {
+        $grammar = new PostgresGrammar();
+
+        $this->assertStringContainsString('::text[]', $grammar->arrayContains('"tags"', 'text'));
+        $this->assertStringContainsString('::integer[]', $grammar->arrayOverlaps('"tags"', 2, 'integer'));
+
+        // Multi-word types remain valid.
+        $this->assertStringContainsString(
+            '::double precision[]',
+            $grammar->arrayContains('"tags"', 'double precision')
         );
     }
 

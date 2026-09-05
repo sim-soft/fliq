@@ -20,6 +20,15 @@ All notable changes to `simsoft/fliq` are documented here.
   path closed it and the remainder became SQL. All 17 interpolation sites across
   the three grammars now escape the path. MySQL also doubles backslashes, which
   it treats as an escape character inside string literals.
+- **PostgreSQL text search config could escape its string literal** — the
+  `$language` argument to `whereFulltext()` reached `to_tsvector('...')` and
+  `plainto_tsquery('...')` unescaped, so a quote in it closed the literal. It is
+  now escaped like any other interpolated literal.
+- **PostgreSQL array cast type was interpolated unchecked** — the `$type`
+  argument to `arrayContains()` / `arrayOverlaps()` becomes a bare SQL keyword
+  (`::text[]`), so it can be neither quoted nor bound. It is now restricted to a
+  simple identifier and rejected with `InvalidArgumentException` otherwise;
+  multi-word types such as `double precision` remain valid.
 
 - **Mass assignment bypass in `Model::update()`** — attributes passed to
   `update()` were written straight to the database without consulting
@@ -81,9 +90,10 @@ All notable changes to `simsoft/fliq` are documented here.
   across every condition method, and valid comparisons still accepted)
 - 3 query builder tests covering negative `limit()` / `offset()`, invalid
   `page()` numbers, and valid limits still applying (including `limit(0)`)
-- 4 security tests covering identifier-quote escaping and JSON path escaping,
-  each paired with a test that the valid forms (`*`, `user.*`, `!user.id`,
-  nested JSON paths) are unchanged
+- 7 security tests covering identifier-quote escaping, JSON path escaping, the
+  PostgreSQL text search config and the array cast type — each paired with a
+  test that the valid forms (`*`, `user.*`, `!user.id`, nested JSON paths,
+  `double precision`) are unchanged
 
 ### Documentation
 

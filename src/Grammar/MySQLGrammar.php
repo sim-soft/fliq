@@ -9,7 +9,7 @@ namespace Simsoft\DB\Grammar;
  */
 class MySQLGrammar implements Grammar
 {
-    use EscapesJsonPath;
+    use EscapesStringLiteral;
 
     /**
      * {@inheritdoc}
@@ -88,7 +88,7 @@ class MySQLGrammar implements Grammar
      */
     public function jsonExtract(string $column, string $path, bool $asText = true): string
     {
-        $jsonPath = $this->jsonPathLiteral('$.' . $path);
+        $jsonPath = $this->stringLiteral('$.' . $path);
 
         if ($asText) {
             return "JSON_UNQUOTE(JSON_EXTRACT($column, $jsonPath))";
@@ -102,7 +102,7 @@ class MySQLGrammar implements Grammar
      */
     public function jsonContains(string $column, string $path): string
     {
-        $jsonPath = $this->jsonPathLiteral($path === '' ? '$' : '$.' . $path);
+        $jsonPath = $this->stringLiteral($path === '' ? '$' : '$.' . $path);
         return "JSON_CONTAINS($column, ?, $jsonPath)";
     }
 
@@ -111,7 +111,7 @@ class MySQLGrammar implements Grammar
      */
     public function jsonLength(string $column, string $path): string
     {
-        $jsonPath = $this->jsonPathLiteral($path === '' ? '$' : '$.' . $path);
+        $jsonPath = $this->stringLiteral($path === '' ? '$' : '$.' . $path);
         return "JSON_LENGTH($column, $jsonPath)";
     }
 
@@ -184,7 +184,7 @@ class MySQLGrammar implements Grammar
      */
     public function jsonKeyExists(string $column, string $path): string
     {
-        $jsonPath = $this->jsonPathLiteral('$.' . $path);
+        $jsonPath = $this->stringLiteral('$.' . $path);
         return "JSON_CONTAINS_PATH($column, 'one', $jsonPath)";
     }
 
