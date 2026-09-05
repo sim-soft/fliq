@@ -14,7 +14,7 @@ class MySQLGrammar implements Grammar
      */
     public function quoteIdentifier(string $identifier): string
     {
-        return "`$identifier`";
+        return '`' . str_replace('`', '``', $identifier) . '`';
     }
 
     /**
