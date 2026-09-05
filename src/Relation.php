@@ -181,6 +181,12 @@ class Relation
     protected function applyConstraints(): void
     {
         if ($this->localValue === null) {
+            // No local key value — an unsaved parent, or a saved row whose
+            // foreign key is NULL. Returning here would leave the query
+            // unconstrained and fetch the entire related table, so match
+            // nothing instead. Not where($fk, null): that becomes IS NULL,
+            // which would match unrelated rows that also have a NULL key.
+            $this->query->whereRaw('1 = 0');
             return;
         }
 

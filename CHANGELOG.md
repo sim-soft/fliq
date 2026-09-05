@@ -143,6 +143,17 @@ All notable changes to `simsoft/fliq` are documented here.
   with no conditions instead of failing. `Query::wheer('id', 5)` therefore
   matched the whole table, so a typo in a `DELETE` or `UPDATE` would apply to
   every row. Unknown methods now throw `BadMethodCallException`.
+- **A relation with a `NULL` key returned the entire related table** —
+  `Relation::applyConstraints()` returned early when the local key value was
+  `null`, leaving the query with no condition at all. Fetching such a relation
+  therefore returned every row of the related table rather than none:
+  `$post->getComments()->fetch()` on an unsaved `Post` returned all comments in
+  the database, and a *saved* row with a nullable foreign key was worse —
+  `$post->getCategory()->fetch()` returned an arbitrary unrelated `Category`
+  instead of `null`, so the record appeared to belong to something it has no
+  link to. A relation with no key value now matches nothing. Note this is not
+  `WHERE fk IS NULL`, which would wrongly match other rows whose key is also
+  null.
 
 ### Changed
 
@@ -250,6 +261,17 @@ All notable changes to `simsoft/fliq` are documented here.
   assignment alone), `QueryException` keeping SQL out of its message and debug
   mode restoring it, and `Query::` rejecting an unknown method while valid ones
   still work
+- 34 relation tests covering the M:N pivot write API, which had no coverage at
+  all: `attach()` (including that a duplicate pair throws rather than being
+  ignored, and that one bad pair rolls back the whole batch), `detach()` (a
+  given subset, `null` for all, that an empty array is not treated as "all", and
+  that unattaching a shared tag leaves other rows alone), `sync()` (attach-only,
+  detach-only, both at once, idempotence, and string IDs from request data
+  comparing equal to integer IDs), `saveMany()`, the `viaTable` guard on
+  non-pivot relations, and the accessors. Also covers the `NULL` key fix from
+  both directions — an unsaved parent and a saved row with a nullable foreign
+  key — and asserts writes on a keyless relation cannot touch the table. This
+  takes `Relation` from 34.58% to 100% line coverage.
 
 ### Documentation
 

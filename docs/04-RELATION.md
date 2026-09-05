@@ -3,6 +3,7 @@
 ## Table of Contents
 - [Declare Relations](#declare-relations)
 - [Accessing Related Records](#accessing-related-records)
+  - [When the key is NULL](#when-the-key-is-null)
 - [Filtering Related Records](#filtering-related-records)
 - [Relation Types](#relation-types)
 - [Eager Loading](#eager-loading)
@@ -110,6 +111,24 @@ foreach ($user->posts as $post) {
 $post = Post::findByPk(1);
 echo $post->author->name; // loads the User
 ```
+
+### When the key is NULL
+
+A relation matches on the parent's local key. If that value is `null` — the
+parent has not been saved yet, or its foreign key column is nullable and unset —
+there is nothing to match on, and the relation is empty:
+
+```php
+$post = new Post();          // not saved, so no id yet
+$post->comments;             // empty Collection, not every comment in the table
+
+$post = Post::findByPk(1);   // saved, but category_id is NULL
+$post->category;             // null, not an arbitrary Category
+```
+
+This is not the same as `WHERE category_id IS NULL`. A missing key means "no
+related records", not "records whose key is also null" — if you want the latter,
+query it explicitly with `Category::find()->isNull('parent_id')`.
 
 ## Filtering Related Records
 
@@ -417,6 +436,13 @@ $post = Post::findByPk(1);
 $post->tags()->attach([1, 2, 3]);
 /* INSERT INTO post_tag (post_id, tag_id) VALUES (1,1), (1,2), (1,3) */
 ```
+
+**Re-attaching an existing pair fails.** Pivot tables normally carry a primary
+key or unique index across both columns, so attaching a pair that is already
+there raises a duplicate-key `QueryException`. All the pairs go into one
+multi-row `INSERT`, so a collision on any one of them rolls back the whole
+batch — nothing is attached. Use [`sync()`](#sync--make-pivot-match-exactly-the-given-ids)
+when the IDs may already be attached, or filter them yourself first.
 
 ### `detach()` — Remove pivot table entries (M:N only)
 
