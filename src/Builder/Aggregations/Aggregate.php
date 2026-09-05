@@ -137,6 +137,19 @@ abstract class Aggregate extends Builder
     public function queryScalar(): mixed
     {
         $data = $this->query($this);
-        return $data[0][$this->as] ?? 0;
+        $row = $data[0] ?? [];
+
+        if ($this->as !== null) {
+            return $row[$this->as] ?? 0;
+        }
+
+        // No alias was requested, so no AS clause was emitted and the driver
+        // names the column after the expression itself ("COUNT(*)"). Looking up
+        // a null key would coerce to '' and miss, silently yielding 0 for a
+        // perfectly good result. The aggregate is the only selected column, so
+        // take it positionally instead.
+        $value = reset($row);
+
+        return $value === false || $value === null ? 0 : $value;
     }
 }

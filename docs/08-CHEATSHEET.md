@@ -168,13 +168,20 @@ Aliases: `whereArrayContains`, `whereArrayOverlaps`, `orWhereArrayContains`,
 
 ## Aggregations
 
-| Task    | Code                            |
-|---------|---------------------------------|
-| Count   | `User::find()->count()`         |
-| Sum     | `Order::find()->sum('total')`   |
-| Average | `Product::find()->avg('price')` |
-| Min     | `Product::find()->min('price')` |
-| Max     | `Product::find()->max('price')` |
+| Task           | Code                                            |
+|----------------|-------------------------------------------------|
+| Count          | `User::find()->count()`                         |
+| Sum            | `Order::find()->sum('total')`                   |
+| Average        | `Product::find()->avg('price')`                 |
+| Min            | `Product::find()->min('price')`                 |
+| Max            | `Product::find()->max('price')`                 |
+| Distinct count | `User::find()->countDistinct('role')`           |
+| Distinct sum   | `Order::find()->sumDistinct('total')`           |
+| Total pages    | `User::find()->getTotalPages(20)`               |
+| Result alias   | `User::find()->count('*', 'c')` — `null` omits it |
+
+No matching rows gives `0` (`0.0` for `avg()`), never `null`.
+`countDistinct('*')` is a plain count — `COUNT(DISTINCT *)` is not valid SQL.
 
 ## Transactions
 

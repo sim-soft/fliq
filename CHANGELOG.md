@@ -162,6 +162,16 @@ All notable changes to `simsoft/fliq` are documented here.
   link to. A relation with no key value now matches nothing. Note this is not
   `WHERE fk IS NULL`, which would wrongly match other rows whose key is also
   null.
+- **Aggregates returned `0` when the result alias was `null`** — every
+  aggregate method advertises `?string $alias`, but passing `null` made all
+  eleven of them return `0` regardless of the data. The SQL was correct; without
+  an alias no `AS` clause is emitted, so the driver names the column after the
+  expression (`COUNT(*)`), while `queryScalar()` looked up `$row[null]`, which
+  PHP coerces to the absent key `''` and falls through to the `?? 0` default. So
+  `$query->count('*', null)` reported an empty table and `avg('score', null)`
+  reported `0.0` — a wrong answer rather than an error. The aggregate is the
+  only selected column, so it is now read positionally when no alias was given.
+  Empty result sets still yield `0`.
 
 ### Changed
 
@@ -290,6 +300,18 @@ All notable changes to `simsoft/fliq` are documented here.
   exception, and preserving the original exception as `getPrevious()`, and the
   `sqlOnly` flag applying to every write method while `raw()` / `query()`
   deliberately bypass it. This takes `DB` from 5.45% to 100% line coverage.
+- 40 aggregation tests. The six `Distinct` variants had no tests at all, and
+  neither did the alias parameter every aggregate accepts. Covers
+  `countDistinct` (collapsing repeated values, the `'*'` branch that skips the
+  `DISTINCT` keyword, and a unique column where it changes nothing),
+  `sumDistinct`, `maxDistinct`, `minDistinct` and `avgDistinct` against both
+  repeated and unique columns, the `0` contract on an empty result set,
+  `getTotalPages` (rounding up, exact division, no matches, and the
+  `InvalidArgumentException` below 1), the null-alias fix across all eleven
+  methods, and that aggregating leaves the query reusable — `avg()` passes
+  `$this` where the others pass a clone, so repeated calls and later `where()`
+  additions are asserted to still behave. This takes `Traits\Aggregation` from
+  49.12% to 100% line coverage.
 
 ### Documentation
 
@@ -306,6 +328,9 @@ All notable changes to `simsoft/fliq` are documented here.
 - New "What makes a cache entry unique" section in the advanced features guide,
   explaining that the cache key includes the connection name and why that
   matters for multi-tenant setups.
+- The aggregation section of the query builder guide now documents the `0`
+  returned for an empty result set, why `countDistinct('*')` is a plain count,
+  the result alias argument (including `null`), and `getTotalPages()`.
 
 ---
 

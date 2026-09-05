@@ -1238,6 +1238,59 @@ $vipTotal = Order::find()
     ->sum('total');
 ```
 
+### Empty result sets
+
+An aggregate over zero rows returns `0` (`0.0` for `avg()`), not `null`. SQL's
+`SUM()`, `MIN()`, `MAX()` and `AVG()` all yield `NULL` when nothing matches; the
+builder normalises that so the return type is always numeric.
+
+```php
+$noRows = User::find()->where('username', 'nobody');
+
+$noRows->count();  // 0
+$noRows->sum('score');  // 0
+$noRows->max('score');  // 0
+$noRows->avg('score');  // 0.0
+```
+
+### `countDistinct('*')`
+
+`COUNT(DISTINCT *)` is not valid SQL, so `countDistinct()` drops the `DISTINCT`
+keyword when the attribute is `*` and behaves like a plain `count()`. Pass a
+column name to actually count distinct values:
+
+```php
+$query->countDistinct();        // COUNT(*) — same as count()
+$query->countDistinct('*');     // COUNT(*) — same as count()
+$query->countDistinct('role');  // COUNT(DISTINCT `user`.`role`)
+```
+
+### Result alias
+
+Every aggregate takes a second argument naming the result column — `'total'` for
+the counts, `'sum'`, `'avg'`, `'min'`, `'max'` for the rest. Pass your own, or
+`null` to omit the `AS` clause. The return value is the same either way:
+
+```php
+$query->count();             // SELECT COUNT(*) AS `total` ...
+$query->count('*', 'c');     // SELECT COUNT(*) AS `c` ...
+$query->count('*', null);    // SELECT COUNT(*) ...
+```
+
+### Total pages
+
+`getTotalPages()` counts the matching rows and divides by the page size,
+rounding up. It throws `InvalidArgumentException` if the page size is below 1,
+and returns `0` when nothing matches:
+
+```php
+User::find()->getTotalPages(20);                  // ceil(count / 20)
+User::find()->where('role', 'admin')->getTotalPages(10);
+User::find()->getTotalPages(20, 'department_id'); // counts that column instead
+
+User::find()->getTotalPages(0);  // InvalidArgumentException
+```
+
 ## Sub-queries
 
 Use an array with alias as key for sub-query FROM:
