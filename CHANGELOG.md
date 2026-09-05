@@ -234,6 +234,37 @@ All notable changes to `simsoft/fliq` are documented here.
   with the `FROM` table instead of the temporary alias. Nothing failed: the
   query ran and constrained the wrong table. Entries appended by the callback
   are now resolved while the temporary alias still holds.
+- **`like()` with no patterns broke the query** — an empty terms array is an
+  ordinary runtime state (a search box submitted blank, a filter list nobody
+  ticked), but the compound form was assembled regardless and emitted an empty
+  group: `WHERE ()` on its own, or a dangling `AND ()` beside another
+  condition. Both are syntax errors, so the page died rather than showing
+  unfiltered results. The condition is now skipped, as `in()` already does for
+  an empty value list. `LikeCondition` had the same fault.
+- **An empty clause left a dangling operator** — `onCondition()` appended the
+  logical operator *before* building the clause, so a clause that built to
+  nothing left `AND` with no right-hand side. The operator is now added only
+  once the clause is known to have produced SQL, which covers every clause
+  rather than each one separately.
+- **`ORDER BY` direction injection in `OrderByClause`** — the array branch only
+  uppercased its direction instead of whitelisting it, so a direction taken
+  from request data could append arbitrary SQL. This is the same defect already
+  fixed in `ActiveQuery::orderBy()`; the class even carried an
+  `$allowedDirections` list, but only its scalar branch consulted it. Both
+  branches now normalise to `ASC` / `DESC`.
+- **`BetweenCondition` accepted any number of bounds** — it always emitted two
+  placeholders but bound whatever it was given, so one, three or zero values
+  left a placeholder/bind mismatch. The driver reported it as "must consist of
+  ... elements" without naming the attribute. Anything other than exactly two
+  bounds now raises `InvalidArgumentException` naming it.
+- **`HavingClause` skipped the bind for a null value** — the placeholder was
+  emitted unconditionally, so a null left the statement one bind short and the
+  driver rejected it outright. A null now binds like any other value.
+- **`SelectClause` with no columns emitted `SELECT  FROM`** — the empty string
+  was still added to the column list, producing a syntax error alone and
+  `a, , b` beside other columns. An empty clause is now dropped, and a query
+  left with no columns falls back to `*` as it already does when `select()` is
+  never called.
 - **`withAlias()` discarded most callables** — the parameter accepts any
   `callable`, but only a `Closure` was acted on. An invokable object or a
   `[$object, 'method']` pair fell past the check and was dropped without a
@@ -348,6 +379,18 @@ All notable changes to `simsoft/fliq` are documented here.
   as well as conditions, nesting, explicit prefixes left alone, each callable
   form, and the alias being restored when the callback throws. 10 fail against
   the unfixed builder.
+- 23 clause-object tests covering `LikeCondition`, `BetweenCondition`,
+  `SelectClause`, `HavingClause` and `OrderByClause`, none of which had a
+  single test — every one sat at 0.00% coverage despite `select()` and
+  `where()` both accepting a `Clause`. They were `ActiveQuery`'s own
+  implementation until the builder inlined its clause construction, which left
+  them exported and unexercised. 10 of the 23 fail against the unfixed code.
+- 8 integration tests for `like()` with no patterns, checked against the answer
+  the database computes for the equivalent plain SQL. Covers each `like`
+  variant, an empty clause between two live conditions (which must still be
+  joined to each other), and that a list with patterns in it is not swallowed
+  by the guard. 6 of the 8 fail against the unfixed builder — as errors, since
+  the query did not run at all.
 - 2 cache tests covering key separation by connection and an end-to-end check
   that two databases holding the same table never serve each other's rows
 - 2 timestamp tests covering `update()` advancing `updated_at` while leaving
@@ -455,6 +498,9 @@ All notable changes to `simsoft/fliq` are documented here.
   `withAlias()`, which was previously undocumented: what the temporary alias
   covers, that it applies only inside the callback, and that explicitly
   prefixed names are left alone.
+- The Like Clauses section now documents what an empty pattern array does, that
+  it matches `in()`, and how to get the opposite behaviour if an empty search
+  should return nothing.
 
 ---
 

@@ -18,6 +18,7 @@ use Simsoft\DB\Relation;
 use Simsoft\DB\Traits\Aggregation;
 use Simsoft\DB\Traits\Binds;
 use Simsoft\DB\Traits\Execute;
+use Simsoft\DB\Traits\Likeable;
 use Simsoft\DB\Traits\Fetchable;
 use Simsoft\DB\Traits\PlaceHolder;
 use Simsoft\DB\Traits\Qualifier;
@@ -31,7 +32,7 @@ use Simsoft\DB\Traits\TemporaryAlias;
  */
 class ActiveQuery implements Executable, Updatable, Deletable
 {
-    use Qualifier, Execute, PlaceHolder, Binds, Aggregation, Fetchable, TemporaryAlias;
+    use Qualifier, Execute, PlaceHolder, Binds, Aggregation, Fetchable, TemporaryAlias, Likeable;
 
     /** @var null|string The table name */
     protected ?string $table = null;
@@ -544,7 +545,18 @@ class ActiveQuery implements Executable, Updatable, Deletable
             if ($attribute instanceof Clause) {
                 $attribute->alias($this->getAlias());
                 $attribute->setPlaceHolder($this->getPlaceHolder());
-                $this->selects[] = (string)$attribute;
+                $sql = (string)$attribute;
+
+                // A clause naming no columns builds an empty string, which was
+                // still added to the list and emitted as `SELECT  FROM` — or
+                // `SELECT a, , b` beside others. An empty entry contributes no
+                // column, so it is dropped; a query left with none falls back
+                // to `*` as it already does when select() is never called.
+                if ($sql === '') {
+                    continue;
+                }
+
+                $this->selects[] = $sql;
                 if ($attribute->getBinds()) {
                     $this->appendBinds($attribute->getBinds());
                 }
@@ -1169,126 +1181,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Like condition.
-     *
-     * Case-sensitive by default (plain LIKE). Set caseSensitive: false for case-insensitive matching.
-     *
-     * @param string $attribute the attribute name
-     * @param string|string[] $value the like's value
-     * @param bool $is the comparison operator (true = LIKE, false = NOT LIKE)
-     * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param string $logicalOperator The logical operator. Either 'AND' or 'OR'.
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: true.
-     * @return static
-     */
-    public function like(
-        string       $attribute,
-        string|array $value,
-        bool         $is = true,
-        bool         $matchAll = true,
-        string       $logicalOperator = 'AND',
-        bool         $caseSensitive = true
-    ): static
-    {
-        [$col, $operator, $useLowerBind] = $this->prepareLikeColumn($attribute, $is, $caseSensitive);
-
-        // Fast path: single string value (most common)
-        if (is_string($value)) {
-            $sql = $this->buildLikePart($col, $operator, $useLowerBind);
-            $this->addConditionSQL($sql, $value, $logicalOperator);
-            return $this;
-        }
-
-        // Array of values — build compound condition
-        $joiner = $matchAll ? ' AND ' : ' OR ';
-        $parts = array_fill(0, count($value), $this->buildLikePart($col, $operator, $useLowerBind));
-        $binds = array_values($value);
-
-        $sql = '(' . implode($joiner, $parts) . ')';
-        $this->addConditionSQL($sql, $binds, $logicalOperator);
-        return $this;
-    }
-
-    /**
-     * Prepare the column expression and operator for LIKE based on case sensitivity.
-     *
-     * @param string $attribute The attribute name.
-     * @param bool $is Whether positive (LIKE) or negated (NOT LIKE).
-     * @param bool $caseSensitive Whether the comparison is case-sensitive.
-     * @return array{0: string, 1: string, 2: bool} [column, operator, useLowerBind]
-     */
-    private function prepareLikeColumn(string $attribute, bool $is, bool $caseSensitive): array
-    {
-        $col = $this->queryAttribute($attribute);
-        $operator = $is ? 'LIKE' : 'NOT LIKE';
-
-        if ($caseSensitive) {
-            return [$col, $operator, false];
-        }
-
-        if ($this->getGrammar()->getDriverName() === 'pgsql') {
-            return [$col, $is ? 'ILIKE' : 'NOT ILIKE', false];
-        }
-
-        return ["LOWER($col)", $operator, true];
-    }
-
-    /**
-     * Build a single LIKE expression segment.
-     *
-     * @param string $col The column expression.
-     * @param string $operator The LIKE operator.
-     * @param bool $useLowerBind Whether to wrap the placeholder in LOWER().
-     * @return string
-     */
-    private function buildLikePart(string $col, string $operator, bool $useLowerBind): string
-    {
-        return $useLowerBind ? "$col $operator LOWER(?)" : "$col $operator ?";
-    }
-
-    /**
-     * Or like condition.
-     *
-     * @param string $attribute the attribute name
-     * @param string|string[] $value the like's value
-     * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @return static
-     */
-    public function orLike(string $attribute, string|array $value, bool $matchAll = true, bool $caseSensitive = true): static
-    {
-        return $this->like($attribute, $value, true, $matchAll, 'OR', $caseSensitive);
-    }
-
-    /**
-     * Not like condition.
-     *
-     * @param string $attribute the attribute name
-     * @param string|string[] $value the like's value
-     * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @return static
-     */
-    public function notLike(string $attribute, string|array $value, bool $matchAll = true, bool $caseSensitive = true): static
-    {
-        return $this->like($attribute, $value, false, $matchAll, 'AND', $caseSensitive);
-    }
-
-    /**
-     * Or not like condition.
-     *
-     * @param string $attribute the attribute name
-     * @param string|string[] $value the like's value
-     * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @return static
-     */
-    public function orNotLike(string $attribute, string|array $value, bool $matchAll = true, bool $caseSensitive = true): static
-    {
-        return $this->like($attribute, $value, false, $matchAll, 'OR', $caseSensitive);
-    }
-
-    /**
      * Between condition.
      *
      * @param string $attribute the attribute name
@@ -1909,21 +1801,37 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     protected function onCondition(string|Clause $query, ?string $operator = null): static
     {
+        $binds = null;
+
+        if ($query instanceof Clause) {
+            $query->setPlaceHolder($this->getPlaceHolder());
+            // Eagerly build SQL and collect binds now. The binds are populated
+            // while the SQL is built, so they can only be read afterwards.
+            $sql = (string)$query;
+            $binds = $query->getBinds();
+            $query = $sql;
+        }
+
+        // A clause with nothing to say builds an empty string — a LIKE with no
+        // patterns, or an array condition with no fields. The operator was
+        // appended before the clause was built, so the empty result left a
+        // dangling `AND` behind it and the query died with a syntax error
+        // pointing nowhere near the call. Testing the built SQL here covers
+        // every clause rather than each one separately.
+        if ($query === '') {
+            return $this;
+        }
+
         if ($operator && $this->conditions && end($this->conditions) !== '(') {
             $this->conditions[] = $operator;
         }
 
-        if ($query instanceof Clause) {
-            $query->setPlaceHolder($this->getPlaceHolder());
-            // Eagerly build SQL and collect binds now
-            $this->conditions[] = (string)$query;
-            if ($query->getBinds()) {
-                $this->appendBinds($query->getBinds());
-            }
-            return $this;
+        $this->conditions[] = $query;
+
+        if ($binds) {
+            $this->appendBinds($binds);
         }
 
-        $this->conditions[] = $query;
         return $this;
     }
 

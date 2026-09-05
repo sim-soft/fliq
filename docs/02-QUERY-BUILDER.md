@@ -1048,6 +1048,19 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
+An empty array of patterns adds no condition, so a search form submitted blank
+returns unfiltered results rather than failing. Any other conditions still
+apply on their own:
+
+```php
+/* WHERE `user`.`status_code` = ? — the like contributes nothing */
+$terms = [];
+$users = User::find()->where('status_code', 1)->like('username', $terms)->get();
+```
+
+This matches `in()`, which likewise skips an empty value list. Filter the
+result set yourself if an empty search should instead return nothing.
+
 ## Ordering, Grouping, Limit & Offset
 
 ```php

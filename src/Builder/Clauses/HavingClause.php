@@ -30,13 +30,16 @@ class HavingClause extends Clause
      */
     protected function buildSQL(): string
     {
-        if ($this->value !== null) {
-            $this->appendBinds($this->value);
+        if ($this->attribute instanceof Raw) {
+            return (string)$this->attribute;
         }
 
-        return match (true) {
-            $this->attribute instanceof Raw => (string)$this->attribute,
-            default => "{$this->queryAttribute($this->attribute)} $this->operator ?",
-        };
+        // The placeholder is emitted unconditionally, so skipping the bind for
+        // a null value left the statement one short and the driver rejected it
+        // ("must consist of ... elements") without naming the attribute. A null
+        // binds like any other value.
+        $this->appendBinds($this->value);
+
+        return "{$this->queryAttribute($this->attribute)} $this->operator ?";
     }
 }

@@ -22,7 +22,7 @@ class OrderByClause extends Clause
         if (is_array($this->attribute)) {
             $sql = [];
             foreach ($this->attribute as $attribute => $direction) {
-                $sql[] = $this->queryAttribute($attribute) . ' ' . strtoupper($direction);
+                $sql[] = $this->queryAttribute($attribute) . ' ' . $this->normaliseDirection($direction);
             }
             return implode(', ', $sql);
         }
@@ -31,11 +31,26 @@ class OrderByClause extends Clause
             return 'RAND()';
         }
 
-        $direction = strtoupper($this->value ?? '');
-        if (!in_array($direction, $this->allowedDirections)) {
-            $direction = $this->defaultDirection;
-        }
+        return "{$this->queryAttribute($this->attribute)} {$this->normaliseDirection($this->value ?? '')}";
+    }
 
-        return "{$this->queryAttribute($this->attribute)} $direction";
+    /**
+     * Normalise a sort direction to a permitted keyword.
+     *
+     * A direction is interpolated rather than bound, so it must be whitelisted.
+     * The array branch only uppercased its input, which let a direction taken
+     * from user input (`?sort=`) append arbitrary SQL — the same defect already
+     * fixed in ActiveQuery::orderBy(). Anything unrecognised falls back to ASC.
+     *
+     * @param string $direction The requested sort direction.
+     * @return string Either 'ASC' or 'DESC'.
+     */
+    private function normaliseDirection(string $direction): string
+    {
+        $direction = strtoupper(trim($direction));
+
+        return in_array($direction, $this->allowedDirections, true)
+            ? $direction
+            : $this->defaultDirection;
     }
 }
