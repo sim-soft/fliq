@@ -533,6 +533,50 @@ while (true) {
 }
 ```
 
+### Channel Names
+
+Channel names are used exactly as given. `listen()`, `unlisten()` and `notify()`
+all address the same channel for the same string, so a name chosen anywhere —
+including one a trigger passes to `pg_notify()` — reaches the subscriber that
+asked for it:
+
+```php
+/* A trigger publishes under the channel name your application uses */
+$driver->listen('order-created');
+/* CREATE TRIGGER ... EXECUTE FUNCTION pg_notify('order-created', ...) */
+```
+
+Two consequences follow from names being literal:
+
+```php
+/* Case-sensitive: these are different channels */
+$driver->listen('OrderCreated');
+$driver->notify('ordercreated', 'x');  /* not delivered */
+
+/* Distinct names stay distinct */
+$driver->listen('tenant-1');
+$driver->notify('tenant1', 'x');       /* not delivered */
+```
+
+A channel name must be 1 to 63 bytes — the server's `NAMEDATALEN` limit. Empty
+and over-long names raise an `InvalidArgumentException` from all three methods
+rather than being silently altered:
+
+```php
+$driver->listen('');                    /* InvalidArgumentException */
+$driver->listen(str_repeat('c', 70));   /* InvalidArgumentException */
+```
+
+The check is done in the driver because the server truncates a long identifier
+instead of refusing it: `LISTEN` on a 70-byte name would quietly subscribe to
+its 63-byte prefix, while `pg_notify()` rejects the same string — so the pair
+could never round trip.
+
+> **Note:** `NOTIFY` is asynchronous. A notification sent by one connection is
+> not guaranteed to be readable by another the instant `notify()` returns, so
+> poll with a timeout — `getNotification(1000)` — rather than treating a single
+> empty non-blocking poll as proof that nothing was sent.
+
 ---
 
 ## EXPLAIN / Query Plans

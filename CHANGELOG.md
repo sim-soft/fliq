@@ -172,6 +172,28 @@ All notable changes to `simsoft/fliq` are documented here.
   reported `0.0` — a wrong answer rather than an error. The aggregate is the
   only selected column, so it is now read positionally when no alias was given.
   Empty result sets still yield `0`.
+- **PostgreSQL notifications were silently lost or cross-delivered** —
+  `listen()`, `unlisten()` and `notify()` stripped every character outside
+  `[a-zA-Z0-9_]` from the channel name, which changed *which channel was
+  addressed* rather than rejecting a bad name. `listen('order-created')`
+  subscribed to `ordercreated`, so a notification a trigger published under the
+  real name never arrived and nothing reported an error. Worse, distinct names
+  collapsed onto one another: a subscriber to `tenant-1` received messages
+  addressed to `tenant1`. Channel names are now quoted as identifiers, matching
+  `PostgresGrammar::quoteIdentifier()`, so they are used exactly as given.
+- **`notify()` published to a different channel depending on the payload** — an
+  empty payload took a `NOTIFY <channel>` branch, where the unquoted identifier
+  was folded to lowercase, while a non-empty payload used a bound
+  `pg_notify(?, ?)`, which is case-sensitive. `notify('MixedCase')` and
+  `notify('MixedCase', 'data')` therefore reached two different channels, so a
+  subscriber received some of a publisher's messages and not others. Both now
+  route through `pg_notify(?, ?)`.
+- **Over-long PostgreSQL channel names were truncated by the server** — a name
+  longer than 63 bytes (`NAMEDATALEN - 1`) was silently truncated by `LISTEN`
+  while `pg_notify()` rejected the same string, so the two could never agree and
+  names differing only past byte 63 collapsed. Channel names are now validated
+  in the driver and an empty or over-long one raises `InvalidArgumentException`
+  from all three methods; 63 bytes remains valid.
 
 ### Changed
 
@@ -312,6 +334,22 @@ All notable changes to `simsoft/fliq` are documented here.
   `$this` where the others pass a clone, so repeated calls and later `where()`
   additions are asserted to still behave. This takes `Traits\Aggregation` from
   49.12% to 100% line coverage.
+- 41 PostgreSQL driver tests run against a live server. The existing suite only
+  exercised query building, leaving the driver's own surface untested. Covers
+  the five advisory lock methods (a second session refused, reentrant session
+  locks needing one release each, transaction-level locks freed on both commit
+  and rollback, and a lock released when its session ends), LISTEN/NOTIFY (the
+  bugs above, plus payload fidelity for quotes, newlines and JSON, the sender's
+  backend pid, and the 63-byte name boundary), the statement cache (eviction at
+  the configured size, reuse across repeated queries, `clear`, and queries still
+  working while disabled), and connection loss — severed with
+  `pg_terminate_backend()` from a third session, asserting `ping()` reports it,
+  that `query()` and `execute()` recover transparently, that the statement cache
+  is dropped on reconnect, and that a loss inside a transaction throws with no
+  partial write surviving. Negative assertions publish a sentinel afterwards
+  rather than polling once, since `NOTIFY` is asynchronous and an immediate poll
+  cannot distinguish "not sent" from "not yet arrived". This takes
+  `PostgresDriver` from 55.90% to 94.90% line coverage.
 
 ### Documentation
 
@@ -331,6 +369,11 @@ All notable changes to `simsoft/fliq` are documented here.
 - The aggregation section of the query builder guide now documents the `0`
   returned for an empty result set, why `countDistinct('*')` is a plain count,
   the result alias argument (including `null`), and `getTotalPages()`.
+- New "Channel Names" subsection in the PostgreSQL guide, covering names being
+  used exactly as given (so a trigger's `pg_notify()` reaches the subscriber
+  that asked for it), case sensitivity, the 63-byte limit and why it is checked
+  in the driver, and that `NOTIFY` is asynchronous — so a single non-blocking
+  poll is not proof that nothing was sent.
 
 ---
 

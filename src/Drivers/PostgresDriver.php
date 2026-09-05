@@ -2,6 +2,7 @@
 
 namespace Simsoft\DB\Drivers;
 
+use InvalidArgumentException;
 use PDO;
 use PDOException;
 use PDOStatement;
@@ -17,6 +18,9 @@ use Simsoft\DB\Interfaces\Executable;
  */
 class PostgresDriver extends Driver
 {
+    /** @var int Longest usable channel name, from the server's NAMEDATALEN - 1. */
+    private const MAX_CHANNEL_BYTES = 63;
+
     /** @var array<int, string> Required configuration keys */
     protected array $required = ['host', 'database', 'username', 'password'];
 
@@ -414,6 +418,7 @@ class PostgresDriver extends Driver
      *
      * @param int $key The lock key (bigint).
      * @return bool True if the lock was acquired, false if already held by another session.
+     * @phpstan-impure Acquires a server-side lock; the result depends on other sessions.
      */
     public function advisoryLockTry(int $key): bool
     {
@@ -431,6 +436,8 @@ class PostgresDriver extends Driver
      *
      * @param int $key The lock key (bigint).
      * @return bool True if the lock was released (false if it was not held).
+     * @phpstan-impure Releases a server-side lock; session locks are counted, so
+     *                 repeated calls return different results.
      */
     public function advisoryUnlock(int $key): bool
     {
@@ -463,6 +470,7 @@ class PostgresDriver extends Driver
      *
      * @param int $key The lock key (bigint).
      * @return bool True if the lock was acquired.
+     * @phpstan-impure Acquires a server-side lock; the result depends on other sessions.
      */
     public function advisoryLockTransactionTry(int $key): bool
     {
@@ -484,48 +492,93 @@ class PostgresDriver extends Driver
      *
      * After calling listen(), use getNotification() to check for messages.
      *
-     * @param string $channel The channel name.
+     * @param string $channel The channel name (max 63 bytes).
      * @return bool
+     * @throws InvalidArgumentException If the channel name is empty or too long.
      */
     public function listen(string $channel): bool
     {
         $conn = $this->requireConnection();
-        $identifier = preg_replace('/[^a-zA-Z0-9_]/', '', $channel);
-        return $conn->exec("LISTEN $identifier") !== false;
+        return $conn->exec('LISTEN ' . $this->quoteChannel($channel)) !== false;
     }
 
     /**
      * Unsubscribe from a notification channel.
      *
-     * @param string $channel The channel name.
+     * @param string $channel The channel name (max 63 bytes).
      * @return bool
+     * @throws InvalidArgumentException If the channel name is empty or too long.
      */
     public function unlisten(string $channel): bool
     {
         $conn = $this->requireConnection();
-        $identifier = preg_replace('/[^a-zA-Z0-9_]/', '', $channel);
-        return $conn->exec("UNLISTEN $identifier") !== false;
+        return $conn->exec('UNLISTEN ' . $this->quoteChannel($channel)) !== false;
     }
 
     /**
      * Send a notification to a channel.
      *
-     * @param string $channel The channel name.
+     * @param string $channel The channel name (max 63 bytes).
      * @param string $payload The notification payload (max 8000 bytes).
      * @return bool
+     * @throws InvalidArgumentException If the channel name is empty or too long.
      */
     public function notify(string $channel, string $payload = ''): bool
     {
         $conn = $this->requireConnection();
-        $identifier = preg_replace('/[^a-zA-Z0-9_]/', '', $channel);
 
-        if ($payload === '') {
-            return $conn->exec("NOTIFY $identifier") !== false;
+        // Validated for its own sake, so an unusable name is rejected the same
+        // way whichever of the three methods is called first.
+        $this->quoteChannel($channel);
+
+        // pg_notify() takes the channel as a bound string, so it needs no
+        // quoting and is matched literally. An empty payload used to take a
+        // `NOTIFY $channel` branch instead, where the unquoted identifier was
+        // folded to lowercase — so notify('MixedCase') and
+        // notify('MixedCase', 'data') published to two different channels.
+        $stmt = $conn->prepare('SELECT pg_notify(?, ?)');
+        return $stmt->execute([$channel, $payload]);
+    }
+
+    /**
+     * Quote a channel name for use in LISTEN / UNLISTEN.
+     *
+     * The channel cannot be bound in these statements, so it is quoted as an
+     * identifier, doubling any embedded quote exactly as
+     * PostgresGrammar::quoteIdentifier() does. Stripping the unsafe characters
+     * instead — the previous behaviour — silently changed which channel was
+     * addressed: 'order-created' became 'ordercreated', so a notification the
+     * database published under the real name was never delivered, and two
+     * distinct names ('user-1' and 'user1') collapsed onto one another.
+     *
+     * Quoting also makes the name case-sensitive, matching pg_notify() in
+     * notify(); an unquoted identifier would be folded to lowercase.
+     *
+     * The length is checked here rather than left to the server, which
+     * truncates a long identifier to NAMEDATALEN - 1 without complaint: a
+     * 70-byte name would subscribe to its 63-byte prefix while pg_notify() in
+     * notify() rejects the same string outright, so the pair could never round
+     * trip and two names differing only past byte 63 would collapse.
+     *
+     * @param string $channel The channel name.
+     * @return string The quoted identifier.
+     * @throws InvalidArgumentException If the channel name is empty or too long.
+     */
+    private function quoteChannel(string $channel): string
+    {
+        if ($channel === '') {
+            throw new InvalidArgumentException('Notification channel name cannot be empty.');
         }
 
-        // Use a prepared statement to safely bind the payload and prevent injection
-        $stmt = $conn->prepare("SELECT pg_notify(?, ?)");
-        return $stmt->execute([$identifier, $payload]);
+        if (strlen($channel) > self::MAX_CHANNEL_BYTES) {
+            throw new InvalidArgumentException(sprintf(
+                'Notification channel name exceeds %d bytes: %d given.',
+                self::MAX_CHANNEL_BYTES,
+                strlen($channel)
+            ));
+        }
+
+        return '"' . str_replace('"', '""', $channel) . '"';
     }
 
     /**
@@ -536,6 +589,7 @@ class PostgresDriver extends Driver
      *
      * @param int $timeoutMs Timeout in milliseconds. 0 = non-blocking poll.
      * @return array{channel: string, payload: string, pid: int}|null
+     * @phpstan-impure Consumes the notification queue, so each call sees different data.
      */
     public function getNotification(int $timeoutMs = 0): ?array
     {
