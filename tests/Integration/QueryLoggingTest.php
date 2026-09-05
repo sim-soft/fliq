@@ -20,6 +20,7 @@ class QueryLoggingTest extends DatabaseTestCase
         parent::setUp();
         QueryLogger::disable();
         QueryLogger::reset();
+        QueryLogger::setLimit(QueryLogger::DEFAULT_LIMIT);
         QueryMonitor::disable();
         QueryMonitor::reset();
     }
@@ -28,6 +29,7 @@ class QueryLoggingTest extends DatabaseTestCase
     {
         QueryLogger::disable();
         QueryLogger::reset();
+        QueryLogger::setLimit(QueryLogger::DEFAULT_LIMIT);
         QueryMonitor::disable();
         QueryMonitor::reset();
     }
@@ -72,6 +74,74 @@ class QueryLoggingTest extends DatabaseTestCase
 
         $queries = QueryLogger::getQueries();
         $this->assertCount(0, $queries);
+    }
+
+    #[Test]
+    public function loggerDropsOldestQueriesBeyondItsLimit(): void
+    {
+        // The log used to grow without bound, so a long-running worker kept
+        // every query it had ever run until it ran out of memory.
+        QueryLogger::setLimit(5);
+        QueryLogger::enable();
+
+        for ($i = 1; $i <= 12; ++$i) {
+            User::findByPk(1);
+        }
+
+        $this->assertCount(5, QueryLogger::getQueries(), 'log grew past its limit');
+        $this->assertEquals(7, QueryLogger::getDroppedCount());
+
+        // Totals still describe every query, not just the retained ones
+        $this->assertEquals(12, QueryLogger::getQueryCount());
+        $this->assertGreaterThan(0, QueryLogger::getTotalTime());
+    }
+
+    #[Test]
+    public function loggerLimitOfZeroKeepsEverything(): void
+    {
+        QueryLogger::setLimit(0);
+        QueryLogger::enable();
+
+        for ($i = 1; $i <= 8; ++$i) {
+            User::findByPk(1);
+        }
+
+        $this->assertCount(8, QueryLogger::getQueries());
+        $this->assertEquals(0, QueryLogger::getDroppedCount());
+    }
+
+    #[Test]
+    public function loggerLoweringTheLimitTrimsImmediately(): void
+    {
+        QueryLogger::enable();
+
+        for ($i = 1; $i <= 6; ++$i) {
+            User::findByPk(1);
+        }
+        $this->assertCount(6, QueryLogger::getQueries());
+
+        QueryLogger::setLimit(2);
+
+        $this->assertCount(2, QueryLogger::getQueries());
+        $this->assertEquals(6, QueryLogger::getQueryCount());
+    }
+
+    #[Test]
+    public function loggerResetClearsDroppedTotals(): void
+    {
+        QueryLogger::setLimit(2);
+        QueryLogger::enable();
+
+        for ($i = 1; $i <= 5; ++$i) {
+            User::findByPk(1);
+        }
+        $this->assertEquals(3, QueryLogger::getDroppedCount());
+
+        QueryLogger::reset();
+
+        $this->assertEquals(0, QueryLogger::getDroppedCount());
+        $this->assertEquals(0, QueryLogger::getQueryCount());
+        $this->assertEquals(0.0, QueryLogger::getTotalTime());
     }
 
     #[Test]

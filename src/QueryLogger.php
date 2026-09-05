@@ -10,11 +10,23 @@ namespace Simsoft\DB;
  */
 class QueryLogger
 {
+    /** @var int Queries retained by default before the oldest are dropped */
+    public const DEFAULT_LIMIT = 1000;
+
     /** @var bool Whether logging is enabled */
     private static bool $enabled = false;
 
     /** @var array<int, array{sql: string, binds: array<int, mixed>|null, time: float}> Logged queries */
     private static array $queries = [];
+
+    /** @var int Maximum retained queries. 0 means unlimited. */
+    private static int $limit = self::DEFAULT_LIMIT;
+
+    /** @var int Queries dropped to stay within the limit */
+    private static int $dropped = 0;
+
+    /** @var float Total time of dropped queries, in milliseconds */
+    private static float $droppedTime = 0.0;
 
     /** @var callable|null Custom log handler */
     private static $handler = null;
@@ -84,13 +96,82 @@ class QueryLogger
             'time' => round($timeMs, 3),
         ];
 
+        self::trim();
+
         if (self::$handler !== null) {
             (self::$handler)($sql, $binds, $timeMs);
         }
     }
 
     /**
-     * Get all logged queries.
+     * Drop the oldest entries once the log exceeds its limit.
+     *
+     * The log is held in memory for the life of the process, so a long-running
+     * worker or a queue consumer would otherwise grow it until the process ran
+     * out of memory. Newest queries are kept, since those are the ones being
+     * investigated. Totals still account for what was dropped.
+     *
+     * @return void
+     */
+    private static function trim(): void
+    {
+        if (self::$limit <= 0 || count(self::$queries) <= self::$limit) {
+            return;
+        }
+
+        $excess = count(self::$queries) - self::$limit;
+
+        for ($i = 0; $i < $excess; ++$i) {
+            $dropped = array_shift(self::$queries);
+            if ($dropped !== null) {
+                self::$droppedTime += $dropped['time'];
+                ++self::$dropped;
+            }
+        }
+    }
+
+    /**
+     * Set how many queries to retain.
+     *
+     * Use a handler instead of a large limit when you need every query: it
+     * receives each one as it happens and can stream them somewhere durable.
+     *
+     * @param int $limit Maximum retained queries, or 0 for unlimited.
+     * @return void
+     */
+    public static function setLimit(int $limit): void
+    {
+        self::$limit = max(0, $limit);
+        self::trim();
+    }
+
+    /**
+     * Get the current retention limit.
+     *
+     * @return int Zero when unlimited.
+     */
+    public static function getLimit(): int
+    {
+        return self::$limit;
+    }
+
+    /**
+     * Get the number of queries dropped to stay within the limit.
+     *
+     * A non-zero value means getQueries() is not the whole story.
+     *
+     * @return int
+     */
+    public static function getDroppedCount(): int
+    {
+        return self::$dropped;
+    }
+
+    /**
+     * Get the retained queries.
+     *
+     * Only the most recent are kept — see {@see setLimit()} and
+     * {@see getDroppedCount()}.
      *
      * @return array<int, array{sql: string, binds: array<int, mixed>|null, time: float}>
      */
@@ -102,21 +183,26 @@ class QueryLogger
     /**
      * Get total query count.
      *
+     * Counts every query logged, including those since dropped, so it stays
+     * accurate as a profiling figure.
+     *
      * @return int
      */
     public static function getQueryCount(): int
     {
-        return count(self::$queries);
+        return count(self::$queries) + self::$dropped;
     }
 
     /**
      * Get total execution time in milliseconds.
      *
+     * Includes the time of dropped queries.
+     *
      * @return float
      */
     public static function getTotalTime(): float
     {
-        $total = 0.0;
+        $total = self::$droppedTime;
         foreach (self::$queries as $query) {
             $total += $query['time'];
         }
@@ -125,6 +211,10 @@ class QueryLogger
 
     /**
      * Get the slowest query.
+     *
+     * Only the retained queries can be ranked, so a slower one that has since
+     * been dropped will not be found. Use a handler if you need to catch every
+     * slow query in a long-running process.
      *
      * @return array{sql: string, binds: array<int, mixed>|null, time: float}|null
      */
@@ -151,5 +241,7 @@ class QueryLogger
     public static function reset(): void
     {
         self::$queries = [];
+        self::$dropped = 0;
+        self::$droppedTime = 0.0;
     }
 }

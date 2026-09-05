@@ -34,6 +34,9 @@ class MySQLiDriver extends Driver
         // A new connection carries no transaction, whatever the old one had.
         $this->resetTransactionLevel();
 
+        // Until the new connection is established there is nothing to vouch for.
+        $this->clearActivity();
+
         try {
             mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
@@ -69,6 +72,8 @@ class MySQLiDriver extends Driver
             );
 
             $this->connection->set_charset($this->config['charset']);
+
+            $this->markActivity();
         } catch (mysqli_sql_exception $exception) {
             $this->addError($exception->getMessage());
         }
@@ -93,6 +98,19 @@ class MySQLiDriver extends Driver
      */
     public function execute(Executable $query): bool
     {
+        $this->reconnectIfNeeded();
+
+        return $this->runWithReconnect(fn(): bool => $this->executeOnce($query));
+    }
+
+    /**
+     * Run one attempt of execute().
+     *
+     * @param Executable $query The query to run.
+     * @return bool
+     */
+    private function executeOnce(Executable $query): bool
+    {
         $conn = $this->getConnection();
         $sql = $query->getSQL();
         $binds = $query->getBinds();
@@ -102,6 +120,8 @@ class MySQLiDriver extends Driver
             if ($result instanceof \mysqli_result) {
                 $result->free();
             }
+            $this->markActivity();
+
             return $result !== false;
         }
 
@@ -111,6 +131,7 @@ class MySQLiDriver extends Driver
         }
         $ok = $stmt->execute($binds);
         $stmt->close();
+        $this->markActivity();
 
         return $ok;
     }
@@ -121,6 +142,19 @@ class MySQLiDriver extends Driver
      * @return array<int, array<string, mixed>>
      */
     public function query(Executable $query): array
+    {
+        $this->reconnectIfNeeded();
+
+        return $this->runWithReconnect(fn(): array => $this->queryOnce($query));
+    }
+
+    /**
+     * Run one attempt of query().
+     *
+     * @param Executable $query The query to run.
+     * @return array<int, array<string, mixed>>
+     */
+    private function queryOnce(Executable $query): array
     {
         $conn = $this->getConnection();
         $stmt = $conn->prepare($query->getSQL());
@@ -138,6 +172,7 @@ class MySQLiDriver extends Driver
         $rows = $result->fetch_all(MYSQLI_ASSOC);
         $result->free();
         $stmt->close();
+        $this->markActivity();
 
         return $rows;
     }
@@ -198,7 +233,12 @@ class MySQLiDriver extends Driver
         try {
             // mysqli::ping() is deprecated as of PHP 8.4 — a trivial query
             // checks liveness the same way, matching the other drivers.
-            return $this->connection->query('SELECT 1') !== false;
+            if ($this->connection->query('SELECT 1') === false) {
+                return false;
+            }
+
+            $this->markActivity();
+            return true;
         } catch (\Throwable) {
             return false;
         }
@@ -211,10 +251,23 @@ class MySQLiDriver extends Driver
      */
     public function reconnectIfNeeded(): void
     {
+        if ($this->connection !== null && !$this->needsLivenessCheck()) {
+            return;
+        }
+
         if ($this->connection === null || !$this->ping()) {
             $this->guardReconnectDuringTransaction();
-            $this->connect();
+            $this->forceReconnect();
         }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function forceReconnect(): void
+    {
+        $this->connection = null;
+        $this->connect();
     }
 
     /**

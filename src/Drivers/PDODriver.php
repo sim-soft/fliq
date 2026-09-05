@@ -49,6 +49,9 @@ class PDODriver extends Driver
         // A new connection carries no transaction, whatever the old one had.
         $this->resetTransactionLevel();
 
+        // Until the new connection is established there is nothing to vouch for.
+        $this->clearActivity();
+
         try {
             $this->cacheEnabled = (bool)($this->config['statement_cache'] ?? true);
             $this->maxCacheSize = (int)($this->config['statement_cache_size'] ?? 100);
@@ -86,6 +89,8 @@ class PDODriver extends Driver
                 $this->config['password'],
                 $options
             );
+
+            $this->markActivity();
         } catch (PDOException $exception) {
             $this->addError($exception->getMessage());
         }
@@ -104,7 +109,12 @@ class PDODriver extends Driver
 
         try {
             $stmt = $this->connection->query('SELECT 1');
-            return $stmt !== false;
+            if ($stmt === false) {
+                return false;
+            }
+
+            $this->markActivity();
+            return true;
         } catch (\Throwable) {
             return false;
         }
@@ -117,11 +127,25 @@ class PDODriver extends Driver
      */
     public function reconnectIfNeeded(): void
     {
+        if ($this->connection !== null && !$this->needsLivenessCheck()) {
+            return;
+        }
+
         if ($this->connection === null || !$this->ping()) {
             $this->guardReconnectDuringTransaction();
-            $this->statementCache = [];
-            $this->connect();
+            $this->forceReconnect();
         }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function forceReconnect(): void
+    {
+        // Statements are bound to the connection that prepared them.
+        $this->statementCache = [];
+        $this->connection = null;
+        $this->connect();
     }
 
     /**
@@ -144,17 +168,24 @@ class PDODriver extends Driver
     public function execute(Executable $query): bool
     {
         $this->reconnectIfNeeded();
-        $conn = $this->requireConnection();
 
         $sql = $query->getSQL();
         $binds = $query->getBinds();
 
-        if ($binds === null) {
-            return $conn->exec($sql) !== false;
-        }
+        return $this->runWithReconnect(function () use ($sql, $binds): bool {
+            if ($binds === null) {
+                $result = $this->requireConnection()->exec($sql) !== false;
+                $this->markActivity();
 
-        $stmt = $this->prepareStatement($sql);
-        return $stmt->execute($binds);
+                return $result;
+            }
+
+            $stmt = $this->prepareStatement($sql);
+            $result = $stmt->execute($binds);
+            $this->markActivity();
+
+            return $result;
+        });
     }
 
     /**
@@ -169,10 +200,13 @@ class PDODriver extends Driver
         $sql = $query->getSQL();
         $binds = $query->getBinds();
 
-        $stmt = $this->prepareStatement($sql);
-        $stmt->execute($binds ?? []);
+        return $this->runWithReconnect(function () use ($sql, $binds): array {
+            $stmt = $this->prepareStatement($sql);
+            $stmt->execute($binds ?? []);
+            $this->markActivity();
 
-        return $stmt->fetchAll();
+            return $stmt->fetchAll();
+        });
     }
 
     /**

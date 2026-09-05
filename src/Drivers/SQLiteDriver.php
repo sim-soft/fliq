@@ -5,6 +5,7 @@ namespace Simsoft\DB\Drivers;
 use PDO;
 use PDOException;
 use PDOStatement;
+use Simsoft\DB\Exceptions\ConnectionException;
 use Simsoft\DB\Interfaces\Executable;
 
 /**
@@ -59,6 +60,29 @@ class SQLiteDriver extends Driver
         } catch (PDOException $exception) {
             $this->addError($exception->getMessage());
         }
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * SQLite talks to a local file rather than a server, so there is no
+     * connection to lose and nothing here should ever run. An in-memory
+     * database exists only inside its connection, so reopening one would hand
+     * back an empty database rather than the caller's data — better to say so.
+     *
+     * @throws ConnectionException If the database is in-memory.
+     */
+    protected function forceReconnect(): void
+    {
+        if ($this->config['database'] === ':memory:') {
+            throw new ConnectionException(
+                'The connection to an in-memory SQLite database was lost. '
+                . 'Its contents existed only in that connection and cannot be recovered.'
+            );
+        }
+
+        $this->connection = null;
+        $this->connect();
     }
 
     /**

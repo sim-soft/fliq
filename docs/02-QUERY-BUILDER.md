@@ -1421,6 +1421,22 @@ User::find()->whereRaw('{salary} * 12 > ?', [$_GET['min']])->get();
 User::find()->whereRaw('{salary} * 12 > ' . $_GET['min'])->get();
 ```
 
+Identifiers cannot be bound — `?` only stands in for values, never for a table
+or column name. When one has to come from user input, match it against a list
+you control rather than escaping it:
+
+```php
+/* SAFE — the input selects a column, it never becomes one */
+$columns = ['name' => 'user.name', 'joined' => 'user.created_at'];
+$column = $columns[$_GET['sort'] ?? ''] ?? 'user.id';
+
+User::find()->orderByRaw("$column DESC")->get();
+```
+
+The same applies to anything else the database parses as syntax rather than
+data: sort directions, operators, and SQL keywords. Everything else — every
+actual value — belongs in a bind.
+
 ### Mass assignment
 
 Writing whole request arrays to a model has its own protections — see

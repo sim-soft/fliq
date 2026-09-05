@@ -205,6 +205,7 @@ User::transaction(function () {
 | `$model->getDirtyAttributes()`         | List of changed attribute names              |
 | `$model->getAttributes()`              | Get all attributes as array                  |
 | `$model->fill([...])`                  | Mass assign (respects guarded/fillable)      |
+| `Model::requireAssignmentRules()`      | Reject models declaring neither (bootstrap)  |
 | `$model->only(['name', 'email'])`      | Get only specified attributes                |
 | `$model->except(['password'])`         | Get all except specified attributes          |
 | `$model->toArray()`                    | Convert to array (includes loaded relations) |
@@ -306,6 +307,8 @@ User::transaction(function () {
 | Query logging      | `QueryLogger::enable()`                                |
 | Get logged queries | `QueryLogger::getQueries()`                            |
 | Slowest query      | `QueryLogger::getSlowestQuery()`                       |
+| Log retention      | `QueryLogger::setLimit(1000)` (`0` = unlimited)        |
+| SQL in exceptions  | `QueryException::enableDebug()` (dev only)             |
 | Query cache        | `User::find()->where(...)->cache(60)->get()`           |
 | Index suggestions  | `IndexAdvisor::suggestSQL()`                           |
 | Dump and die       | `->dd()`                                               |

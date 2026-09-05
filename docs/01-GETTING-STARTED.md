@@ -3,6 +3,7 @@
 ## Table of Contents
 - [Connection Management](#connection-management)
 - [Database Drivers](#database-drivers)
+- [Dropped Connections](#dropped-connections)
 - [Read/Write Connection Splitting](#readwrite-connection-splitting)
 - [N+1 Query Detection](#n1-query-detection)
 - [Query Logging](#query-logging)
@@ -68,6 +69,7 @@ Connection::add('mysql', [
     'charset' => 'utf8mb4',     // default: utf8mb4
     'persistent' => false,      // default: false (reuse TCP across requests)
     'timeout' => 5,             // default: 5 (connection timeout in seconds)
+    'ping_idle_seconds' => 30,  // default: 30 (see "Dropped connections" below)
     'init_command' => [         // SQL commands to run after connecting
         "SET time_zone = '+08:00'",
     ],
@@ -240,6 +242,62 @@ $driver->isStatementCacheEnabled();    // check status
 Disable caching when running many unique one-off queries (e.g., migrations, bulk
 imports) to avoid filling memory.
 
+## Dropped Connections
+
+Database servers close idle connections — MySQL's `wait_timeout` defaults to
+eight hours, and load balancers are usually far less patient. A long-running
+worker or daemon will therefore find its connection gone at some point. All four
+drivers recover from this automatically, in two ways:
+
+**When a statement fails.** If a query fails with an error that names a lost
+connection, the driver reconnects and runs it once more. Errors that are not
+connection losses are re-thrown untouched and never retried, so a constraint
+violation or a syntax error behaves exactly as it always did.
+
+**When a connection has been idle.** Before using a connection that has sat
+unused for `ping_idle_seconds` (default 30), the driver checks it is still alive
+and reconnects if not. A connection used more recently than that is not
+re-checked — the check costs a full round trip, which for small queries was the
+larger part of their cost.
+
+```php
+Connection::add('mysql', [
+    // ...
+    'ping_idle_seconds' => 30,   // default
+    'ping_idle_seconds' => 0,    // check before every query
+]);
+```
+
+Lower the window if your network drops connections aggressively. Raise it if
+your queries are small and frequent. Recovery does not depend on it — the
+statement-level retry covers a connection that dies inside the window.
+
+### Inside a transaction
+
+A connection lost mid-transaction throws `ConnectionException` and is **not**
+retried. Reconnecting would start a fresh transaction, so retrying the failed
+statement would commit it on its own and leave the earlier statements behind — a
+partial write, which is precisely what the transaction was there to prevent.
+
+```php
+try {
+    $driver->transaction(function () {
+        // ...
+    });
+} catch (ConnectionException $e) {
+    // Nothing was written. Safe to retry the whole block.
+}
+```
+
+The server discards an interrupted transaction, so nothing is committed and the
+whole block can be retried.
+
+### In-memory SQLite
+
+An in-memory SQLite database exists only inside its connection. If that
+connection is lost the data is gone, so rather than silently reconnecting to an
+empty database, the driver throws `ConnectionException`.
+
 ## Read/Write Connection Splitting
 
 Route SELECT queries to a read replica and writes to the primary server:
@@ -346,6 +404,24 @@ QueryLogger::setHandler(function (string $sql, ?array $binds, float $timeMs) {
 QueryLogger::reset();
 QueryLogger::disable();
 ```
+
+#### Retention
+
+The log keeps the most recent 1000 queries and discards older ones. Without a
+cap, a long-running process — a queue worker, a daemon, a batch import — retains
+the SQL and bind values of every query it has ever run, and eventually runs out
+of memory.
+
+```php
+QueryLogger::setLimit(100);   // keep the last 100
+QueryLogger::setLimit(0);     // unlimited (only for short-lived scripts)
+
+QueryLogger::getDroppedCount();  // how many were discarded
+```
+
+Discarding entries does not distort the summary: `getQueryCount()` and
+`getTotalTime()` describe every query that ran, not just the retained ones. Only
+`getQueries()` and `getSlowestQuery()` are limited to what is still held.
 # Raw Query
 Interact with the database using raw queries.
 

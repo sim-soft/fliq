@@ -9,9 +9,61 @@ use Simsoft\DB\Interfaces\Executable;
  * QueryException class.
  *
  * Thrown when a database query fails to execute.
+ *
+ * The failing SQL is carried on the exception but kept out of `getMessage()`,
+ * because that message is what ends up in logs, error pages and third-party
+ * error trackers. SQL text names your tables and columns and often embeds
+ * literals, which is a map of the schema handed to whoever reads it. Call
+ * {@see getSql()} and {@see getBinds()} to inspect the query deliberately.
+ *
+ * Note the driver's own error text is passed through as-is, and it may well
+ * name the table or column it failed on ("Table 'app.user' doesn't exist").
+ * Withholding the statement narrows what leaks; it does not make an exception
+ * message safe to show a user. Log it, show a generic error.
+ *
+ * During development, `QueryException::enableDebug()` appends the SQL to the
+ * message so it shows up in stack traces. Leave it off in production.
  */
 class QueryException extends RuntimeException
 {
+    /** @var bool Whether to append the failing SQL to the exception message */
+    private static bool $debug = false;
+
+    /**
+     * Include the failing SQL in exception messages.
+     *
+     * Intended for local development. Enabling this puts SQL wherever the
+     * message is written, including logs and any error tracker you use.
+     *
+     * @return void
+     */
+    public static function enableDebug(): void
+    {
+        self::$debug = true;
+    }
+
+    /**
+     * Keep the failing SQL out of exception messages.
+     *
+     * The default, and what production should run with.
+     *
+     * @return void
+     */
+    public static function disableDebug(): void
+    {
+        self::$debug = false;
+    }
+
+    /**
+     * Check whether SQL is currently included in exception messages.
+     *
+     * @return bool
+     */
+    public static function isDebug(): bool
+    {
+        return self::$debug;
+    }
+
     /**
      * Constructor.
      *
@@ -30,7 +82,7 @@ class QueryException extends RuntimeException
     )
     {
         $fullMessage = $message;
-        if ($sql !== '') {
+        if ($sql !== '' && self::$debug) {
             $fullMessage .= " [SQL: $sql]";
         }
 
@@ -61,6 +113,10 @@ class QueryException extends RuntimeException
 
     /**
      * Get the bind values.
+     *
+     * Bind values are the data that was being written or matched, so treat
+     * them as you would the rows themselves — they can hold credentials,
+     * tokens or personal data. Avoid logging them wholesale.
      *
      * @return array<int, mixed>|null
      */

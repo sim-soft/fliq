@@ -97,6 +97,53 @@ All notable changes to `simsoft/fliq` are documented here.
   every reconnect check; `MySQLiDriver::ping()` now issues `SELECT 1`, matching
   the PDO, PostgreSQL and SQLite drivers.
 
+**Reliability**
+
+- **MySQLi never recovered a dropped connection** — `reconnectIfNeeded()` was
+  called by the PDO and PostgreSQL drivers only. `MySQLiDriver::execute()` and
+  `query()` never called it, so the default driver had no reconnect path at all
+  and a connection dropped by `wait_timeout` failed every subsequent query for
+  the life of the process. All four drivers now recover.
+- **A dropped connection was only noticed by the pre-query ping** — recovery
+  depended entirely on the liveness check happening to run first. A connection
+  that died between the check and the statement failed outright. Recovery is now
+  driven by the statement: a failure whose error names a lost connection is
+  reconnected and retried once. Errors that are not connection losses are
+  re-thrown untouched and never retried, and a loss inside a transaction still
+  throws `ConnectionException` rather than retrying, since retrying one
+  statement of an atomic block would commit it alone.
+- **A connection lost during rollback masked the real exception** — tearing down
+  a transaction on a dead connection threw the driver's own connection error
+  from inside the rollback, replacing the `ConnectionException` that explains
+  what happened. The rollback now swallows connection-loss errors only; any
+  other rollback failure still propagates.
+
+**Performance**
+
+- **Every query paid for a `SELECT 1` liveness check** — the ping ran before
+  each statement, costing a full round trip. Measured against a local MySQL over
+  `pdo_mysql`, the ping was **77%** of the cost of a small bound query (1.001 ms
+  of 1.291 ms). Connections used within the last 30 seconds are no longer
+  re-checked, which more than halved the measured per-query time (1.291 ms →
+  0.507 ms). Idle connections — the ones that actually get dropped — are still
+  checked. The window is configurable per connection with `ping_idle_seconds`;
+  `0` restores a ping before every query.
+
+**Robustness**
+
+- **`QueryLogger` grew without bound** — every executed query was retained for
+  the life of the process, so a long-running worker or queue consumer
+  accumulated the SQL and bind values of every query it had ever run until it
+  exhausted memory. The log now keeps the most recent 1000 entries and discards
+  older ones, while `getQueryCount()` and `getTotalTime()` continue to describe
+  every query, not just the retained ones. Configurable with
+  `QueryLogger::setLimit()`; `0` restores unlimited retention.
+- **A mistyped `Query::` method silently matched every row** — `__callStatic()`
+  checked whether the method existed and, when it did not, returned a bare query
+  with no conditions instead of failing. `Query::wheer('id', 5)` therefore
+  matched the whole table, so a typo in a `DELETE` or `UPDATE` would apply to
+  every row. Unknown methods now throw `BadMethodCallException`.
+
 ### Changed
 
 - `Model::update()` now filters its argument through the mass assignment rules.
@@ -124,6 +171,45 @@ All notable changes to `simsoft/fliq` are documented here.
   they do to `save()`. **This is breaking** for a `beforeSave()` override with
   side effects that assumed `update()` would skip it. Model events are still not
   fired by `update()`; call `save()` when you need those.
+- `QueryException` no longer appends the failing SQL to `getMessage()`. That
+  message is what reaches logs, error pages and third-party error trackers, and
+  SQL text names tables and columns and often embeds literals. The statement is
+  still carried on the exception — call `getSql()` and `getBinds()` to inspect
+  it deliberately. **This is breaking** for anything parsing the message for
+  SQL. `QueryException::enableDebug()` restores the old message format for local
+  development. Note the driver's own error text is passed through unchanged and
+  may still name the table it failed on: withholding the statement narrows what
+  leaks, it does not make the message safe to show a user.
+- `Query::__callStatic()` now throws `BadMethodCallException` for an unknown
+  method instead of returning an unconditioned query. **This is breaking** only
+  for code relying on the previous behaviour, which had no legitimate use.
+- `QueryLogger` now retains at most 1000 queries by default. **This is breaking**
+  for code reading `getQueries()` expecting the complete history of a long run;
+  call `QueryLogger::setLimit(0)` for the old unlimited behaviour. Aggregates
+  (`getQueryCount()`, `getTotalTime()`) are unaffected and still cover every
+  query. `getDroppedCount()` reports how many were discarded.
+- Connections are no longer pinged before every query, only after
+  `ping_idle_seconds` (default 30) of inactivity. A lost connection is now
+  recovered when the statement fails rather than by the pre-query check, so
+  recovery is stronger than before rather than weaker. Set `ping_idle_seconds`
+  to `0` in a connection's config to restore a ping before every query.
+
+### Added
+
+- `Model::requireAssignmentRules()` makes mass assignment on a model that
+  declares neither `$fillable` nor `$guarded` throw `MassAssignmentException`
+  instead of accepting every column but the primary key. Opt-in rather than the
+  default, deliberately: switching it on for everyone would break existing
+  undeclared models silently, at runtime, in exactly the write paths that
+  matter. Call it once during bootstrap to find the omissions on the first
+  request instead of after a bad write. `Model::allowUndeclaredAssignment()`
+  reverses it. Direct assignment and `updateAttributes()` are unaffected.
+- `ping_idle_seconds` connection config controls how long a connection may sit
+  idle before its next use re-checks it.
+- `QueryLogger::setLimit()`, `getLimit()` and `getDroppedCount()` for bounding
+  and inspecting the query log.
+- `QueryException::enableDebug()` / `disableDebug()` / `isDebug()` control
+  whether the failing SQL is appended to the exception message.
 
 ### Tests
 
@@ -147,6 +233,23 @@ All notable changes to `simsoft/fliq` are documented here.
   `created_at` alone, and an explicitly assigned `updated_at` surviving it
 - 2 aggregation tests covering the rejected page sizes and that valid ones still
   count correctly, including a query matching no rows
+- 7 connection resilience tests run against a live server, severing the
+  connection with MySQL's `KILL` rather than simulating it: transparent recovery
+  on both reads and writes, a loss inside a transaction throwing instead of
+  retrying (asserting no partial write survives and the depth counter unwinds),
+  a genuine SQL error being neither retried nor swallowed, and the idle window
+  itself — that a live connection is not pinged, that `ping_idle_seconds => 0`
+  pings every time, and that an idle connection is still checked. The ping
+  assertions count server-side `Com_select` rather than measuring elapsed time,
+  so a slow CI machine cannot make them flap.
+- 4 query logger tests covering the retention limit, that a limit of `0` keeps
+  everything, that lowering the limit trims immediately, and that `reset()`
+  clears the dropped totals
+- 7 security tests covering the mass assignment opt-in (permissive by default,
+  rejecting undeclared models when required, leaving declared models and direct
+  assignment alone), `QueryException` keeping SQL out of its message and debug
+  mode restoring it, and `Query::` rejecting an unknown method while valid ones
+  still work
 
 ### Documentation
 

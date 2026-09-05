@@ -8,6 +8,7 @@ use Simsoft\DB\Builder\Delete;
 use Simsoft\DB\Builder\Insert;
 use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Builder\Update;
+use Simsoft\DB\Exceptions\MassAssignmentException;
 use Simsoft\DB\Exceptions\QueryException;
 use Simsoft\DB\Traits\Error;
 use Simsoft\DB\Traits\HasEvents;
@@ -44,6 +45,23 @@ abstract class Model implements ArrayAccess
 
     /** @var array<int, string> Attributes that are mass assignable */
     protected array $fillable = [];
+
+    /**
+     * @var bool Whether a model declaring neither $fillable nor $guarded rejects
+     *           mass assignment outright.
+     *
+     * A model that declares neither accepts every column except its primary key,
+     * so `$model->fill($request)` writes whatever the request happens to contain.
+     * That is convenient in a prototype and a liability in production, but making
+     * it the default would break existing models silently, at runtime, in exactly
+     * the paths that matter. So it is opt-in: call
+     * `Model::requireAssignmentRules()` during bootstrap and any model that
+     * has not declared its rules throws instead of guessing.
+     */
+    protected static bool $strictAssignment = false;
+
+    /** @var bool Whether the model class declared $fillable or $guarded itself. */
+    private bool $hasAssignmentRules = false;
 
     /** @var array<string, int> Dirty attributes */
     protected array $dirtyAttributes = [];
@@ -109,6 +127,11 @@ abstract class Model implements ArrayAccess
     final public function __construct(array $attributes = [], bool $setNew = true)
     {
         $this->exists = !$setNew;
+
+        // Recorded before the primary key is appended below, which would
+        // otherwise make every model look like it had declared a rule.
+        $this->hasAssignmentRules = $this->guarded !== [] || $this->fillable !== [];
+
         foreach ($attributes as $attribute => $value) {
             $this->$attribute = $value;
         }
@@ -620,6 +643,8 @@ abstract class Model implements ArrayAccess
      */
     protected function filterMassAssignable(array $attributes): array
     {
+        $this->guardUnrestrictedMassAssignment($attributes);
+
         foreach ($this->aliasAttributes as $alias => $attribute) {
             if (array_key_exists($alias, $attributes)) {
                 $attributes[$attribute] = $attributes[$alias];
@@ -637,6 +662,62 @@ abstract class Model implements ArrayAccess
         }
 
         return $attributes;
+    }
+
+    /**
+     * Require every model to declare its mass assignment rules.
+     *
+     * Call this once during bootstrap. A model that declares neither
+     * `$fillable` nor `$guarded` then throws on mass assignment rather than
+     * accepting every column, which turns an easily missed omission into a
+     * failure you find on the first request instead of after a bad write.
+     *
+     * Direct assignment (`$model->column = $value`) is unaffected, as are
+     * `updateAttributes()` and the other documented bypasses.
+     *
+     * @return void
+     */
+    public static function requireAssignmentRules(): void
+    {
+        static::$strictAssignment = true;
+    }
+
+    /**
+     * Go back to accepting models that declare no mass assignment rules.
+     *
+     * The default. Provided so a test or a one-off script can undo
+     * {@see requireAssignmentRules()} without restarting the process.
+     *
+     * @return void
+     */
+    public static function allowUndeclaredAssignment(): void
+    {
+        static::$strictAssignment = false;
+    }
+
+    /**
+     * Reject mass assignment on a model that declared no rules.
+     *
+     * @param array<string, mixed> $attributes The attributes being assigned.
+     * @return void
+     * @throws MassAssignmentException If rules are required but not declared.
+     */
+    private function guardUnrestrictedMassAssignment(array $attributes): void
+    {
+        if (!static::$strictAssignment || $attributes === []) {
+            return;
+        }
+
+        if ($this->hasAssignmentRules) {
+            return;
+        }
+
+        throw new MassAssignmentException(sprintf(
+            '%s declares neither $fillable nor $guarded, so mass assignment cannot be '
+            . 'checked. Declare $fillable with the attributes that may be filled from '
+            . 'external input, or assign the attributes directly.',
+            static::class
+        ));
     }
 
     /**

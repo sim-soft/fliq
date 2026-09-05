@@ -51,6 +51,9 @@ class PostgresDriver extends Driver
         // A new connection carries no transaction, whatever the old one had.
         $this->resetTransactionLevel();
 
+        // Until the new connection is established there is nothing to vouch for.
+        $this->clearActivity();
+
         try {
             $this->cacheEnabled = (bool)($this->config['statement_cache'] ?? true);
             $this->maxCacheSize = (int)($this->config['statement_cache_size'] ?? 100);
@@ -88,6 +91,8 @@ class PostgresDriver extends Driver
             $schema = preg_replace('/[^a-zA-Z0-9_]/', '', (string)$this->config['schema']);
             $this->connection->exec("SET NAMES '$charset'");
             $this->connection->exec("SET search_path TO '$schema'");
+
+            $this->markActivity();
         } catch (PDOException $exception) {
             $this->addError($exception->getMessage());
         }
@@ -113,6 +118,18 @@ class PostgresDriver extends Driver
     public function execute(Executable $query): bool
     {
         $this->reconnectIfNeeded();
+
+        return $this->runWithReconnect(fn(): bool => $this->executeOnce($query));
+    }
+
+    /**
+     * Run one attempt of execute().
+     *
+     * @param Executable $query The query to run.
+     * @return bool
+     */
+    private function executeOnce(Executable $query): bool
+    {
         $conn = $this->requireConnection();
 
         $sql = $query->getSQL();
@@ -122,6 +139,7 @@ class PostgresDriver extends Driver
         if ($query instanceof Insert && $query->hasReturning()) {
             $stmt = $this->prepareStatement($sql);
             $stmt->execute($binds ?? []);
+            $this->markActivity();
             $query->setReturningResult($stmt->fetchAll());
             return true;
         }
@@ -129,6 +147,7 @@ class PostgresDriver extends Driver
         if ($query instanceof Update && $query->hasReturning()) {
             $stmt = $this->prepareStatement($sql);
             $stmt->execute($binds ?? []);
+            $this->markActivity();
             $query->setReturningResult($stmt->fetchAll());
             return true;
         }
@@ -136,16 +155,23 @@ class PostgresDriver extends Driver
         if ($query instanceof Delete && $query->hasReturning()) {
             $stmt = $this->prepareStatement($sql);
             $stmt->execute($binds ?? []);
+            $this->markActivity();
             $query->setReturningResult($stmt->fetchAll());
             return true;
         }
 
         if ($binds === null) {
-            return $conn->exec($sql) !== false;
+            $result = $conn->exec($sql) !== false;
+            $this->markActivity();
+
+            return $result;
         }
 
         $stmt = $this->prepareStatement($sql);
-        return $stmt->execute($binds);
+        $result = $stmt->execute($binds);
+        $this->markActivity();
+
+        return $result;
     }
 
     /**
@@ -160,10 +186,13 @@ class PostgresDriver extends Driver
         $sql = $query->getSQL();
         $binds = $query->getBinds();
 
-        $stmt = $this->prepareStatement($sql);
-        $stmt->execute($binds);
+        return $this->runWithReconnect(function () use ($sql, $binds): array {
+            $stmt = $this->prepareStatement($sql);
+            $stmt->execute($binds);
+            $this->markActivity();
 
-        return $stmt->fetchAll();
+            return $stmt->fetchAll();
+        });
     }
 
     /**
@@ -219,7 +248,12 @@ class PostgresDriver extends Driver
 
         try {
             $stmt = $this->connection->query('SELECT 1');
-            return $stmt !== false;
+            if ($stmt === false) {
+                return false;
+            }
+
+            $this->markActivity();
+            return true;
         } catch (\Throwable) {
             return false;
         }
@@ -232,11 +266,25 @@ class PostgresDriver extends Driver
      */
     public function reconnectIfNeeded(): void
     {
+        if ($this->connection !== null && !$this->needsLivenessCheck()) {
+            return;
+        }
+
         if ($this->connection === null || !$this->ping()) {
             $this->guardReconnectDuringTransaction();
-            $this->statementCache = [];
-            $this->connect();
+            $this->forceReconnect();
         }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function forceReconnect(): void
+    {
+        // Statements are bound to the connection that prepared them.
+        $this->statementCache = [];
+        $this->connection = null;
+        $this->connect();
     }
 
     /**

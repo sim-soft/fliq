@@ -242,6 +242,35 @@ $user->save();
 > these rules and write every attribute given to them. Never hand them
 > unvalidated external input.
 
+### Models that declare neither
+
+A model that declares neither `$fillable` nor `$guarded` accepts **every column
+except its primary key**. `$model->fill($request)` then writes whatever the
+request happens to contain, including columns you never intended to expose. This
+is convenient while prototyping and a liability in production, and it is easy to
+miss because nothing complains.
+
+`requireAssignmentRules()` turns that omission into an exception:
+
+```php
+// Once, during bootstrap
+Model::requireAssignmentRules();
+
+// A model with no $fillable and no $guarded now throws
+(new Industry())->fill(['name' => 'Mining']);
+// MassAssignmentException: Industry declares neither $fillable nor $guarded...
+```
+
+Models that declare either one are unaffected, as is direct assignment
+(`$model->column = $value`) and everything in the bypass list above. Call
+`Model::allowUndeclaredAssignment()` to switch back.
+
+This is opt-in rather than the default deliberately. Enabling it for everyone
+would break existing undeclared models silently, at runtime, in exactly the
+write paths that matter most — worse than the exposure it closes. Switching it
+on yourself surfaces those models on the first request, in development, where
+you can fix them.
+
 ## Composite Primary Keys
 
 For tables with composite primary keys, define `$primaryKey` as an array:

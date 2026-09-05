@@ -17,6 +17,37 @@ abstract class Driver
     use Error;
 
     /**
+     * How long a connection may sit idle before it is pinged again.
+     *
+     * Well below the usual server-side idle timeouts (MySQL's `wait_timeout`
+     * defaults to 8 hours, PostgreSQL has none by default), but high enough
+     * that a busy request never pings.
+     */
+    private const DEFAULT_PING_IDLE_SECONDS = 30.0;
+
+    /**
+     * Message fragments that identify a dropped connection.
+     *
+     * Covers MySQL (2006/2013), PostgreSQL and the generic PDO wording.
+     *
+     * @var array<int, string>
+     */
+    private const LOST_CONNECTION_SIGNATURES = [
+        'server has gone away',
+        'lost connection',
+        'no connection to the server',
+        'connection was killed',
+        'broken pipe',
+        'connection refused',
+        'connection reset by peer',
+        'connection closed',
+        'not connected',
+        'terminating connection',
+        'server closed the connection unexpectedly',
+        'ssl connection has been closed unexpectedly',
+    ];
+
+    /**
      * @var array<int, string> Required config keys
      */
     protected array $required = [];
@@ -129,6 +160,121 @@ abstract class Driver
     }
 
     /**
+     * @var float|null Microtime of the last successful round trip, null if none yet.
+     */
+    private ?float $lastActivityAt = null;
+
+    /**
+     * Record that a round trip to the server just succeeded.
+     *
+     * @return void
+     */
+    protected function markActivity(): void
+    {
+        $this->lastActivityAt = microtime(true);
+    }
+
+    /**
+     * Forget the recorded activity, forcing the next check to ping.
+     *
+     * @return void
+     */
+    protected function clearActivity(): void
+    {
+        $this->lastActivityAt = null;
+    }
+
+    /**
+     * Determine whether the connection needs a liveness check.
+     *
+     * A ping costs a full round trip, which is most of the cost of a small
+     * query, so paying it before every statement roughly doubles the work. It
+     * only guards against the connection dying *between* our queries, and one
+     * that answered a moment ago is still alive for any practical purpose. So
+     * the check is skipped while the connection has been used recently, and the
+     * ping is paid only after it has sat idle long enough for a server-side
+     * timeout or an idle network drop to be plausible.
+     *
+     * Set `ping_idle_seconds` to 0 to ping before every query.
+     *
+     * @return bool
+     */
+    protected function needsLivenessCheck(): bool
+    {
+        if ($this->lastActivityAt === null) {
+            return true;
+        }
+
+        $idleThreshold = (float)($this->config['ping_idle_seconds'] ?? self::DEFAULT_PING_IDLE_SECONDS);
+
+        return (microtime(true) - $this->lastActivityAt) >= $idleThreshold;
+    }
+
+    /**
+     * Run a statement, reconnecting and retrying once if the connection died.
+     *
+     * Skipping the ping means a connection that dropped while idle is not
+     * noticed until the statement itself fails, so that failure is what
+     * triggers the reconnect. The retry happens only when the connection is
+     * genuinely gone and no transaction is open — inside one, reconnecting
+     * would silently discard the statements written so far, so
+     * guardReconnectDuringTransaction() throws instead.
+     *
+     * Retrying is safe because a lost connection takes its uncommitted work
+     * with it: the server has already discarded the statement rather than
+     * half-applied it.
+     *
+     * @template T
+     * @param callable(): T $statement The statement to run.
+     * @return T
+     */
+    protected function runWithReconnect(callable $statement): mixed
+    {
+        try {
+            return $statement();
+        } catch (\Throwable $throwable) {
+            if (!$this->isLostConnectionError($throwable)) {
+                throw $throwable;
+            }
+
+            // Throws if a transaction is open, since a retry cannot restore it.
+            $this->guardReconnectDuringTransaction();
+            $this->forceReconnect();
+
+            return $statement();
+        }
+    }
+
+    /**
+     * Drop the dead connection and establish a new one.
+     *
+     * @return void
+     */
+    abstract protected function forceReconnect(): void;
+
+    /**
+     * Determine whether a failure means the connection is gone.
+     *
+     * Drivers report this as message text rather than a distinct exception
+     * type, so the message is what we have to match on.
+     *
+     * @param \Throwable $throwable The failure to classify.
+     * @return bool
+     */
+    protected function isLostConnectionError(\Throwable $throwable): bool
+    {
+        $message = strtolower($throwable->getMessage());
+
+        foreach (self::LOST_CONNECTION_SIGNATURES as $signature) {
+            if (str_contains($message, $signature)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Forget any tracked transaction state.
      *
      * A dropped connection discards its transaction, so drivers call this from
@@ -215,6 +361,8 @@ abstract class Driver
         if ($this->transactionLevel > 1) {
             try {
                 $this->executeRawStatement('ROLLBACK TO SAVEPOINT ' . $this->savepointName($this->transactionLevel));
+            } catch (\Throwable $throwable) {
+                $this->rethrowUnlessConnectionLost($throwable);
             } finally {
                 --$this->transactionLevel;
             }
@@ -224,8 +372,30 @@ abstract class Driver
 
         try {
             $this->rollBackTransaction();
+        } catch (\Throwable $throwable) {
+            $this->rethrowUnlessConnectionLost($throwable);
         } finally {
             $this->transactionLevel = 0;
+        }
+    }
+
+    /**
+     * Suppress a rollback failure caused by the connection being gone.
+     *
+     * Rolling back needs the connection the transaction lives on, so when that
+     * connection is what died the rollback cannot be sent — and does not need
+     * to be, since the server discards an interrupted transaction on its own.
+     * Letting that failure propagate would replace the real cause of the
+     * unwind with a misleading one.
+     *
+     * @param \Throwable $throwable The rollback failure.
+     * @return void
+     * @throws \Throwable If the failure was not a lost connection.
+     */
+    private function rethrowUnlessConnectionLost(\Throwable $throwable): void
+    {
+        if (!$this->isLostConnectionError($throwable)) {
+            throw $throwable;
         }
     }
 

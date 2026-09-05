@@ -2,13 +2,18 @@
 
 namespace Integration;
 
+use BadMethodCallException;
 use InvalidArgumentException;
+use Models\Industry;
 use Models\User;
 use PHPUnit\Framework\Attributes\Test;
 use Simsoft\DB\Builder\ActiveQuery;
 use Simsoft\DB\Builder\Raw;
+use Simsoft\DB\Exceptions\MassAssignmentException;
 use Simsoft\DB\Exceptions\QueryException;
 use Simsoft\DB\Grammar\PostgresGrammar;
+use Simsoft\DB\Model;
+use Simsoft\DB\Query;
 
 /**
  * Security tests — verifies SQL injection is prevented by parameter binding.
@@ -330,6 +335,119 @@ class SecurityTest extends DatabaseTestCase
             '::double precision[]',
             $grammar->arrayContains('"tags"', 'double precision')
         );
+    }
+
+    #[Test]
+    public function undeclaredMassAssignmentRulesAreAcceptedByDefault(): void
+    {
+        // The permissive default is deliberate: tightening it silently would
+        // break existing models at runtime.
+        $industry = new Industry();
+        $industry->fill(['name' => 'Mining', 'slug' => 'mining']);
+
+        $this->assertEquals('Mining', $industry->name);
+    }
+
+    #[Test]
+    public function requiringRulesRejectsAModelThatDeclaredNone(): void
+    {
+        Model::requireAssignmentRules();
+
+        try {
+            (new Industry())->fill(['name' => 'Mining']);
+            $this->fail('a model with no declared rules was mass assigned');
+        } catch (MassAssignmentException $exception) {
+            $this->assertStringContainsString('Industry', $exception->getMessage());
+        } finally {
+            Model::allowUndeclaredAssignment();
+        }
+    }
+
+    #[Test]
+    public function requiringRulesLeavesDeclaredModelsAndDirectAssignmentAlone(): void
+    {
+        Model::requireAssignmentRules();
+
+        try {
+            // User declares both, so it is unaffected
+            $user = new User();
+            $user->fill(['username' => 'declared', 'id' => 999]);
+            $this->assertEquals('declared', $user->username);
+            $this->assertNull($user->id, 'guarded primary key was filled');
+
+            // Direct assignment is not mass assignment and stays available
+            $industry = new Industry();
+            $industry->name = 'Mining';
+            $this->assertEquals('Mining', $industry->name);
+
+            // An empty payload has nothing to check
+            $this->assertInstanceOf(Industry::class, (new Industry())->fill([]));
+        } finally {
+            Model::allowUndeclaredAssignment();
+        }
+    }
+
+    #[Test]
+    public function queryExceptionKeepsSqlOutOfItsMessage(): void
+    {
+        // getMessage() reaches logs, error pages and error trackers, and SQL
+        // text maps out the schema for whoever reads them. The driver's own
+        // wording may still name what it choked on — what we control is not
+        // appending the whole statement on top of it.
+        $sql = 'SELECT `password`, `role` FROM no_such_table_here WHERE `id` = ?';
+
+        try {
+            (new Raw($sql, [1]))->withConnection('mysql')->fetchAll();
+            $this->fail('the bad query did not throw');
+        } catch (QueryException $exception) {
+            $this->assertStringNotContainsString('[SQL:', $exception->getMessage());
+            $this->assertStringNotContainsString('password', $exception->getMessage());
+            $this->assertStringNotContainsString('SELECT', $exception->getMessage());
+
+            // Still available deliberately
+            $this->assertEquals($sql, $exception->getSql());
+            $this->assertEquals([1], $exception->getBinds());
+        }
+    }
+
+    #[Test]
+    public function queryExceptionDebugModeRestoresSqlInTheMessage(): void
+    {
+        QueryException::enableDebug();
+
+        try {
+            (new Raw('SELECT * FROM no_such_table_here'))->withConnection('mysql')->fetchAll();
+            $this->fail('the bad query did not throw');
+        } catch (QueryException $exception) {
+            $this->assertStringContainsString('[SQL:', $exception->getMessage());
+            $this->assertStringContainsString('no_such_table_here', $exception->getMessage());
+        } finally {
+            QueryException::disableDebug();
+        }
+
+        $this->assertFalse(QueryException::isDebug());
+    }
+
+    #[Test]
+    public function undefinedQueryProxyMethodThrowsInsteadOfMatchingEverything(): void
+    {
+        // A typo used to return a bare query with no conditions, so
+        // Query::wheer('id', 5) silently matched the whole table.
+        // Dispatched through the magic method rather than written literally:
+        // static analysis rightly rejects `Query::wheer(...)`, and a typo the
+        // analyser catches was never the one that reached production.
+        $this->expectException(BadMethodCallException::class);
+
+        Query::__callStatic('wheer', ['id', 5]);
+    }
+
+    #[Test]
+    public function validQueryProxyMethodStillWorks(): void
+    {
+        $query = Query::from('user')->where('username', 'alice');
+
+        $this->assertInstanceOf(ActiveQuery::class, $query);
+        $this->assertStringContainsString('WHERE', $query->getSQL());
     }
 
     #[Test]
