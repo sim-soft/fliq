@@ -194,6 +194,24 @@ All notable changes to `simsoft/fliq` are documented here.
   names differing only past byte 63 collapsed. Channel names are now validated
   in the driver and an empty or over-long one raises `InvalidArgumentException`
   from all three methods; 63 bytes remains valid.
+- **`notBetweenDate()` matched nothing at all** — the negated range was built as
+  `col < start AND col > end`, which asks for a date that is both before the
+  range and after it. No row can satisfy that, so every call returned an empty
+  result with no error. A row outside a range is before the start *or* after the
+  end, so the two comparisons are now joined with `OR`. The same fault, and the
+  same fix, applied to the negated interval form
+  (`notBetweenDateInterval()` and `betweenDateInterval(..., is: false)`).
+- **Negated date ranges were not parenthesised** — now that they build an `OR`,
+  an adjacent condition would have bound to only one half of the range, because
+  `AND` binds tighter than `OR`. Both negated forms are now wrapped, so
+  `where(...)->notBetweenDate(...)` restricts the whole range rather than one
+  end of it.
+- **`betweenDate()` with neither date produced broken SQL** — the clause
+  returned an empty string, which the builder still joined to its neighbours:
+  alone it emitted a bare `WHERE`, and alongside another condition a dangling
+  operator (`WHERE id = ? AND`). Either way the query failed with a syntax error
+  pointing far from the call responsible. Omitting both dates now raises
+  `InvalidArgumentException` naming the attribute.
 
 ### Changed
 
@@ -278,6 +296,14 @@ All notable changes to `simsoft/fliq` are documented here.
   inner call committed, an inner rollback leaving the outer intact, nesting
   beyond two levels, exception propagation from a nested call, and that the
   depth counter unwinds to zero after both success and failure
+- 27 date range tests covering all eight `betweenDate` / `betweenDateInterval`
+  methods, which previously had none (0.00% coverage on the clause, now 100%).
+  Results are checked against the answer the database computes for the
+  equivalent plain SQL rather than a hand-written row list, so an expectation
+  cannot be wrong in the same direction as the code. Includes each range and its
+  negation partitioning the table, grouping against a surrounding `AND` on
+  either side, inclusive bounds, the half-open interval end, and the binding of
+  dates. 11 of the 27 fail against the unfixed clause.
 - 2 cache tests covering key separation by connection and an end-to-end check
   that two databases holding the same table never serve each other's rows
 - 2 timestamp tests covering `update()` advancing `updated_at` while leaving
@@ -374,6 +400,10 @@ All notable changes to `simsoft/fliq` are documented here.
   that asked for it), case sensitivity, the 63-byte limit and why it is checked
   in the driver, and that `NOTIFY` is asynchronous — so a single non-blocking
   poll is not proof that nothing was sent.
+- The Between Date sections of the query builder guide now document the negated
+  forms, which were previously absent: the SQL they build, the parentheses and
+  why they are needed, that at least one of the two dates is required, and that
+  an interval window is half-open so consecutive windows tile without overlap.
 
 ---
 

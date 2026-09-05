@@ -2,6 +2,7 @@
 
 namespace Simsoft\DB\Builder\Conditions;
 
+use InvalidArgumentException;
 use Simsoft\DB\Builder\Clauses\Clause;
 
 /**
@@ -44,15 +45,25 @@ class BetweenDateCondition extends Clause
     {
         $this->appendBinds($this->value);
         $attribute = $this->queryAttribute($this->attribute);
-        return $this->is
-            ? "$attribute >= {$this->getPlaceHolder()} AND $attribute < {$this->getPlaceHolder()} + INTERVAL $this->interval DAY"
-            : "$attribute < {$this->getPlaceHolder()} AND $attribute >= {$this->getPlaceHolder()} + INTERVAL $this->interval DAY";
+
+        if ($this->is) {
+            return "$attribute >= {$this->getPlaceHolder()}"
+                . " AND $attribute < {$this->getPlaceHolder()} + INTERVAL $this->interval DAY";
+        }
+
+        // Negating "inside the window" means outside either end, so the two
+        // comparisons are joined with OR. Joining them with AND asks for a date
+        // both before the window and after it, which no row can satisfy.
+        // Parenthesised so a surrounding AND cannot bind to just one half.
+        return "($attribute < {$this->getPlaceHolder()}"
+            . " OR $attribute >= {$this->getPlaceHolder()} + INTERVAL $this->interval DAY)";
     }
 
     /**
      * Get normal between date SQL.
      *
      * @return string
+     * @throws InvalidArgumentException If neither a start nor an end date is given.
      */
     protected function getDateSQL(): string
     {
@@ -71,7 +82,15 @@ class BetweenDateCondition extends Clause
             return $this->buildEndOnlySQL($attribute, $endDate);
         }
 
-        return '';
+        // Returning '' here left an empty slot in the condition list, which the
+        // builder joins with its neighbours: on its own that produced a bare
+        // `WHERE`, and next to another condition a dangling operator
+        // (`WHERE id = ? AND`). Either way the query died with a syntax error
+        // far from the call that caused it, so the omission is reported here.
+        throw new InvalidArgumentException(sprintf(
+            'betweenDate() on "%s" needs a start date, an end date, or both; got neither.',
+            is_scalar($this->attribute) ? (string)$this->attribute : get_debug_type($this->attribute)
+        ));
     }
 
     /**
@@ -85,9 +104,16 @@ class BetweenDateCondition extends Clause
     private function buildBothDatesSQL(string $attribute, string $startDate, string $endDate): string
     {
         $this->appendBinds([$startDate, $endDate]);
-        return $this->is
-            ? "$attribute >= {$this->getPlaceHolder()} AND $attribute <= {$this->getPlaceHolder()}"
-            : "$attribute < {$this->getPlaceHolder()} AND $attribute > {$this->getPlaceHolder()}";
+
+        if ($this->is) {
+            return "$attribute >= {$this->getPlaceHolder()} AND $attribute <= {$this->getPlaceHolder()}";
+        }
+
+        // A row outside the range is before the start *or* after the end.
+        // Using AND asks for both at once, so the condition was unsatisfiable
+        // and notBetweenDate() matched nothing at all. Parenthesised so a
+        // surrounding AND cannot bind to just one half.
+        return "($attribute < {$this->getPlaceHolder()} OR $attribute > {$this->getPlaceHolder()})";
     }
 
     /**

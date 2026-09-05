@@ -312,15 +312,49 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
+At least one of the two dates is required. Passing neither throws
+`InvalidArgumentException`, since there is no range to test.
+
+The negated forms match the exact complement — a row outside the range is
+before the start *or* after the end, so they build a disjunction and wrap it in
+parentheses. The parentheses matter: `AND` binds tighter than `OR`, so without
+them a neighbouring condition would attach to only one half of the range.
+
+```php
+/* WHERE (created_at < ? OR created_at > ?) */
+$users = (new ActiveQuery())
+    ->from('user')
+    ->notBetweenDate('created_at', '2024-01-01', '2024-12-31')
+    ->on('mysql')
+    ->get();
+
+/* WHERE created_at < ? -- open-ended, so a single comparison */
+$users = (new ActiveQuery())
+    ->from('user')
+    ->notBetweenDate('created_at', '2024-01-01', null)
+    ->on('mysql')
+    ->get();
+```
+
 ### Between Date Interval
 
 Methods: `betweenDateInterval()`, `notBetweenDateInterval()`, `orBetweenDateInterval()`
+
+The window is half-open: it includes the start date and excludes the day the
+interval lands on, so consecutive windows tile without overlapping.
 
 ```php
 /* WHERE created_at >= ? AND created_at < ? + INTERVAL 7 DAY */
 $users = (new ActiveQuery())
     ->from('user')
     ->betweenDateInterval('created_at', '2024-01-01', 7)
+    ->on('mysql')
+    ->get();
+
+/* WHERE (created_at < ? OR created_at >= ? + INTERVAL 7 DAY) */
+$users = (new ActiveQuery())
+    ->from('user')
+    ->notBetweenDateInterval('created_at', '2024-01-01', 7)
     ->on('mysql')
     ->get();
 ```
