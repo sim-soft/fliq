@@ -732,6 +732,48 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   over-supplied and the driver refused it. They now take the condition sections
   alone.
 
+**Model — property access**
+
+- **Reading any method name as a property invoked the method** — lazy loading a
+  relation means `__get()` calls a method, and the only guard was
+  `method_exists()`. So `$user->delete` — a typo for `$user->delete()`, or a
+  template printing a key that turned out not to be a column — ran the delete,
+  removed the row, and then failed with `Call to a member function fetch() on
+  true`; the row was already gone by the time the error surfaced. The same held
+  for `save`, `insert`, `refresh` and `validate`. Eligibility is now limited to
+  methods that declare `Relation` as their return type and take no required
+  arguments, via the new `Traits\ResolvesRelations`. Reading a property no
+  longer writes to the database.
+- **`unset()` left the pending change behind** — `__unset()` cleared
+  `$attributes` but not `$dirtyAttributes`, so the removed column stayed in
+  `isDirty()` and `getDirtyAttributes()`. Since `save()` writes
+  `array_intersect_key($attributes, $dirtyAttributes)`, the column then dropped
+  out of the `UPDATE` while `save()` still returned `true` — a write that
+  reported success having sent nothing. It also left `$relations` untouched, so
+  `unset($user->posts)` left the posts loaded and still serialized by
+  `toArray()`. Both are now cleared.
+- **A null primary key produced a statement that matched no row and reported
+  success** — `getPKs()` built `WHERE id = ?` bound to `null`, which matches
+  nothing in SQL, while the driver reported the statement as successful. So
+  after `unset($user->id)` — or an unsaved key assignment — `delete()` returned
+  `true` with the row still in the table, and `update()`, `updateAttributes()`
+  and `updateCounter()` returned `true` having written nothing. A model that
+  exists but has no key value now raises `QueryException` naming the model and
+  the missing attribute. New records are unaffected.
+- **`isset()` disagreed with reading for relations** — `__isset()` checked
+  `$attributes` alone, so `isset($user->profile)` was `false` while
+  `$user->profile` answered with a `UserProfile`, and `$user->profile ??
+  $default` therefore discarded the loaded object and took the default.
+  `isset()` now defers to `__get()`. `ArrayAccess` inherits the fix, since
+  `offsetExists()` forwards to `__isset()`.
+- **A lazy-loaded to-many relation serialized as `{}`** — `toArray()` handled a
+  relation held as an array but not as a `Collection`, and lazy loading yields a
+  `Collection` where eager loading yields an array. The `Collection` fell
+  through to "return it unchanged", so a user with three posts encoded as
+  `"posts":{}` — `Collection` exposes no public properties for `json_encode` to
+  find — while the same model loaded with `with('posts')` produced the full
+  list. Both shapes now serialize identically.
+
 ### Changed
 
 - `whereFulltext()` and `orWhereFulltext()` now throw `InvalidArgumentException`
@@ -826,6 +868,22 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   bare column — on MySQL that call already failed at the server, and on
   PostgreSQL it returned the opposite of the right answer. Use
   `notNull('column')` to test that the document is present.
+- Reading a property named after a non-relation method now answers `null`
+  instead of calling the method. **This is breaking** for code relying on
+  `$model->someMethod` as a call — but that idiom ran the method as a side
+  effect of a read and then failed on `->fetch()`, so it could not have been
+  working. Add the parentheses. Relation methods are unaffected.
+- `update()`, `delete()`, `updateAttributes()` and `updateCounter()` now throw
+  `QueryException` when the model exists but its primary key is `null`. **This
+  is breaking** for code that reached those calls without a key — but the
+  statement matched no row and returned `true` regardless, so the previous
+  behaviour was a silent no-op reported as success.
+- `isset($model->relation)` on an unloaded relation now loads it, as reading it
+  does, and answers on the value. Use `relationLoaded()` for the previous
+  in-memory-only check.
+- `toArray()` and `toJson()` now serialize a lazy-loaded to-many relation as a
+  list rather than `{}`, matching the eager-loaded shape. **This changes output**
+  for any consumer that had adapted to the empty object.
 
 ### Added
 
@@ -1057,6 +1115,15 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   on PostgreSQL as on MySQL against the same fixture — the PostgreSQL answers
   were wrong rather than absent, so a SQL-text assertion would have passed. 67
   of the 121 fail against the unfixed code.
+- 61 tests covering model property access (47 unit, 14 integration). Each defect
+  here reported success while doing the wrong thing, so the integration tests
+  ask the server what happened rather than asking the model: whether the row is
+  still present after reading `$user->delete`, what the `score` column holds
+  after a `save()` that followed an `unset()`, and whether the row survived a
+  `delete()` with a null key. A provider drives ten method names — ordinary,
+  untyped, argument-taking, static, protected and inherited — through both
+  reading and `isset()`, and one test asserts eager- and lazy-loaded relations
+  serialize byte-identically. 37 of the 61 fail against the unfixed code.
 
 ### Documentation
 
@@ -1167,6 +1234,15 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   `jsonb_exists("user"."meta", 'address')`, and the SQLite `jsonContains()`
   comment was truncated mid-expression. Every JSON example in the section was
   run against all three grammars and the comments corrected to match.
+- New "Property Access" section in the Active Record guide, and a matching table
+  in the cheatsheet. Reading, testing and unsetting a model property are the
+  most-used surface in the library and were documented nowhere, which is part of
+  why four defects lived there undetected. It covers the resolution order, which
+  method names are eligible for lazy loading and which read as `null`, that
+  `isset()` agrees with reading and loads an unloaded relation, that `unset()`
+  discards the pending change, and the `QueryException` raised when an existing
+  model has no primary key value. Every example was run against the fixture
+  before being written down.
 
 ---
 

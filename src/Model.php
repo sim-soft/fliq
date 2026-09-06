@@ -13,6 +13,7 @@ use Simsoft\DB\Exceptions\QueryException;
 use Simsoft\DB\Traits\CastsAttributes;
 use Simsoft\DB\Traits\Error;
 use Simsoft\DB\Traits\HasEvents;
+use Simsoft\DB\Traits\ResolvesRelations;
 use stdClass;
 use Throwable;
 
@@ -26,6 +27,7 @@ abstract class Model implements ArrayAccess
     use CastsAttributes;
     use Error;
     use HasEvents;
+    use ResolvesRelations;
 
     /** @var string|array<int, string> Primary key fields */
     protected string|array $primaryKey = 'id';
@@ -248,8 +250,11 @@ abstract class Model implements ArrayAccess
             return $this->relations[$name];
         }
 
-        // Lazy load: call the relation method and cache the result
-        if (method_exists($this, $name)) {
+        // Lazy load: call the relation method and cache the result.
+        //
+        // Only methods that declare they return a Relation are eligible; see
+        // ResolvesRelations for why method_exists() alone was not enough.
+        if ($this->isRelationMethod($name)) {
             return $this->relations[$name] = $this->{$name}()->fetch();
         }
 
@@ -257,25 +262,48 @@ abstract class Model implements ArrayAccess
     }
 
     /**
-     * Determine is attribute empty.
+     * Determine whether a property has a value.
      *
-     * @param string $name The attribute name.
+     * Reads the property to decide, so testing an unloaded relation lazy-loads
+     * it exactly as reading it would; the result is cached, so the query
+     * happens once. Use {@see relationLoaded()} to ask whether a relation is
+     * already in memory without going to the database.
+     *
+     * @param string $name The attribute or relation name.
      * @return bool
      */
     public function __isset(string $name): bool
     {
-        return isset($this->attributes[$name]);
+        // Checking $attributes alone ignored relations, so isset() disagreed
+        // with reading: `$user->profile` answered with a UserProfile while
+        // `isset($user->profile)` was false, and `$user->profile ?? $default`
+        // therefore discarded a loaded object and took the default. Deferring
+        // to __get() keeps the two in step — true exactly when reading the
+        // property answers with something other than null, which is also what
+        // isset() means for an ordinary property holding NULL.
+        return $this->__get($name) !== null;
     }
 
     /**
-     * Allow unset attribute.
+     * Discard an attribute or a loaded relation.
      *
-     * @param string $name The attribute name to be unset.
+     * Unsetting an attribute drops the pending change to it as well: the value
+     * is gone, so there is nothing left to write.
+     *
+     * @param string $name The attribute or relation name to be unset.
      * @return void
      */
     public function __unset(string $name): void
     {
-        unset($this->attributes[$name]);
+        // Only $attributes was cleared, leaving the name in $dirtyAttributes
+        // and in $relations. The stale dirty entry made isDirty('col') and
+        // getDirtyAttributes() name a column the model no longer holds, and
+        // since save() writes array_intersect_key($attributes, $dirty) the
+        // column silently dropped out of the UPDATE — save() returned true
+        // having written nothing, which is indistinguishable from success.
+        // The stale relation meant unset($user->posts) left the loaded posts
+        // readable and still serialized by toArray().
+        unset($this->attributes[$name], $this->dirtyAttributes[$name], $this->relations[$name]);
     }
 
     /**
@@ -548,6 +576,7 @@ abstract class Model implements ArrayAccess
      * Get a model query with its primary keys.
      *
      * @return array<int, array{0: string, 1: string, 2: mixed}>
+     * @throws QueryException If the model exists but a key attribute is missing.
      */
     protected function getPKs(): array
     {
@@ -557,16 +586,43 @@ abstract class Model implements ArrayAccess
             return $keys;
         }
 
-        if (is_array($this->primaryKey)) {
-            foreach ($this->primaryKey as $attribute) {
-                $keys[] = [$attribute, '=', $this->{$attribute}];
-            }
-            return $keys;
+        $attributes = is_array($this->primaryKey) ? $this->primaryKey : [$this->primaryKey];
+
+        foreach ($attributes as $attribute) {
+            $keys[] = [$attribute, '=', $this->requireKeyValue($attribute)];
         }
 
-        $keys[] = [$this->primaryKey, '=', $this->{$this->primaryKey}];
-
         return $keys;
+    }
+
+    /**
+     * Read a primary key value, refusing to proceed without one.
+     *
+     * @param string $attribute The primary key attribute.
+     * @return mixed The key value.
+     * @throws QueryException If the value is null.
+     */
+    private function requireKeyValue(string $attribute): mixed
+    {
+        $value = $this->{$attribute};
+
+        if ($value !== null) {
+            return $value;
+        }
+
+        // A null key built `WHERE id = ?` bound to null, which matches no row
+        // in SQL. update(), delete() and updateCounter() then affected nothing
+        // and returned true — the driver reports a successful statement, not a
+        // matched row — so `unset($user->id); $user->delete();` reported the
+        // record deleted while it was still in the table. Refusing here turns a
+        // silent no-op into an error at the point the key went missing.
+        throw new QueryException(sprintf(
+            'Cannot build a primary key condition for %s: the key attribute "%s" is null.'
+            . ' The model is marked as existing but has no key, so the statement would match no row'
+            . ' while reporting success. Reload it with refresh() or assign the key.',
+            static::class,
+            $attribute
+        ));
     }
 
     /**
@@ -743,7 +799,8 @@ abstract class Model implements ArrayAccess
     /**
      * Serialize a single relation value for toArray output.
      *
-     * @param mixed $related The relation value (null, Model, or array of Models).
+     * @param mixed $related The relation value: null, a Model, or a list of
+     *                       Models as either an array or a Collection.
      * @return mixed
      */
     private function serializeRelation(mixed $related): mixed
@@ -754,6 +811,16 @@ abstract class Model implements ArrayAccess
 
         if ($related instanceof self) {
             return $related->toArray();
+        }
+
+        // A to-many relation arrives as an array when eager-loaded and as a
+        // Collection when lazy-loaded, and only the array was serialized. The
+        // Collection fell through to "return it unchanged", so toJson() encoded
+        // three posts as the empty object {} — Collection exposes no public
+        // properties for json_encode to find — while the same model loaded with
+        // with('posts') produced the full list.
+        if ($related instanceof Collection) {
+            $related = iterator_to_array($related);
         }
 
         if (!is_array($related)) {

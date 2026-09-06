@@ -383,6 +383,72 @@ $setting->toArray()['metadata'];     /* ['priority' => 1, ...] — decoded */
 $setting->getAttributes()['metadata']; /* '{"priority":1,...}' — as stored */
 ```
 
+## Property Access
+
+A model resolves a property read in this order: a cast attribute, a plain
+attribute, an already-loaded relation, then a relation method to lazy-load.
+Anything else reads as `null`.
+
+```php
+$user = User::findByPk(1);
+
+$user->email;        /* attribute */
+$user->posts;        /* relation — lazy-loaded on first read, then cached */
+$user->no_such_col;  /* null */
+```
+
+Only methods that declare `Relation` as their return type and take no required
+arguments are eligible for lazy loading. Every other method name — including
+`save`, `delete` and `refresh` — reads as `null`:
+
+```php
+$user->delete;   /* null — a property read, not a call */
+$user->delete(); /* the actual delete */
+```
+
+`isset()` agrees with reading. It is `true` whenever reading the property
+answers with something other than `null`, relations included:
+
+```php
+$user->profile ?? $default;   /* the loaded profile, not $default */
+isset($user->deleted_at);     /* false when the column holds NULL */
+```
+
+Testing an unloaded relation with `isset()` loads it, exactly as reading it
+would. Use `relationLoaded()` to ask whether a relation is already in memory
+without going to the database.
+
+Unsetting an attribute discards any pending change to it, so a value you have
+removed is not written on the next `save()`:
+
+```php
+$user->score = 500;
+unset($user->score);
+
+$user->isDirty('score');  /* false */
+$user->save();            /* leaves score as the database has it */
+```
+
+`unset()` on a loaded relation discards the loaded value; the next read
+lazy-loads it again.
+
+### Models must keep their primary key
+
+`update()`, `delete()`, `updateAttributes()` and `updateCounter()` all identify
+the row by primary key. If a model is marked as existing but its key attribute
+is `null`, the statement would match no row while the driver still reported
+success — so FLIQ throws a `QueryException` instead:
+
+```php
+$user = User::findByPk(1);
+unset($user->id);
+
+$user->delete(); /* QueryException: the key attribute "id" is null */
+```
+
+Reload with `refresh()`, or assign the key, before writing. A record that does
+not exist yet is unaffected: `update()` and `delete()` return `false` as before.
+
 ## Lifecycle Hooks
 
 Override these methods to hook into the model lifecycle:

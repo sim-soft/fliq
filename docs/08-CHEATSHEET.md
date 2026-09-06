@@ -252,8 +252,24 @@ User::transaction(function () {
 | `$model->hasOne(Model::class, [...])`  | Define has-one relation                      |
 | `$model->hasMany(Model::class, [...])` | Define has-many relation                     |
 | `$model->setRelation('name', $val)`    | Inject preloaded relation                    |
-| `$model->relationLoaded('name')`       | Check if relation is loaded                  |
+| `$model->relationLoaded('name')`       | Check if relation is loaded (no query)       |
 | `$model->saveTogether([...])`          | Save model + nested relations in transaction |
+
+### Property Access
+
+| Expression                    | Result                                                 |
+|-------------------------------|--------------------------------------------------------|
+| `$model->column`              | Attribute value, or `null` if absent                   |
+| `$model->relation`            | Loads on first read, then cached                       |
+| `$model->save`                | `null` — only `Relation`-returning methods are called  |
+| `isset($model->column)`       | True unless reading answers `null`                     |
+| `isset($model->relation)`     | Loads the relation, as reading it would                |
+| `unset($model->column)`       | Drops the value and its pending change                 |
+| `unset($model->relation)`     | Drops the loaded relation; next read reloads it        |
+| `$model['column']`            | Same as `$model->column` (`ArrayAccess`)               |
+
+`update()`, `delete()`, `updateAttributes()` and `updateCounter()` throw a
+`QueryException` if the model exists but its primary key is `null`.
 
 ### Static Methods
 
