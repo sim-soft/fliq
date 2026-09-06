@@ -2,6 +2,8 @@
 
 namespace Simsoft\DB\Grammar;
 
+use InvalidArgumentException;
+
 /**
  * SQLite Grammar.
  *
@@ -9,7 +11,10 @@ namespace Simsoft\DB\Grammar;
  */
 class SQLiteGrammar implements Grammar
 {
-    use EscapesStringLiteral;
+    use EscapesStringLiteral, ExplainFormat;
+
+    /** @var array<int, string> SQLite has one plan shape and no FORMAT option. */
+    private const EXPLAIN_FORMATS = ['text'];
 
     /**
      * {@inheritdoc}
@@ -75,6 +80,29 @@ class SQLiteGrammar implements Grammar
     public function getDriverName(): string
     {
         return 'sqlite';
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * SQLite reports plans through EXPLAIN QUERY PLAN, which takes no options.
+     * Plain EXPLAIN exists but lists virtual-machine opcodes rather than a
+     * plan, and there is no ANALYZE variant — the statement is not run. Both
+     * arguments are therefore only checked, so a caller asking for JSON or for
+     * real timings is told SQLite cannot give them rather than quietly handed a
+     * plan that answers neither request.
+     */
+    public function explainSQL(bool $analyze, string $format): string
+    {
+        $this->normaliseExplainFormat($format, self::EXPLAIN_FORMATS);
+
+        if ($analyze) {
+            throw new InvalidArgumentException(
+                'SQLite has no EXPLAIN ANALYZE; EXPLAIN QUERY PLAN does not execute the statement.'
+            );
+        }
+
+        return 'EXPLAIN QUERY PLAN';
     }
 
     /**

@@ -67,7 +67,7 @@ abstract class Aggregate extends Builder
     protected function buildSQL(): string
     {
         $conditionAlias = ($this->condition instanceof ActiveQuery) ? $this->condition->getAlias() : null;
-        $tableAlias = $conditionAlias ?? trim($this->table, '`"');
+        $tableAlias = $conditionAlias ?? $this->table;
         $this->alias($tableAlias);
 
         $select = $this->distinct
@@ -76,19 +76,45 @@ abstract class Aggregate extends Builder
                 ? "SELECT $this->functionName($this->attribute)"
                 : "SELECT $this->functionName({$this->queryAttribute($this->attribute)})");
 
-        $from = "FROM " . $this->quote(trim($this->table, '`"'));
-        if ($conditionAlias !== null && $conditionAlias !== trim($this->table, '`"')) {
-            $from .= ' ' . $this->quote($conditionAlias);
-        }
-
         $sql = implode(' ', array_filter([
             $select,
             $this->as ? "AS " . $this->quote($this->as) : null,
-            $from,
+            $this->buildFromSQL($conditionAlias),
             $this->getCondition(),
         ]));
 
         return $this->getQualifiedSQL($sql);
+    }
+
+    /**
+     * Build the FROM clause the aggregate counts over.
+     *
+     * @param string|null $conditionAlias The alias the source query qualifies its columns with.
+     * @return string
+     */
+    private function buildFromSQL(?string $conditionAlias): string
+    {
+        // A query selecting from a sub-query has no table name, so the
+        // sub-query itself is re-emitted along with the values its
+        // placeholders take. Those come first: FROM precedes WHERE, and the
+        // condition's own binds are appended after this by getCondition().
+        $subQuery = ($this->condition instanceof ActiveQuery) ? $this->condition->getFromSubQuery() : null;
+        if ($subQuery !== null) {
+            $this->appendBinds($this->condition instanceof ActiveQuery ? $this->condition->getFromBinds() ?? [] : []);
+            return "FROM ($subQuery) " . $this->quote((string)$conditionAlias);
+        }
+
+        // The table arrives unquoted, so it is quoted for whichever grammar the
+        // aggregate's own connection names. It used to be handed over already
+        // quoted and stripped back with trim($t, '`"'), which left the interior
+        // quotes of "`user` `u`" in place and asked for a table by that name.
+        $from = 'FROM ' . $this->quote($this->table);
+
+        if ($conditionAlias !== null && $conditionAlias !== $this->table) {
+            $from .= ' ' . $this->quote($conditionAlias);
+        }
+
+        return $from;
     }
 
     /**

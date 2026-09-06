@@ -62,6 +62,20 @@ trait SectionBinds
     }
 
     /**
+     * Get the bind values belonging to the FROM clause alone.
+     *
+     * A caller that re-emits this query's FROM sub-query needs its values, and
+     * needs them apart from the rest so they can be placed ahead of the
+     * conditions, matching the order the placeholders appear in.
+     *
+     * @return array<int, mixed>|null Null when no binds exist.
+     */
+    public function getFromBinds(): ?array
+    {
+        return $this->fromBinds === [] ? null : $this->fromBinds;
+    }
+
+    /**
      * Get the bind values for the filtering sections alone.
      *
      * These are the sections a caller re-emits when it borrows a query's

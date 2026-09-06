@@ -465,18 +465,23 @@ $plan = User::find()
 /* EXPLAIN ANALYZE — actually runs the query and shows real timings */
 $plan = User::find()->where('role', 'admin')->explain(analyze: true);
 
-/* JSON format for programmatic analysis (PostgreSQL) */
+/* JSON format for programmatic analysis (MySQL and PostgreSQL) */
 $plan = Post::find()
     ->whereFulltext(['title', 'body'], 'optimization')
     ->explain(format: 'json');
 ```
 
-Works on all drivers:
+Works on all drivers, each with its own formats. `$format` is validated against
+the driver the query runs on, so an unsupported combination raises an
+`InvalidArgumentException` instead of returning a plan in the wrong shape:
 
-- **MySQL**: `EXPLAIN` / `EXPLAIN ANALYZE`
-- **PostgreSQL**: `EXPLAIN` / `EXPLAIN ANALYZE` /
-  `EXPLAIN (FORMAT JSON|YAML|XML)`
-- **SQLite**: `EXPLAIN QUERY PLAN`
+- **MySQL**: `EXPLAIN` / `EXPLAIN FORMAT=JSON|TREE` / `EXPLAIN ANALYZE`.
+  `ANALYZE` always reports the tree format and cannot be combined with
+  `FORMAT=JSON`.
+- **PostgreSQL**: `EXPLAIN` / `EXPLAIN (FORMAT JSON|YAML|XML)` /
+  `EXPLAIN (ANALYZE, FORMAT ...)` — every option goes in one parenthesised list.
+- **SQLite**: `EXPLAIN QUERY PLAN`. There is no `EXPLAIN ANALYZE`; the plan is
+  described without executing the statement.
 
 ---
 

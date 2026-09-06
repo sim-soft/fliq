@@ -8,6 +8,7 @@ use Simsoft\DB\Builder\Update;
 use Simsoft\DB\Collection;
 use Simsoft\DB\CursorPaginator;
 use Simsoft\DB\EagerLoader;
+use Simsoft\DB\Exceptions\QueryException;
 use Simsoft\DB\Model;
 use Simsoft\DB\Paginator;
 
@@ -283,9 +284,15 @@ trait Fetchable
      */
     public function updateAll(array $attributes = []): bool
     {
-        $table = $this->getTable() ?? '';
-        // Strip any quoting characters (backticks for MySQL, double quotes for PG/SQLite)
-        $table = trim($table, '`"');
+        $table = $this->getTable();
+
+        // A query selecting from a sub-query has no table to write back to.
+        // The sub-query SQL used to be passed to Update as though it were one,
+        // producing an UPDATE against a table named after a whole SELECT.
+        if ($table === null) {
+            throw new QueryException('Cannot update a query that selects from a sub-query.', '');
+        }
+
         $update = new Update($table, $attributes, $this);
         $update->withConnection($this->connection);
         return (bool)$update->execute();

@@ -19,6 +19,7 @@ use Simsoft\DB\Traits\Aggregation;
 use Simsoft\DB\Traits\Binds;
 use Simsoft\DB\Traits\Execute;
 use Simsoft\DB\Traits\Groupable;
+use Simsoft\DB\Traits\Joinable;
 use Simsoft\DB\Traits\Likeable;
 use Simsoft\DB\Traits\Fetchable;
 use Simsoft\DB\Traits\PlaceHolder;
@@ -34,7 +35,7 @@ use Simsoft\DB\Traits\TemporaryAlias;
  */
 class ActiveQuery implements Executable, Updatable, Deletable
 {
-    use Qualifier, Execute, PlaceHolder, Aggregation, Fetchable, TemporaryAlias, Likeable, Groupable;
+    use Qualifier, Execute, PlaceHolder, Aggregation, Fetchable, TemporaryAlias, Likeable, Groupable, Joinable;
 
     // SectionBinds supplies getBinds() and clearBinds(), which cover every
     // section; the Binds versions cover the WHERE list alone and are reached
@@ -46,8 +47,21 @@ class ActiveQuery implements Executable, Updatable, Deletable
         Binds::clearBinds as private clearWhereSectionBinds;
     }
 
-    /** @var null|string The table name */
+    // The FROM and JOIN sources are kept unquoted and only rendered in
+    // getSQL(). Quoting them at from()/join() time froze whichever grammar was
+    // current into the stored string, so a connection named afterwards — as
+    // DB::table('user', 'pg') does, and as the fluent order invites everywhere
+    // else — produced a statement quoted for one engine and run against
+    // another. It also left getTable() returning "`user` `u`", which every
+    // caller then tried to unpick with trim($t, '`"'); that cannot remove the
+    // interior backticks, so count(), sum() and updateAll() on an aliased query
+    // asked the server for a table named "user` `u".
+
+    /** @var null|string The FROM table name, unquoted and without its alias. */
     protected ?string $table = null;
+
+    /** @var null|string The FROM sub-query SQL, when the query selects from one. */
+    protected ?string $fromSubQuery = null;
 
     /** @var bool Distinct is enabled */
     protected bool $distinct = false;
@@ -57,9 +71,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
 
     /** @var array<int, string> The WHERE statements. */
     protected array $conditions = [];
-
-    /** @var array<string, string> Jointed relationship. */
-    protected array $joins = [];
 
     /** @var array<int, string> The GROUP BY statements. */
     protected array $groupBys = [];
@@ -217,13 +228,28 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Get FROM table name
+     * Get FROM table name, unquoted and without its alias.
+     *
+     * Null when the query selects from a sub-query, which has no table name to
+     * report — a caller needing one for its own FROM clause cannot use this
+     * query's source and should say so rather than build a table reference out
+     * of a SELECT statement.
      *
      * @return string|null
      */
     public function getTable(): ?string
     {
         return $this->table;
+    }
+
+    /**
+     * Get the FROM sub-query SQL, if this query selects from one.
+     *
+     * @return string|null
+     */
+    public function getFromSubQuery(): ?string
+    {
+        return $this->fromSubQuery;
     }
 
     /**
@@ -237,7 +263,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function merge(ActiveQuery $query, string $logicalOperator = 'AND'): static
     {
-        if ($this->table !== $query->getTable()) {
+        if ($this->table !== $query->getTable() || $this->fromSubQuery !== $query->getFromSubQuery()) {
             throw new QueryException(
                 "Cannot merge queries from different tables: '$this->table' and '{$query->getTable()}'",
                 ''
@@ -328,19 +354,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Merge JOIN clauses from another query.
-     *
-     * @param array<string, string> $joins
-     * @return void
-     */
-    private function mergeJoins(array $joins): void
-    {
-        foreach ($joins as $key => $join) {
-            $this->joins[$key] = $join;
-        }
-    }
-
-    /**
      * Merge with another query object.
      *
      * Prepend 'OR' to the query.
@@ -380,7 +393,9 @@ class ActiveQuery implements Executable, Updatable, Deletable
         if (is_array($table)) {
             $subQuery = current($table);
             $alias = (string)array_key_first($table);
-            $this->table = $this->getQualifiedSubQuery((string)$subQuery, $alias);
+            $this->table = null;
+            $this->fromSubQuery = (string)$subQuery;
+            $this->alias($alias);
             if ($subQuery instanceof ActiveQuery || $subQuery instanceof Raw) {
                 $this->appendSectionBinds($this->fromBinds, $subQuery->getBinds());
             }
@@ -395,197 +410,50 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $expressions = explode(' ', trim($table));
         $table = $expressions[0];
         $alias = end($expressions);
-        $this->table = $this->getQualifiedTable($table, $table === $alias ? null : $alias);
+
+        self::validateIdentifier($table);
+        if ($table !== $alias) {
+            self::validateIdentifier($alias);
+        }
+
+        $this->fromSubQuery = null;
+        $this->table = $table;
+
+        // Columns are qualified against the alias, and an unaliased table is
+        // its own qualifier. A schema-qualified name keeps only its last part,
+        // since `schema`.`table`.`column` is not a valid reference.
+        $parts = explode('.', $table);
+        $this->alias($table === $alias ? end($parts) : $alias);
 
         return $this;
     }
 
     /**
-     * Join table.
+     * Render the FROM clause for the current grammar.
      *
-     * @param string|array<string, string|ActiveQuery|Raw> $table The table name
-     * @param array<string, string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @param string $type Join type. LEFT, RIGHT, INNER, OUTER, etc.
-     * @return static
-     */
-    public function join(string|array $table, array $on = [], string $type = 'INNER'): static
-    {
-        $alias = null;
-        $join = $type ? strtoupper($type) . ' JOIN' : 'JOIN';
-
-        if (is_array($table)) {
-            return $this->joinSubQuery($join, $table, $on);
-        }
-
-        if (!str_contains($table, '(')) {
-            $expressions = explode(' ', trim($table));
-            $table = $expressions[0];
-            $alias = end($expressions);
-        }
-
-        if ($on === []) {
-            // A CROSS JOIN pairs every row and takes no ON clause, so calling
-            // crossJoin() the documented way — with no keys — used to build one
-            // out of empty strings: `ON `post`.`` = {}`, which the server
-            // rejects outright. With no keys there is nothing to match on, so
-            // the clause is omitted entirely.
-            return $this->joinWithoutOn($join, $table, $alias);
-        }
-
-        if ($table === $alias) {
-            $quotedTable = $this->quote($table);
-            $this->joins[$table] = "$join $quotedTable " . $this->onClause($quotedTable, $on, $table, $alias);
-            return $this;
-        }
-
-        $qt = $this->quote($table);
-        $qa = $this->quote((string)$alias);
-        $this->joins[(string)$alias] = "$join $qt AS $qa " . $this->onClause($qa, $on, $table, $alias);
-
-        return $this;
-    }
-
-    /**
-     * Join a sub-query given in the array form: [alias => query].
-     *
-     * @param string $join The join keyword, e.g. 'INNER JOIN'.
-     * @param array<string, string|ActiveQuery|Raw> $table The alias mapped to the sub-query.
-     * @param array<string, string> $on The matching attributes.
-     * @return static
-     */
-    private function joinSubQuery(string $join, array $table, array $on): static
-    {
-        $alias = (string)array_key_first($table);
-        $subQuery = current($table);
-
-        // The sub-query was folded into the table string and then handed to
-        // quote(), which wrapped the whole SELECT in backticks as though it
-        // were one column name — the server refused it as an over-long
-        // identifier. It was also aliased twice, `(...) AS p` AS `p`, and its
-        // bind values were dropped, so no shape of this call could ever run.
-        // The alias is the only part that is an identifier; the sub-query is
-        // parenthesised SQL and its binds are kept for the JOIN section, which
-        // getSQL() emits after FROM and before WHERE.
-        $quotedAlias = $this->quote($alias);
-        $sql = "$join (" . $subQuery . ") AS $quotedAlias";
-
-        if ($subQuery instanceof ActiveQuery || $subQuery instanceof Raw) {
-            $this->appendSectionBinds($this->joinBinds, $subQuery->getBinds());
-        }
-
-        $this->joins[$alias] = $on === []
-            ? $sql
-            : "$sql " . $this->onClause($quotedAlias, $on, $alias, $alias);
-
-        return $this;
-    }
-
-    /**
-     * Build the ON clause matching a joined table against this one.
-     *
-     * @param string $qualifier The quoted table or alias the foreign key belongs to.
-     * @param array<string, string> $on The matching attributes.
-     * @param string $table The join table, for stripping a redundant key prefix.
-     * @param string|null $alias The join alias, for stripping a redundant key prefix.
      * @return string
      */
-    private function onClause(string $qualifier, array $on, string $table, ?string $alias): string
+    private function getFromSQL(): string
     {
-        $foreignKey = (string)array_key_first($on);
-        $localKey = (string)current($on);
+        $alias = $this->getAlias();
 
-        // Strip a table / alias prefix from a foreign key if it matches the join table or alias
-        // e.g., ['s.supp_idx' => 'supp_idx'] with alias 's' → foreignKey becomes 'supp_idx'
-        if (str_contains($foreignKey, '.')) {
-            $fkParts = explode('.', $foreignKey, 2);
-            if ($fkParts[0] === $table || $fkParts[0] === $alias) {
-                $foreignKey = $fkParts[1];
-            }
+        if ($this->fromSubQuery !== null) {
+            return 'FROM (' . $this->fromSubQuery . ') ' . $this->quote((string)$alias);
         }
 
-        return "ON $qualifier." . $this->quote($foreignKey) . ' = ' . $this->queryAttribute($localKey);
-    }
-
-    /**
-     * Register a join that has no ON clause, such as a CROSS JOIN.
-     *
-     * @param string $join The join keyword, e.g. 'CROSS JOIN'.
-     * @param string $table The table name.
-     * @param string|null $alias The table alias, if it differs from the table.
-     * @return static
-     */
-    private function joinWithoutOn(string $join, string $table, ?string $alias): static
-    {
-        $quotedTable = $this->quote($table);
-
-        if ($alias === null || $alias === $table) {
-            $this->joins[$table] = "$join $quotedTable";
-            return $this;
+        if ($this->table === null) {
+            return '';
         }
 
-        $this->joins[$alias] = "$join $quotedTable AS " . $this->quote($alias);
+        $source = $this->quoteTableName($this->table);
 
-        return $this;
-    }
+        // The table's own name is its default alias and is not repeated.
+        $parts = explode('.', $this->table);
+        if ($alias === null || $alias === end($parts)) {
+            return "FROM $source";
+        }
 
-    /**
-     * Cross-join table.
-     *
-     * @param string|array<string, string|ActiveQuery|Raw> $table the join table
-     * @param array<string, string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function crossJoin(string|array $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'CROSS');
-    }
-
-    /**
-     * Left join table.
-     *
-     * @param string|array<string, string|ActiveQuery|Raw> $table the join table
-     * @param array<string, string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function leftJoin(string|array $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'LEFT');
-    }
-
-    /**
-     * Right join table.
-     *
-     * @param string|array<string, string|ActiveQuery|Raw> $table the join table
-     * @param array<string, string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function rightJoin(string|array $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'RIGHT');
-    }
-
-    /**
-     * Left outer join table.
-     *
-     * @param string $table the join table
-     * @param array<string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function leftOuterJoin(string $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'LEFT OUTER');
-    }
-
-    /**
-     * Right outer join table.
-     *
-     * @param string $table the join table
-     * @param array<string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function rightOuterJoin(string $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'RIGHT OUTER');
+        return "FROM $source " . $this->quote($alias);
     }
 
     /**
@@ -1928,19 +1796,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function getSQL(): string
     {
-        $from = "FROM $this->table";
-        $alias = $this->getAlias();
-        if ($alias !== null && $this->table !== null) {
-            $quotedAlias = $this->quote($alias);
-            if (!str_contains($this->table, $quotedAlias)) {
-                // Replace any existing alias or append a new one
-                // a Table format is either `table` or `table` `old_alias`
-                $parts = explode(' ', $this->table, 2);
-                $from = "FROM " . $parts[0] . " " . $quotedAlias;
-            }
-        }
-
-        $segments = [$this->buildSelectClause(), $from];
+        $segments = array_filter([$this->buildSelectClause(), $this->getFromSQL()]);
 
         $clauses = [
             $this->getJoinSQL(),
@@ -2013,16 +1869,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
         return $this->getBinds() === null
             ? $sql
             : $this->getReadableSQL($sql, $this->getBinds(), $this->getPlaceHolder());
-    }
-
-    /**
-     * Generate JOINS statement
-     *
-     * @return string|null
-     */
-    public function getJoinSQL(): ?string
-    {
-        return empty($this->joins) ? null : implode(' ', $this->joins);
     }
 
     /**

@@ -2013,15 +2013,31 @@ $plan = User::find()
 
 ```php
 /* PostgreSQL: EXPLAIN (FORMAT JSON) SELECT ... */
+/* MySQL:      EXPLAIN FORMAT=JSON SELECT ...   */
 $plan = Post::find()
     ->whereFulltext(['title', 'body'], 'optimization')
     ->explain(format: 'json');
 ```
 
-| Parameter  | Values                                | Default  |
-|------------|---------------------------------------|----------|
-| `$analyze` | `true` / `false`                      | `false`  |
-| `$format`  | `'text'`, `'json'`, `'yaml'`, `'xml'` | `'text'` |
+| Parameter  | Values                    | Default  |
+|------------|---------------------------|----------|
+| `$analyze` | `true` / `false`          | `false`  |
+| `$format`  | depends on the driver     | `'text'` |
+
+Each engine names its own formats, so `$format` is validated against the driver
+the query runs on. A format the engine cannot produce raises an
+`InvalidArgumentException` rather than silently returning a plan in a different
+shape:
+
+| Driver         | `$format`                              | With `analyze: true` |
+|----------------|----------------------------------------|----------------------|
+| **MySQL**      | `'text'`, `'traditional'`, `'json'`, `'tree'` | `'text'`, `'tree'` |
+| **PostgreSQL** | `'text'`, `'json'`, `'yaml'`, `'xml'`  | same                 |
+| **SQLite**     | `'text'`                               | not supported        |
+
+MySQL's `EXPLAIN ANALYZE` always reports the tree format and rejects
+`FORMAT=JSON` beside it. SQLite has no `EXPLAIN ANALYZE` — `EXPLAIN QUERY PLAN`
+describes the plan without executing the statement.
 
 Works on any builder:
 
@@ -2032,5 +2048,5 @@ $plan = (new ActiveQuery())
     ->from('order')
     ->join('user', ['id' => '!order.user_id'])
     ->where('!order.total', '>', 100)
-    ->explain(analyze: true, format: 'json');
+    ->explain(analyze: true);
 ```

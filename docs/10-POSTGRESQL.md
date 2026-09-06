@@ -621,10 +621,19 @@ $plan = Post::find()
 /* Returns structured plan as JSON array */
 ```
 
-| Parameter  | Values                                | Default  |
+| Parameter  | Values (PostgreSQL)                   | Default  |
 |------------|---------------------------------------|----------|
 | `$analyze` | `true` / `false`                      | `false`  |
 | `$format`  | `'text'`, `'json'`, `'yaml'`, `'xml'` | `'text'` |
+
+Every option goes in one parenthesised list, so `analyze: true` with a format
+emits `EXPLAIN (ANALYZE, FORMAT JSON)`. PostgreSQL rejects the alternative
+spelling `EXPLAIN ANALYZE (FORMAT JSON)` as a syntax error.
+
+The list above is PostgreSQL's. Other drivers name different formats — MySQL has
+`'tree'` and `'traditional'` but no `'yaml'` or `'xml'`, and SQLite has `'text'`
+only — and `$format` is validated against whichever driver the query runs on.
+See [Advanced Features](05-ADVANCED-FEATURES.md#query-execution-plans-explain).
 
 ### Available on All Queries
 

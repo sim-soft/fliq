@@ -83,6 +83,31 @@ All notable changes to `simsoft/fliq` are documented here.
 
 **Query Builder**
 
+- **`FROM` and `JOIN` were quoted for whichever connection was current when they
+  were named, not the one the query ran on** — both were rendered eagerly by
+  `from()` and `join()`, freezing that grammar into the stored string. A
+  connection chosen afterwards produced a statement quoted for one engine and
+  run against another, so `DB::table('user', 'pg')` — which calls `from()` before
+  `withConnection()` internally — sent MySQL backticks to PostgreSQL and failed
+  outright. Both sources are now held unquoted and rendered at `getSQL()` time,
+  which is also how `where()`, `select()` and `orderBy()` already worked.
+- **`getTable()` returned a rendered clause rather than a table name** — on an
+  aliased query it gave ``​`user` `u`​``, and every caller tried to recover the
+  name with `trim($t, '`"')`, which cannot remove the interior quotes. `count()`,
+  `sum()`, `min()`, `max()` and `updateAll()` on an aliased query therefore asked
+  the server for a table named ``user` `u`` and failed. It now returns the raw
+  name, and callers quote it themselves for their own grammar.
+- **Aggregates over a sub-query source emitted an empty `FROM`** — a query built
+  with `from(['t' => $sub])` has no table name, so `count()` and the other
+  aggregates produced ``FROM ``​``. They now re-emit the sub-query, placing its
+  bind values ahead of the outer condition's to match the order the placeholders
+  appear in.
+- **`updateAll()` on a sub-query source built an `UPDATE` against a `SELECT`** —
+  the sub-query SQL was passed to `Update` as though it were a table name. It now
+  raises a `QueryException`, since there is no table to write back to.
+- **An alias equal to the table name was emitted twice** — `from('user u')
+  ->alias('user')` produced ``FROM `user` `user```, because the check compared the
+  new alias against the already-rendered clause and never matched.
 - **A negative `limit()` silently returned every row** — `hasLimit()` tested
   `$limit > 0`, so a negative limit reported that no limit was set and
   `Collection` fell back to paginating the full result set. `limit(-5)` returned
@@ -129,8 +154,41 @@ All notable changes to `simsoft/fliq` are documented here.
   checked. The window is configurable per connection with `ping_idle_seconds`;
   `0` restores a ping before every query.
 
+**Query Plans (EXPLAIN)**
+
+- **`explain(format: ...)` was assembled from one template for every driver** —
+  each engine names its own formats and spells the request differently, and the
+  argument was neither translated nor checked. MySQL ignored `$format` entirely
+  and returned a twelve-column traditional plan for `format: 'json'`, which
+  callers then parsed as JSON. PostgreSQL emitted
+  `EXPLAIN ANALYZE (FORMAT JSON)`, which the server rejects with a syntax error
+  at `FORMAT` — the correct spelling puts every option in one list,
+  `EXPLAIN (ANALYZE, FORMAT JSON)`. Both were the documented calls. The prefix is
+  now built by the grammar for the connection the query runs on, and a format the
+  engine cannot produce raises `InvalidArgumentException` instead of silently
+  returning a plan in a different shape. MySQL's `EXPLAIN ANALYZE` is restricted
+  further, since it rejects `FORMAT=JSON` beside it, and SQLite rejects `analyze`
+  outright because `EXPLAIN QUERY PLAN` does not execute the statement.
+
 **Robustness**
 
+- **`execute()` and `query()` discarded what the driver wrote back** — both
+  cloned their target before running it, so a `RETURNING` result — which
+  PostgreSQL and SQLite write onto the builder — landed on the copy and was
+  thrown away with it. `execute($insert)` reported no returned row and no last
+  insert id for a statement that had run and returned one.
+- **Running a cached query through another builder killed the process** — the TTL
+  was read as `$target->cacheTtl` behind a `property_exists()` check.
+  `property_exists()` reports a protected property as present, but reading one
+  from outside the declaring class is a fatal `Error` rather than a catchable
+  exception. The public accessor is used instead.
+- **A cache backend failure was reported as a query failure** — the cache read
+  and write sat inside the `try` wrapping the query, so a full Redis or an
+  unreachable memcached surfaced as a `QueryException` naming the `SELECT`. On
+  the write side the rows had already been fetched and were then discarded; on
+  the read side they were always obtainable from the database. The cache is now
+  best-effort on both sides: a failed read is a miss, and a failed write leaves
+  the result untouched.
 - **`QueryLogger` grew without bound** — every executed query was retained for
   the life of the process, so a long-running worker or queue consumer
   accumulated the SQL and bind values of every query it had ever run until it

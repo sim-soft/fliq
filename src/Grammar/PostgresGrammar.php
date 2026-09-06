@@ -11,7 +11,10 @@ use InvalidArgumentException;
  */
 class PostgresGrammar implements Grammar
 {
-    use EscapesStringLiteral;
+    use EscapesStringLiteral, ExplainFormat;
+
+    /** @var array<int, string> Plan formats PostgreSQL accepts in the option list. */
+    private const EXPLAIN_FORMATS = ['text', 'json', 'yaml', 'xml'];
 
     /**
      * {@inheritdoc}
@@ -77,6 +80,29 @@ class PostgresGrammar implements Grammar
     public function getDriverName(): string
     {
         return 'pgsql';
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * PostgreSQL takes its options in one parenthesised, comma-separated list.
+     * ANALYZE may be written bare, but once a parenthesised list follows it the
+     * statement no longer parses — `EXPLAIN ANALYZE (FORMAT JSON) SELECT …`
+     * fails with a syntax error at "FORMAT". Both options go in the one list.
+     */
+    public function explainSQL(bool $analyze, string $format): string
+    {
+        $normalised = $this->normaliseExplainFormat($format, self::EXPLAIN_FORMATS);
+
+        $options = [];
+        if ($analyze) {
+            $options[] = 'ANALYZE';
+        }
+        if ($normalised !== 'text') {
+            $options[] = 'FORMAT ' . strtoupper($normalised);
+        }
+
+        return $options === [] ? 'EXPLAIN' : 'EXPLAIN (' . implode(', ', $options) . ')';
     }
 
     /**

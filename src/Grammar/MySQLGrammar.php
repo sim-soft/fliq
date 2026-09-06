@@ -9,7 +9,13 @@ namespace Simsoft\DB\Grammar;
  */
 class MySQLGrammar implements Grammar
 {
-    use EscapesStringLiteral;
+    use EscapesStringLiteral, ExplainFormat;
+
+    /** @var array<int, string> Plan formats MySQL accepts after FORMAT=. */
+    private const EXPLAIN_FORMATS = ['text', 'traditional', 'json', 'tree'];
+
+    /** @var array<int, string> Plan formats MySQL accepts alongside ANALYZE. */
+    private const ANALYZE_FORMATS = ['text', 'tree'];
 
     /**
      * {@inheritdoc}
@@ -81,6 +87,36 @@ class MySQLGrammar implements Grammar
     public function getDriverName(): string
     {
         return 'mysql';
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * MySQL spells the format as `FORMAT=<name>` immediately after the
+     * keywords. It has no YAML or XML plan output, and EXPLAIN ANALYZE only
+     * produces the tree format — asking for any other alongside ANALYZE is
+     * refused by the server with "This version of MySQL doesn't yet support
+     * 'FORMAT=JSON with EXPLAIN ANALYZE'", so it is rejected here instead,
+     * naming the argument the caller actually passed.
+     *
+     * 'text' maps to TRADITIONAL, the column-per-field default, and is left
+     * implicit so the emitted statement matches what a user would write.
+     */
+    public function explainSQL(bool $analyze, string $format): string
+    {
+        if (!$analyze) {
+            $normalised = $this->normaliseExplainFormat($format, self::EXPLAIN_FORMATS);
+
+            return in_array($normalised, ['text', 'traditional'], true)
+                ? 'EXPLAIN'
+                : 'EXPLAIN FORMAT=' . strtoupper($normalised);
+        }
+
+        // ANALYZE reports the tree format whether or not it is named, so the
+        // bare form is emitted for both spellings of the same request.
+        $this->normaliseExplainFormat($format, self::ANALYZE_FORMATS);
+
+        return 'EXPLAIN ANALYZE';
     }
 
     /**

@@ -53,6 +53,20 @@ interface Grammar
     public function getDriverName(): string;
 
     /**
+     * Build the keyword prefix that turns a statement into a plan request.
+     *
+     * Each engine spells this differently and accepts a different set of
+     * formats, so the caller names what it wants and the grammar decides
+     * whether that is expressible here.
+     *
+     * @param bool $analyze Whether to actually run the statement and report real timings.
+     * @param string $format The requested output format.
+     * @return string The prefix to place before the statement.
+     * @throws \InvalidArgumentException If the engine cannot produce this combination.
+     */
+    public function explainSQL(bool $analyze, string $format): string;
+
+    /**
      * Build a JSON path extraction expression.
      *
      * @param string $column The JSON column name (quoted).
