@@ -18,6 +18,32 @@ interface Grammar
     public function quoteIdentifier(string $identifier): string;
 
     /**
+     * Render a value the way it would have to be written as a SQL literal.
+     *
+     * For display only — `dump()`, `dd()` and `getFullSQL()`. Values reach the
+     * server as bound parameters; nothing built here is executed. Engines spell
+     * their literals differently (MySQL treats backslash as an escape inside
+     * one, PostgreSQL and SQLite do not), so this belongs to the grammar.
+     *
+     * @param mixed $value The value to render.
+     * @return string The value as a SQL literal.
+     */
+    public function literal(mixed $value): string;
+
+    /**
+     * Interpolate bind values into a statement for display.
+     *
+     * For display only — see {@see literal()}. A statement with more
+     * placeholders than binds keeps the remaining placeholders as written.
+     *
+     * @param string $sql The statement, with placeholders.
+     * @param array<int, mixed> $values The bind values, in statement order.
+     * @param string $placeHolder The placeholder to replace. Default: '?'.
+     * @return string
+     */
+    public function readableSQL(string $sql, array $values, string $placeHolder = '?'): string;
+
+    /**
      * Build LIMIT/OFFSET clause.
      *
      * @param int $limit The limit value.

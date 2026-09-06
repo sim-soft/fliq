@@ -387,12 +387,27 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *
      * @param string|array<string, string|ActiveQuery|Raw>|Model $table the table name
      * @return static
+     * @throws InvalidArgumentException If the sub-query has no usable alias.
      */
     public function from(string|array|Model $table): static
     {
         if (is_array($table)) {
+            // The key names the derived table, which MySQL and PostgreSQL both
+            // require. Written as a list — from(['SELECT ...']) — the key is the
+            // integer 0, which quoted to the identifier `0`; given no entry at
+            // all it was the empty string, which quoted to ``. Both cases built
+            // a statement naming a table the caller never wrote, so say which
+            // argument is at fault rather than reporting an odd identifier or
+            // leaving the server to complain.
+            $alias = array_key_first($table);
+            if (!is_string($alias) || $alias === '') {
+                throw new InvalidArgumentException(
+                    'A sub-query used as a table must be given an alias as the array key: '
+                    . "from(['t' => \$subQuery])."
+                );
+            }
+
             $subQuery = current($table);
-            $alias = (string)array_key_first($table);
             $this->table = null;
             $this->fromSubQuery = (string)$subQuery;
             $this->alias($alias);
@@ -438,7 +453,20 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $alias = $this->getAlias();
 
         if ($this->fromSubQuery !== null) {
-            return 'FROM (' . $this->fromSubQuery . ') ' . $this->quote((string)$alias);
+            // from() will not accept a sub-query without an alias, but alias()
+            // is public and alias(null) after the fact left this quoting the
+            // empty string. `` is an identifier MySQL happens to accept and
+            // PostgreSQL rejects outright, so the same builder produced a
+            // statement that ran on one engine and would not parse on the
+            // other — and on MySQL the derived table then had no name to
+            // reference it by.
+            if ($alias === null) {
+                throw new InvalidArgumentException(
+                    'A sub-query used as a table must keep an alias to be referred to by.'
+                );
+            }
+
+            return 'FROM (' . $this->fromSubQuery . ') ' . $this->quote($alias);
         }
 
         if ($this->table === null) {

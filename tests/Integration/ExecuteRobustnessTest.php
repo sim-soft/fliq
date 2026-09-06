@@ -8,6 +8,7 @@ use Simsoft\DB\Builder\ActiveQuery;
 use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Cache\CacheInterface;
 use Simsoft\DB\Cache\QueryCache;
+use Simsoft\DB\DB;
 
 /**
  * An in-memory cache that counts the writes it is asked to make.
@@ -198,14 +199,24 @@ class ExecuteRobustnessTest extends DatabaseTestCase
 
         $runner = (new Raw('SELECT 1'))->withConnection('mysql');
 
-        $this->assertTrue($runner->execute($insert));
+        try {
+            $this->assertTrue($runner->execute($insert));
 
-        $found = (new ActiveQuery())
-            ->from('user')
-            ->where('username', $username)
-            ->withConnection('mysql')
-            ->first();
+            $found = (new ActiveQuery())
+                ->from('user')
+                ->where('username', $username)
+                ->withConnection('mysql')
+                ->first();
 
-        $this->assertNotEmpty($found);
+            $this->assertNotEmpty($found);
+        } finally {
+            // DatabaseTestCase reloads the fixture once per class, not per test,
+            // and several integration classes read the sample rows without
+            // reloading anything. A row left here therefore turns up as an
+            // extra user in whichever class happens to run next — an
+            // intermittent failure somewhere else entirely, which is far harder
+            // to place than a failure here would be.
+            DB::raw('DELETE FROM `user` WHERE username = ?', [$username], 'mysql');
+        }
     }
 }

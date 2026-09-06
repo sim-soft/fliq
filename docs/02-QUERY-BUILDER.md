@@ -1964,7 +1964,23 @@ DB::table('orders')
     ->where('total', '>', 100)
     ->join('user', ['id' => 'orders.user_id'])
     ->dd();
+
+// Output:
+// SELECT `orders`.* FROM `orders` INNER JOIN `user` ON `user`.`id` = `orders`.`user_id`
+// WHERE `orders`.`total` > '100'
 ```
+
+The `100` comes back quoted because that is how the value is sent. Except on
+SQLite, `PDOStatement::execute()` binds every value as a string, so the server
+compares `'100'` and not the number — and against a text column those differ.
+The rendering shows what ran rather than what you typed, which is the point of
+looking at it. SQLite's driver binds by type and its dumps show numbers bare,
+for the same reason.
+
+Values are escaped for the connection's own engine, so the output can be pasted
+into a client as-is. It is still a debugging aid, not a way to build SQL: use
+the builder, or [`Raw`](#raw-expressions) with binds, for anything you intend to
+execute.
 
 ### `dump()` — Dump Without Stopping
 

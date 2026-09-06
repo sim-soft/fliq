@@ -64,21 +64,18 @@ trait Execute
      */
     public function dump(): static
     {
+        // The grammar renders the literals, so this reads the same for every
+        // builder. Raw has no Qualifier and so fell to a two-line "Binds: [...]"
+        // form instead — which is not what the documented `dd()` output shows,
+        // and cannot be pasted into a client, though that is the whole point of
+        // dumping it.
         $sql = $this->getSQL();
         $binds = $this->getBinds();
 
-        if ($binds !== null && method_exists($this, 'getReadableSQL')) {
-            echo $this->getReadableSQL($sql, $binds) . PHP_EOL;
-            return $this;
-        }
+        echo ($binds === null
+            ? $sql
+            : Connection::grammar($this->connection)->readableSQL($sql, $binds)) . PHP_EOL;
 
-        if ($binds !== null) {
-            echo $sql . PHP_EOL;
-            echo "Binds: " . json_encode($binds) . PHP_EOL;
-            return $this;
-        }
-
-        echo $sql . PHP_EOL;
         return $this;
     }
 

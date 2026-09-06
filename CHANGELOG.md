@@ -49,6 +49,14 @@ All notable changes to `simsoft/fliq` are documented here.
   `having()`, `whereColumn()`, `whereAny()` / `whereAll()` / `whereNone()`,
   `whereJson()`, `whereJsonLength()`, `whereDate()` / `whereMonth()` /
   `whereYear()` / `whereTime()`, and `CaseExpression::when()` / `whenColumn()`.
+- **Table aliases were interpolated unvalidated** — an alias names the table and
+  prefixes every unqualified column, so it can be neither quoted away nor bound,
+  yet three paths assigned it straight to the property instead of going through
+  `validateIdentifier()`: `from(['t' => $sub])`, `withAlias()` and `alias()`
+  itself. Quoting alone does not make one safe, since the grammars double an
+  embedded quote character rather than reject it — ``alias('t`;--')`` reached the
+  statement as a usable identifier with its punctuation intact. Validation now
+  happens in `alias()`, which every one of those paths goes through.
 
 **Data Integrity**
 
@@ -105,6 +113,16 @@ All notable changes to `simsoft/fliq` are documented here.
 - **`updateAll()` on a sub-query source built an `UPDATE` against a `SELECT`** —
   the sub-query SQL was passed to `Update` as though it were a table name. It now
   raises a `QueryException`, since there is no table to write back to.
+- **A sub-query source could end up with no name at all** — a derived table must
+  be named, and both MySQL and PostgreSQL refuse one that is not, but the alias
+  was quoted without being checked. `from(['SELECT ...'])` written as a list took
+  the integer key `0` and produced a table named `` `0` ``; `from([])`, and
+  `alias(null)` after a good alias, produced the empty identifier `` `` `` —
+  which MySQL and SQLite happen to accept and PostgreSQL rejects outright, so the
+  same builder emitted SQL that ran on two engines and would not parse on the
+  third. All three now raise `InvalidArgumentException` naming the argument at
+  fault. `Qualifier::getQualifiedSubQuery()` had the same gap and also did not
+  validate an alias it was given.
 - **An alias equal to the table name was emitted twice** — `from('user u')
   ->alias('user')` produced ``FROM `user` `user```, because the check compared the
   new alias against the already-rendered clause and never matched.
@@ -169,6 +187,45 @@ All notable changes to `simsoft/fliq` are documented here.
   returning a plan in a different shape. MySQL's `EXPLAIN ANALYZE` is restricted
   further, since it rejects `FORMAT=JSON` beside it, and SQLite rejects `analyze`
   outright because `EXPLAIN QUERY PLAN` does not execute the statement.
+
+**Debug Output (`dump()`, `dd()`, `getFullSQL()`)**
+
+These render a statement with its bind values interpolated so it can be read and
+pasted into a client. They were assembled in `Qualifier` with one rule for every
+driver and no knowledge of how a value would actually be bound, which got the
+rendering wrong in both directions — showing differences that were not there and
+hiding ones that were. Rendering now belongs to the grammar, beside the escaping
+that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
+
+- **A value containing a backslash produced unparseable SQL on MySQL** — only the
+  apostrophe was escaped, but MySQL treats a backslash inside a literal as an
+  escape character. `'back\'` never closed the literal, so the rest of the
+  statement was swallowed into it and the server reported a syntax error for a
+  query that had executed without complaint. MySQL now doubles backslashes, which
+  it already did for JSON paths; PostgreSQL and SQLite correctly leave them
+  alone, since doubling there would show a value with two where the bound one had
+  one.
+- **Numeric-looking strings were rendered bare and changed the comparison** — an
+  `is_numeric()` check emitted `007` and `1e3` unquoted. Except on SQLite,
+  `PDOStatement::execute()` binds every value as a string, so the executed
+  statement compared `'007'` while the rendering compared the number — and
+  against a text column those differ: `'007' = 7` holds where `'007' = '7'` does
+  not. The rendering found rows the query did not. Values are now rendered as the
+  driver sends them, and SQLite — whose driver binds by type — overrides this.
+- **A genuine `null` bind was rendered as the string `'?'`** — a bound null was
+  substituted with the placeholder itself, so `deleted_at = '?'` was rejected by
+  MySQL with `Incorrect TIMESTAMP value: '?'`. It renders as `NULL`.
+- **A statement short of binds had its placeholder rendered as a value** — the
+  remaining `?` came back quoted as `b = '?'`, which reads as a value the caller
+  passed and never did. Unfilled placeholders are now left as written.
+- **A `DateTime` or array bind crashed the debug helper** — casting one raised
+  `Object of class DateTime could not be converted to string`, an `Error` thrown
+  out of `dump()` from inside the debugging that was meant to find the original
+  problem. Values with no string form now render as `'[DateTime]'` / `'[array]'`.
+- **`Raw::dump()` printed a different shape from every other builder** — `Raw`
+  has no `Qualifier`, so it fell through to a two-line `SQL` + `Binds: [...]`
+  form: not the output the documentation shows, and not something that can be
+  pasted into a client. Every builder now dumps the same interpolated statement.
 
 **Robustness**
 
@@ -634,6 +691,27 @@ All notable changes to `simsoft/fliq` are documented here.
   rather than against an expected SQL string — which would have called the
   broken forms correct. 26 of the 30 fail against the unfixed code. This takes
   `Traits\Groupable` from 61.54% to 88.10% and `Conditions\Condition` to 100%.
+- 50 tests covering the debug renderings and alias validation — 34 unit and 16
+  run against MySQL, PostgreSQL and SQLite. The rendering tests never assert an
+  expected SQL string: they execute both the bound statement and the rendered
+  one and compare the rows the server returns, because a rendering that quietly
+  disagrees with the query is precisely the defect, and a string comparison
+  would have called every broken form correct. Seeded with values that render
+  one way and compare another — `007`, `1e3`, `a\b`, a trailing backslash, an
+  apostrophe — since the difference only shows against rows that hold them.
+  Covers escaping per engine (MySQL doubling backslashes, PostgreSQL and SQLite
+  not), `NULL`, bools and ints rendered as the driver sends them, SQLite's
+  by-type binding, unfilled placeholders, a `?` inside a value, values with no
+  string form, and `Raw` dumping the same shape as every other builder. The
+  alias tests cover the three unvalidated paths, a rejected alias leaving the
+  query untouched, and the sub-query forms that produced a table named `0` or
+  nothing at all. 61 of the 81 fail against the unfixed code.
+- Two integration tests inserted a user without removing it. `DatabaseTestCase`
+  reloads the fixture once per class, but several classes read the sample rows
+  without reloading anything, so a leaked row surfaced as an off-by-one count
+  failure in an unrelated class depending on execution order — visible here as
+  one failure in roughly fifteen full runs, and not reproducible from the seed
+  that produced it. Both now delete their row in a `finally`.
 
 ### Documentation
 
@@ -658,6 +736,12 @@ All notable changes to `simsoft/fliq` are documented here.
   that asked for it), case sensitivity, the 63-byte limit and why it is checked
   in the driver, and that `NOTIFY` is asynchronous — so a single non-blocking
   poll is not proof that nothing was sent.
+- The `dd()` section of the query builder guide now shows the output for its
+  "works on any builder" example, and explains why numbers come back quoted —
+  PDO binds every value as a string except on SQLite, so the rendering shows
+  what ran rather than what was typed. Also states that the output is escaped
+  for the connection's own engine, and that it remains a debugging aid rather
+  than a way to build SQL.
 - The Between Date sections of the query builder guide now document the negated
   forms, which were previously absent: the SQL they build, the parentheses and
   why they are needed, that at least one of the two dates is required, and that

@@ -31,11 +31,28 @@ trait Qualifier
     /**
      * Set alias.
      *
-     * @param string|null $alias The alias name.
+     * The alias is interpolated into every statement this query builds, both as
+     * the name of the table and as the prefix on each unqualified column, and it
+     * cannot be parameter-bound. Quoting alone does not make it safe: the
+     * grammars double an embedded quote character rather than reject it, so
+     * `t`;--` arrived as a usable identifier and the surrounding punctuation
+     * survived into the SQL. Every other identifier reaches the statement
+     * through validateIdentifier(); the aliases set by from(['t' => ...]),
+     * withAlias() and Aggregate did not, because they were assigned here
+     * directly instead. Validating at the setter covers all of them at once.
+     *
+     * @param string|null $alias The alias name, or null to clear it.
      * @return static
+     * @throws InvalidArgumentException If the alias contains invalid characters.
      */
     public function alias(?string $alias): static
     {
+        // Null clears the alias, which is how withAlias() restores a query that
+        // never had one; only a given name is checked.
+        if ($alias !== null) {
+            self::validateIdentifier($alias);
+        }
+
         $this->alias = $alias;
         return $this;
     }
@@ -135,11 +152,27 @@ trait Qualifier
      * @param string $sql The sub query SQL.
      * @param string|null $alias The alias name.
      * @return string
+     * @throws InvalidArgumentException If the alias contains invalid characters.
      */
     public function getQualifiedSubQuery(string $sql, ?string $alias = null): string
     {
+        // A derived table must be named: MySQL and PostgreSQL both refuse one
+        // that is not. Quoting a null alias produced an empty identifier, which
+        // MySQL and SQLite happen to accept and PostgreSQL rejects outright
+        // ("zero-length delimited identifier") — the same call built a
+        // statement that ran on two engines and would not parse on the third.
+        // Saying so here names the argument at fault instead of leaving the
+        // server to complain about a table nobody wrote.
+        if ($alias === null) {
+            throw new InvalidArgumentException(
+                'A sub-query used as a table must be given an alias to be referred to by.'
+            );
+        }
+
+        self::validateIdentifier($alias);
         $this->alias($alias);
-        return "($sql) " . $this->quote($this->alias ?? '');
+
+        return "($sql) " . $this->quote($alias);
     }
 
     /**
@@ -297,6 +330,11 @@ trait Qualifier
     /**
      * Replace placeholders with actual values for readable SQL (debug only).
      *
+     * The rendering belongs to the grammar: only the engine knows how its
+     * string literals are escaped. Rendered here with one rule for every
+     * driver, the result was a statement that did not mean what the executed
+     * one meant — see {@see \Simsoft\DB\Grammar\Grammar::literal()}.
+     *
      * @param string $sql The SQL statement.
      * @param array<int, mixed> $values Values to replace.
      * @param string $placeHolder String to be replaced. Default: '?'.
@@ -304,25 +342,6 @@ trait Qualifier
      */
     public function getReadableSQL(string $sql, array $values, string $placeHolder = '?'): string
     {
-        if ($placeHolder === '') {
-            return $sql;
-        }
-
-        $segments = explode($placeHolder, $sql);
-        $result = $segments[0];
-        $count = count($segments);
-
-        for ($idx = 1; $idx < $count; $idx++) {
-            $value = array_shift($values) ?? $placeHolder;
-            if ($value === null) {
-                $value = 'NULL';
-            } elseif (!is_numeric($value)) {
-                $escaped = str_replace("'", "''", (string)$value);
-                $value = "'$escaped'";
-            }
-            $result .= $value . $segments[$idx];
-        }
-
-        return $result;
+        return $this->getGrammar()->readableSQL($sql, $values, $placeHolder);
     }
 }

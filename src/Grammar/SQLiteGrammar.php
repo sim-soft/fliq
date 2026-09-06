@@ -11,10 +11,35 @@ use InvalidArgumentException;
  */
 class SQLiteGrammar implements Grammar
 {
-    use EscapesStringLiteral, ExplainFormat;
+    use EscapesStringLiteral {
+        literal as private defaultLiteral;
+    }
+    use ExplainFormat;
 
     /** @var array<int, string> SQLite has one plan shape and no FORMAT option. */
     private const EXPLAIN_FORMATS = ['text'];
+
+    /**
+     * {@inheritdoc}
+     *
+     * Unlike the other drivers, SQLiteDriver binds by type rather than letting
+     * PDO send every value as a string, so an int reaches the server as an int
+     * and a bool as 0 or 1. The rendering follows the driver: quoting them
+     * would show a comparison SQLite does not make, since '1' = 1 is false
+     * there and 1 = 1 is true.
+     */
+    public function literal(mixed $value): string
+    {
+        if (is_int($value)) {
+            return (string)$value;
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        return $this->defaultLiteral($value);
+    }
 
     /**
      * {@inheritdoc}

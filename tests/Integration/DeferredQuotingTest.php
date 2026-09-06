@@ -193,16 +193,25 @@ class DeferredQuotingTest extends DatabaseTestCase
             'status_code' => 1,
         ]))->withConnection('mysql')->execute();
 
-        $updated = (new ActiveQuery())
-            ->from('user u')
-            ->where('username', $username)
-            ->withConnection('mysql')
-            ->updateAll(['score' => 42]);
+        try {
+            $updated = (new ActiveQuery())
+                ->from('user u')
+                ->where('username', $username)
+                ->withConnection('mysql')
+                ->updateAll(['score' => 42]);
 
-        $this->assertTrue($updated);
+            $this->assertTrue($updated);
 
-        $score = DB::query('SELECT score FROM `user` WHERE username = ?', [$username])[0]['score'];
-        $this->assertEquals(42, $score);
+            $score = DB::query('SELECT score FROM `user` WHERE username = ?', [$username])[0]['score'];
+            $this->assertEquals(42, $score);
+        } finally {
+            // The fixture is reloaded once per class, not per test, and several
+            // integration classes read the sample rows without reloading
+            // anything at all. A row left here turns up as an extra user in
+            // whichever class runs next, failing an assertion that has nothing
+            // to do with this one.
+            DB::raw('DELETE FROM `user` WHERE username = ?', [$username], 'mysql');
+        }
     }
 
     #[Test]
