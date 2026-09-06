@@ -323,11 +323,65 @@ class User extends Model
         'is_active' => 'bool',
         'salary' => 'float',
         'name' => 'string',
+        'preferences' => 'json',
     ];
 }
 ```
 
-Supported cast types: `int`, `integer`, `bool`, `boolean`, `float`, `double`, `real`, `string`, `binary`, `array`.
+Supported cast types: `int`, `integer`, `bool`, `boolean`, `float`, `double`,
+`real`, `string`, `binary`, `array`, `json`.
+
+Any other name throws `InvalidArgumentException` — a cast the model asked for
+and did not get is worse than one it never declared.
+
+### Casts and NULL
+
+A cast describes the column's type, not whether it has a value. `NULL` passes
+through untouched in both directions, so a nullable column reads back as `null`
+and can be cleared by assigning `null`:
+
+```php
+$user = User::findByPk(1);
+
+var_dump($user->age);   /* NULL when the column is NULL — not 0 */
+
+$user->age = null;      /* UPDATE `user` SET `age` = NULL */
+$user->save();
+```
+
+### `array` and `json`
+
+Both store the value JSON-encoded, so it binds as a normal parameter, and decode
+it on the way out. They differ only in what they promise on read: `array` always
+answers with an array, `json` stays faithful to the document, which may
+legitimately be a scalar.
+
+```php
+$user->preferences = ['theme' => 'dark', 'tags' => ['a', 'b']];
+$user->save();          /* the column holds {"theme":"dark","tags":["a","b"]} */
+
+$user = User::findByPk(1);
+$user->preferences['theme'];   /* 'dark' */
+```
+
+A value that cannot be encoded — a resource, `NAN`, invalid UTF-8 — throws
+rather than being written as an empty string. A column holding malformed JSON is
+handed back as the raw string, so the corruption stays visible instead of
+reading as an empty array.
+
+### Reading is a read
+
+Reading a cast attribute presents the value through its cast without altering
+what the model holds. `toArray()` and `toJson()` present the same cast values;
+`getAttributes()` returns the raw stored values:
+
+```php
+$setting = Setting::findByPk(1);
+
+$setting->metadata;                  /* ['priority' => 1, ...] — decoded */
+$setting->toArray()['metadata'];     /* ['priority' => 1, ...] — decoded */
+$setting->getAttributes()['metadata']; /* '{"priority":1,...}' — as stored */
+```
 
 ## Lifecycle Hooks
 

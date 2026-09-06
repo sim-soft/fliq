@@ -10,6 +10,7 @@ use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Builder\Update;
 use Simsoft\DB\Exceptions\MassAssignmentException;
 use Simsoft\DB\Exceptions\QueryException;
+use Simsoft\DB\Traits\CastsAttributes;
 use Simsoft\DB\Traits\Error;
 use Simsoft\DB\Traits\HasEvents;
 use stdClass;
@@ -22,6 +23,7 @@ use Throwable;
  */
 abstract class Model implements ArrayAccess
 {
+    use CastsAttributes;
     use Error;
     use HasEvents;
 
@@ -67,7 +69,14 @@ abstract class Model implements ArrayAccess
     protected array $dirtyAttributes = [];
 
     /**
-     * @var array<string, string> Attributes casts. Supported casts' int, bool, float, string, array
+     * @var array<string, string> Attribute casts.
+     *
+     * Supported: int, integer, bool, boolean, float, double, real, string,
+     * binary, array, json. Any other name throws — a cast the model asked for
+     * and did not get is worse than one it never declared.
+     *
+     * A cast never applies to NULL: a nullable column reads back as null and
+     * can be cleared by assigning null.
      *
      * protected array $casts = [
      *  'attribute1' => 'int',
@@ -189,7 +198,14 @@ abstract class Model implements ArrayAccess
      */
     public function __set(string $name, mixed $value): void
     {
-        if ($this->isNew() && $value !== null) {
+        $cast = $this->castValue($name, $value);
+
+        // A NULL the caller assigned is a value, not the absence of one. Skipping
+        // it here meant `$model->parent_id = null` on a new record never entered
+        // dirtyAttributes, so insert() left the column out of the statement
+        // entirely and the table DEFAULT won instead — the row came back holding
+        // 5 where the caller had explicitly written null.
+        if ($this->isNew()) {
             $this->dirtyAttributes[$name] = 1;
         }
 
@@ -198,25 +214,12 @@ abstract class Model implements ArrayAccess
                 $this->tableFields[$name] = gettype($value);
             }
 
-            if (!empty($this->tableFields[$name]) && ($this->attributes[$name] ?? null) != $value) {
+            if ($this->isChanged($name, $cast)) {
                 $this->dirtyAttributes[$name] = 1;
             }
         }
 
-        if (array_key_exists($name, $this->casts)) {
-            match ($this->casts[$name]) {
-                'int', 'integer' => $this->attributes[$name] = (int)$value,
-                'bool', 'boolean' => $this->attributes[$name] = $this->castToBoolean($value),
-                'float', 'double', 'real' => $this->attributes[$name] = (float)$value,
-                'string', 'binary' => $this->attributes[$name] = (string)$value,
-                'array' => $this->attributes[$name] = (array)$value,
-                'json' => $this->attributes[$name] = is_string($value) ? $value : json_encode($value),
-                default => $this->attributes[$name] = $value,
-            };
-            return;
-        }
-
-        $this->attributes[$name] = $value;
+        $this->attributes[$name] = $cast;
     }
 
     /**
@@ -227,22 +230,17 @@ abstract class Model implements ArrayAccess
      */
     public function __get(string $name): mixed
     {
-        if (array_key_exists($name, $this->casts)) {
-            $this->attributes[$name] = match ($this->casts[$name]) {
-                'int', 'integer' => (int)($this->attributes[$name] ?? 0),
-                'bool', 'boolean' => $this->castToBoolean($this->attributes[$name] ?? false),
-                'float', 'double', 'real' => (float)($this->attributes[$name] ?? 0.00),
-                'string', 'binary' => (string)($this->attributes[$name] ?? ''),
-                'array' => (array)($this->attributes[$name] ?? []),
-                'json' => is_string($this->attributes[$name] ?? null)
-                    ? json_decode($this->attributes[$name], true) ?? []
-                    : ($this->attributes[$name] ?? []),
-                default => $this->attributes[$name] ?? null,
-            };
+        // Reading assigned into $attributes, so merely LOOKING at an attribute
+        // rewrote the model: a column holding NULL in the database read back as 0
+        // and then reported 0 from toArray(), toJson() and getAttributes(), with
+        // no way left to tell a real zero from a missing value. Reading is now a
+        // read — the stored value is left exactly as the database gave it.
+        if (array_key_exists($name, $this->casts) && array_key_exists($name, $this->attributes)) {
+            return $this->readCast($name, $this->attributes[$name]);
         }
 
         if (array_key_exists($name, $this->attributes)) {
-            return $this->attributes[$name] ?? null;
+            return $this->attributes[$name];
         }
 
         // Return pre-loaded relation (from eager loading or previous lazy load)
@@ -256,28 +254,6 @@ abstract class Model implements ArrayAccess
         }
 
         return null;
-    }
-
-    /**
-     * Cast a value to boolean, handling PostgreSQL string representations.
-     *
-     * PostgreSQL returns boolean columns as 't'/'f' or 'true'/'false' strings
-     * depending on PDO configuration. This method normalizes all formats.
-     *
-     * @param mixed $value The value to cast.
-     * @return bool
-     */
-    private function castToBoolean(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        if (is_string($value)) {
-            return !in_array(strtolower($value), ['f', 'false', '0', '', 'no', 'off'], true);
-        }
-
-        return (bool)$value;
     }
 
     /**
@@ -733,7 +709,10 @@ abstract class Model implements ArrayAccess
     /**
      * Convert model to array.
      *
-     * Includes attributes and loaded relations.
+     * Includes attributes and loaded relations. Cast attributes are presented
+     * through their cast, so a 'json' column serializes as the decoded document
+     * rather than the encoded string, and matches what reading the property
+     * gives. {@see getAttributes()} returns the raw stored values instead.
      *
      * @param array<int, string>|null $fields Specific fields to include. Null for all.
      * @return array<string, mixed>
@@ -743,6 +722,12 @@ abstract class Model implements ArrayAccess
         $attributes = $fields === null
             ? $this->attributes
             : array_intersect_key($this->attributes, array_flip($fields));
+
+        foreach (array_keys($this->casts) as $name) {
+            if (array_key_exists($name, $attributes)) {
+                $attributes[$name] = $this->readCast($name, $attributes[$name]);
+            }
+        }
 
         foreach ($this->relations as $name => $related) {
             if ($fields !== null && !in_array($name, $fields)) {

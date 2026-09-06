@@ -76,6 +76,46 @@ All notable changes to `simsoft/fliq` are documented here.
 
 **Data Integrity**
 
+- **A cast attribute could not hold or be cleared to NULL** — casts were applied
+  to `null`, so `$model->score = null` stored `0`, `->name = null` stored `''`
+  and a nullable JSON column stored the string `"null"`. A nullable column could
+  never be cleared through a cast attribute, and reading one back reported `0`
+  or `false` where the row held `NULL`, leaving no way to tell a real zero from
+  a missing value. A cast now describes the column's type, not whether it has a
+  value: `NULL` passes through untouched in both directions.
+- **Assigning `null` on a new record was dropped from the INSERT** — a `null`
+  was not recorded as dirty, so the column was omitted from the statement and
+  the table `DEFAULT` was applied instead. A row written with an explicit
+  `null` came back holding the default, with nothing reporting the
+  substitution.
+- **Writes between loosely equal values never reached the database** — dirty
+  tracking compared with `==`, which treats `null`, `0`, `false` and `''` as the
+  same value. Clearing a populated column to `null`, setting a `NULL` column to
+  `0`, or emptying a string was recorded as "no change" and silently dropped
+  from the `UPDATE`. The comparison now distinguishes `null` from every other
+  value while still tolerating the type differences drivers introduce, so
+  re-saving an untouched row remains a no-op.
+- **Reading an attribute rewrote the model** — the cast result was assigned back
+  into the attributes, so merely looking at a property changed what
+  `toArray()`, `toJson()` and `getAttributes()` subsequently reported, and
+  created attributes for columns that had never been set. Reading is now a read;
+  `toArray()` presents cast values deliberately, and `getAttributes()` returns
+  the raw stored values.
+- **An `array` cast never round-tripped** — it kept a live PHP array in the
+  attributes, which the mysqli driver bound as the literal string `Array`, and
+  decoded a stored JSON list into a one-element array holding the JSON text.
+  `array` and `json` now both store encoded and decode on read; `array` still
+  always answers with an array.
+- **An unencodable value was written as an empty string** — `json_encode()`
+  returns `false` for a resource, `NAN` or invalid UTF-8, and that `false` was
+  stored as-is and reached the column as `''`, destroying its contents without
+  a word. It now throws `InvalidArgumentException`. Malformed JSON already in a
+  column is handed back as the raw string rather than as an empty array, so the
+  corruption stays visible.
+- **An unrecognised cast type was ignored** — a typo such as `'interger'` fell
+  through to a `default` arm that stored the value untouched, so the cast the
+  model declared was never applied and nothing said so. Unknown names now throw
+  `InvalidArgumentException` listing the supported types.
 - **Relation filters silently returned every row for an unrecognised name** —
   `has()`, `doesntHave()`, `whereHas()` and `whereDoesntHave()` returned the
   query untouched when the name was not a relation, so `has('psots')` dropped
@@ -669,6 +709,31 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   recovered when the statement fails rather than by the pre-query check, so
   recovery is stronger than before rather than weaker. Set `ping_idle_seconds`
   to `0` in a connection's config to restore a ping before every query.
+- A cast is no longer applied to `NULL`. A cast attribute over a nullable column
+  now reads back as `null` instead of `0`, `false`, `''` or `[]`, and assigning
+  `null` clears the column instead of writing the cast's zero value. **This is
+  breaking** for code that relied on a cast attribute never being `null` — a
+  `null` check is now required where the column is nullable, which is what the
+  database was reporting all along.
+- An unrecognised cast type now throws `InvalidArgumentException` instead of
+  being ignored. **This is breaking** for a model carrying a typo in `$casts`,
+  which will now fail on first assignment rather than silently skipping the
+  cast. Supported names: `int`, `integer`, `bool`, `boolean`, `float`, `double`,
+  `real`, `string`, `binary`, `array`, `json`.
+- A value that cannot be encoded as JSON — a resource, `NAN`, invalid UTF-8 —
+  now throws `InvalidArgumentException` on assignment to an `array` or `json`
+  attribute instead of being written to the column as an empty string.
+- The `array` cast's storage format changed from a live PHP array in
+  `$attributes` to JSON text, matching `json`. Reading the property is
+  unaffected and still gives an array; `getAttributes()` and anything else
+  reading raw storage now sees the encoded string. **This is breaking** for code
+  reading an `array` attribute out of `getAttributes()` rather than off the
+  model.
+- `toArray()` and `toJson()` now present `array` and `json` attributes as the
+  decoded document rather than the raw stored string, so they agree with what
+  reading the property gives. `getAttributes()` returns raw storage as before.
+  **This is breaking** for code that expected `toArray()` to carry the encoded
+  string.
 
 ### Added
 
@@ -866,6 +931,18 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   failure in an unrelated class depending on execution order — visible here as
   one failure in roughly fifteen full runs, and not reproducible from the seed
   that produced it. Both now delete their row in a `finally`.
+- 62 attribute casting tests — 49 unit, 13 integration — covering `NULL` in both
+  directions, that reading a property leaves the model unchanged and clean, the
+  rejection of unknown cast types and unencodable values, every boolean
+  representation the three engines produce, `array` / `json` round-trips,
+  malformed stored JSON, the `toArray()` / `getAttributes()` split, and the
+  dirty-tracking boundary between a real change and a driver type difference.
+  The integration tests read every column back with a raw query rather than
+  trusting the model that wrote it, since a cast defect is invisible from inside
+  the model — the model is the thing that is wrong. One writes into a column
+  declared `DEFAULT 99` specifically to prove an explicit `null` reaches the
+  database rather than being dropped from the `INSERT`. 35 of the 62 fail
+  against the unfixed code.
 
 ### Documentation
 
@@ -935,6 +1012,19 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
 - New "Joining a Sub-query" subsection. The `[alias => query]` array form is in
   the `join()` signature and its docblock but appeared in no example, and never
   worked; it is now documented with the bind ordering it implies.
+- The Attribute Casting section of the Active Record guide previously listed the
+  cast names and stopped. It now covers the three things that decide what
+  actually reaches a column: that a cast never applies to `NULL` in either
+  direction, how `array` and `json` differ (`array` always answers with an
+  array, `json` stays faithful to the document) and that both store encoded, and
+  that reading a property does not alter the model — with the `toArray()` /
+  `getAttributes()` split spelled out. Every example was run before being
+  written down.
+- The PostgreSQL guide's boolean list now says the recognised false values are
+  matched case-insensitively, and that a nullable boolean column reads back as
+  `null` rather than `false`.
+- The model generator's type casting table now points at the same `NULL` rule,
+  since a generated model's casts behave exactly like a hand-written one's.
 
 ---
 

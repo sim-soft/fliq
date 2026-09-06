@@ -397,6 +397,10 @@ The generator looks at your column types and sets up automatic casting:
 | `JSON`, `JSONB`                         | `'json'`    | `$model->metadata` returns `array`         |
 | `VARCHAR`, `TEXT`, `DATE`, `TIMESTAMP`  | _(no cast)_ | `$model->name` returns `string`            |
 
+A cast never applies to `NULL`, so a nullable column still returns `null` rather
+than `0`, `false` or `[]`. See
+[Attribute Casting](03-ACTIVE-RECORD.md#attribute-casting).
+
 ### What Gets Excluded from Fillable
 
 These columns are never added to `$fillable` (they're managed automatically):

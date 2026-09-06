@@ -463,8 +463,13 @@ var_dump($feature->is_enabled); /* bool(true) */
 ```
 
 Values recognized as `false`: `'f'`, `'false'`, `'0'`, `''`, `'no'`, `'off'`
+(case-insensitively).
 
 All other non-empty string values are treated as `true`.
+
+A nullable boolean column reads back as `null`, not `false` — the cast applies
+to the value, not to its absence. Test with `=== null` if the distinction
+matters.
 
 ---
 
