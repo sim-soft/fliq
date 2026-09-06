@@ -208,9 +208,19 @@ trait Execute
         // Check if the builder has a RETURNING result (PostgreSQL/SQLite)
         if ($this instanceof Insert && $this->hasReturning()) {
             $rows = $this->getReturningResult();
-            if (!empty($rows) && is_array($rows[0])) {
+            if (!empty($rows) && is_array($rows[0]) && $rows[0] !== []) {
                 $firstValue = reset($rows[0]);
                 return $firstValue !== null ? (string)$firstValue : null;
+            }
+
+            // RETURNING ran and named no row, which is what an insert skipped by
+            // ON CONFLICT DO NOTHING looks like. Falling through to the driver
+            // then answered with the sequence's current value — an id belonging
+            // to no row this statement wrote, and on PostgreSQL not even to a
+            // row that exists, since the conflicting attempt still consumed a
+            // sequence number. Nothing was inserted, so there is no id.
+            if ($rows !== null) {
+                return null;
             }
         }
 

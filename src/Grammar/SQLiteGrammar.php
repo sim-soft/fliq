@@ -230,6 +230,17 @@ class SQLiteGrammar implements Grammar
 
     /**
      * {@inheritdoc}
+     *
+     * SQLite has INSERT OR IGNORE, which insertIgnoreSQL() emits, but no
+     * modifier on UPDATE or DELETE.
+     */
+    public function supportsStatementModifiers(): bool
+    {
+        return false;
+    }
+
+    /**
+     * {@inheritdoc}
      */
     public function jsonKeyExists(string $column, string $path): string
     {

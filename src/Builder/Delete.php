@@ -101,9 +101,11 @@ class Delete extends Builder
         $sql = implode(' ', array_filter([
             'DELETE',
             $this->lowPriorityModifier(),
-            $this->quick ? 'QUICK' : null,
+            // QUICK is MySQL's, like LOW_PRIORITY and IGNORE: a MyISAM index
+            // hint elsewhere read as the name of the table being deleted from.
+            $this->quick && $this->supportsModifiers() ? 'QUICK' : null,
             $this->ignoreModifier(),
-            'FROM ' . $this->quote($this->table),
+            'FROM ' . $this->quoteTable($this->table),
             $this->getCondition(),
         ]));
 

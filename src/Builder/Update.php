@@ -96,7 +96,7 @@ class Update extends Builder
      */
     public function setCounter(string $attribute, int|float $value): static
     {
-        $quoted = $this->quote($attribute);
+        $quoted = $this->quoteColumn($attribute);
 
         if ($value == 0) {
             $this->set[] = "$quoted = {$this->getPlaceHolder()}";
@@ -118,7 +118,7 @@ class Update extends Builder
     {
         $data = [];
         foreach ($this->attributes as $attribute => $value) {
-            $data[] = $this->quote($attribute) . " = {$this->getPlaceHolder()}";
+            $data[] = $this->quoteColumn($attribute) . " = {$this->getPlaceHolder()}";
             $this->appendBinds($value);
         }
 
@@ -128,7 +128,7 @@ class Update extends Builder
             'UPDATE',
             $this->lowPriorityModifier(),
             $this->ignoreModifier(),
-            $this->quote($this->table),
+            $this->quoteTable($this->table),
             'SET ' . ($sets ? implode(', ', $sets) : '1 = 1'),
             $this->getCondition(),
         ]));

@@ -208,7 +208,7 @@ class PostgresGrammar implements Grammar
 
         return "INSERT INTO $table ("
             . implode(', ', $quotedColumns)
-            . ") VALUES ($placeholders) ON CONFLICT DO NOTHING";
+            . ") VALUES $placeholders ON CONFLICT DO NOTHING";
     }
 
     /**
@@ -238,6 +238,14 @@ class PostgresGrammar implements Grammar
     public function supportsReturning(): bool
     {
         return true;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportsStatementModifiers(): bool
+    {
+        return false;
     }
 
     /**

@@ -39,6 +39,13 @@ class Upsert extends Builder
         $columns = array_keys($this->attributes);
         $placeholders = implode(', ', array_fill(0, count($columns), '?'));
 
+        // Every name here is interpolated into the statement and none can be
+        // bound, so each is checked before it is quoted: the grammars double an
+        // embedded quote rather than reject it, which left a column name
+        // carrying its own punctuation usable as SQL.
+        $this->assertIdentifiers($columns);
+        $this->assertIdentifiers($this->conflictColumns);
+
         $this->appendBinds(array_values($this->attributes));
 
         if ($grammar->getDriverName() === 'mysql') {
@@ -47,9 +54,23 @@ class Upsert extends Builder
 
         // PostgreSQL / SQLite: use Grammar's upsertSQL with conflict columns
         $updateCols = $this->resolveUpdateColumns($columns);
-        $quotedTable = $grammar->quoteIdentifier($this->table);
+        $this->assertIdentifiers($updateCols);
+        $quotedTable = $this->quoteTable($this->table);
 
         return $grammar->upsertSQL($quotedTable, $columns, $updateCols, $placeholders, $this->conflictColumns);
+    }
+
+    /**
+     * Validate a set of column names.
+     *
+     * @param array<int, string> $columns The column names to check.
+     * @return void
+     */
+    private function assertIdentifiers(array $columns): void
+    {
+        foreach ($columns as $column) {
+            $this->quoteColumn($column);
+        }
     }
 
     /**
@@ -84,7 +105,7 @@ class Upsert extends Builder
     {
         $quotedColumns = array_map(fn($col) => $grammar->quoteIdentifier($col), $columns);
 
-        $sql = "INSERT INTO " . $grammar->quoteIdentifier($this->table) . " ("
+        $sql = "INSERT INTO " . $this->quoteTable($this->table) . " ("
             . implode(', ', $quotedColumns)
             . ") VALUES ($placeholders)";
 
@@ -112,11 +133,11 @@ class Upsert extends Builder
         $updates = [];
         foreach ($this->updateColumns as $col => $value) {
             if (is_int($col)) {
-                $quoted = $grammar->quoteIdentifier($value);
+                $quoted = $this->quoteColumn((string)$value);
                 $updates[] = "$quoted = VALUES($quoted)";
                 continue;
             }
-            $quoted = $grammar->quoteIdentifier($col);
+            $quoted = $this->quoteColumn($col);
             $updates[] = "$quoted = ?";
             $this->appendBinds($value);
         }

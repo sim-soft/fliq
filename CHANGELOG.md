@@ -57,8 +57,77 @@ All notable changes to `simsoft/fliq` are documented here.
   embedded quote character rather than reject it — ``alias('t`;--')`` reached the
   statement as a usable identifier with its punctuation intact. Validation now
   happens in `alias()`, which every one of those paths goes through.
+- **The write builders validated no identifier at all** — `Insert`, `Update`,
+  `Delete` and `Upsert` quoted their table and column names by calling `quote()`
+  directly, bypassing the `validateIdentifier()` check every read path gets. As
+  above, quoting is not a defence on its own: `` new Insert('user` (id) VALUES
+  (1) -- ', [...]) `` produced a statement with a second, attacker-chosen value
+  list, and `ActiveQuery` had been refusing the same input all along. Both names
+  now go through `quoteTable()` / `quoteColumn()`, which validate first — on
+  every write builder, on the bulk column list, and on `setCounter()`, which
+  writes its column on both sides of the assignment.
 
 **Data Integrity**
+
+- **MySQL statement modifiers were emitted to every engine, and on PostgreSQL
+  wrote to the wrong table** — `LOW_PRIORITY`, `IGNORE` and `QUICK` are MySQL
+  keywords, but `Update`, `Delete` and `Model::updateAll()` emitted them
+  regardless of the connection. On SQLite that is a syntax error and on
+  PostgreSQL `UPDATE LOW_PRIORITY t` fails with `relation "low_priority" does not
+  exist` — noisy, but safe. `UPDATE IGNORE "user" SET ...` is worse: PostgreSQL
+  parses it as an update of a table named `ignore` aliased `"user"`, so where a
+  table of that name exists the statement **succeeds, reports rows affected, and
+  writes to the wrong table** while the intended row is untouched. Verified
+  end to end against PostgreSQL 14.5. The modifiers are now gated on
+  `Grammar::supportsStatementModifiers()` and omitted where they mean nothing;
+  dropping a MySQL-only scheduling hint changes nothing about what the statement
+  does.
+- **Bulk `insertOrIgnore()` had never worked on PostgreSQL** —
+  `PostgresGrammar::insertIgnoreFullSQL()` wrapped the placeholders it was given
+  in parentheses, which suits a single row and not a bulk set that already
+  brings its own. The result was `VALUES ((?,?),(?,?))`, read as one row holding
+  two row-constructors and rejected with `SQLSTATE[42601] INSERT has more target
+  columns than expressions`. The grammar no longer wraps, and the single-row
+  caller supplies its own parentheses.
+- **`RETURNING` was silently dropped from an ignored INSERT** — on PostgreSQL and
+  SQLite the grammar supplies the whole statement for `insertOrIgnore()`, and
+  that override ends at `DO NOTHING`; the clause was only appended on the path
+  the override replaced. A caller asking for one got no rows back and no
+  indication why. It is now appended after the conflict action, where it returns
+  a row when the insert happened and none when it was skipped.
+- **`getLastInsertId()` reported an id for a row that does not exist** — when
+  `ON CONFLICT DO NOTHING` skipped an insert, `RETURNING` named no row and the
+  code fell through to the driver, which answered with the sequence's current
+  value. That id belongs to no row the statement wrote, and on PostgreSQL to no
+  row at all, since the conflicting attempt still consumes a sequence number.
+  Nothing was inserted, so it now returns `null`.
+- **SQLite never captured `RETURNING` results** — SQLite has supported the clause
+  since 3.35 and `SQLiteGrammar` advertises it, so the clause was emitted and the
+  rows it produced were left in the statement and discarded.
+  `getReturningResult()` answered `null` — the same answer it gives for a
+  statement that returned nothing. `SQLiteDriver::execute()` now fetches them,
+  for INSERT, UPDATE and DELETE alike.
+- **A bulk INSERT silently dropped values** — every row is written against the
+  first row's columns, so a key only a later row carried was never sent. The
+  insert reported success, the column kept its default, and nothing anywhere
+  said so; against a nullable column there was no symptom at all. Such a row is
+  now refused with a message naming it and the columns at fault. A row *short* of
+  a column is still accepted and supplies `NULL` for it — a value the caller did
+  not give, rather than one they gave and the database never saw.
+- **Schema-qualified table names were broken on every write builder** — the
+  whole string was quoted as a single identifier, so `public.user` became
+  `"public"."user"` on a read and `"public.user"` on a write, naming a table no
+  server has. `INSERT INTO public.user` failed with `relation "public.user" does
+  not exist`. Writes now use the same schema-aware quoting reads do.
+- **`Model::insertBatch()` assembled its own statement from a `Raw`** — the same
+  multi-row INSERT `Insert` already builds, minus the identifier validation and
+  minus the ragged-row check above. It now delegates to `Insert`.
+- **Degenerate `Insert` arguments crashed inside the builder** — `new Insert('t',
+  [])` emitted `INSERT INTO \`t\` () VALUES ()`, which no engine accepts, after
+  raising `Undefined array key 0` and a `TypeError` out of `array_keys()`; a list
+  of bare scalars and a bulk set whose first row is empty failed the same way.
+  All three now raise `InvalidArgumentException` naming what the caller passed
+  rather than a line inside the builder.
 
 - **Nested transactions silently lost atomicity** — no driver tracked whether a
   transaction was already open, so a nested `transaction()` call issued a second

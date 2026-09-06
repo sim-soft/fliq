@@ -160,7 +160,8 @@ interface Grammar
      *
      * @param string $table The quoted table name.
      * @param array<int, string> $columns The column names.
-     * @param string $placeholders The VALUES placeholders.
+     * @param string $placeholders The VALUES placeholders, parenthesised per row
+     *                             — "(?,?)" for one row, "(?,?),(?,?)" for two.
      * @return string|null Full SQL if grammar overrides default behavior, null to use default.
      */
     public function insertIgnoreFullSQL(string $table, array $columns, string $placeholders): ?string;
@@ -187,6 +188,19 @@ interface Grammar
      * @return bool
      */
     public function supportsReturning(): bool;
+
+    /**
+     * Whether the engine accepts MySQL's statement modifiers.
+     *
+     * LOW_PRIORITY, IGNORE and QUICK are MySQL keywords with no equivalent
+     * elsewhere. Emitted anyway they are not merely rejected: PostgreSQL parses
+     * "UPDATE IGNORE \"user\"" as an update of a table named ignore aliased
+     * "user", so the statement runs and writes to the wrong table where one by
+     * that name exists.
+     *
+     * @return bool
+     */
+    public function supportsStatementModifiers(): bool;
 
     /**
      * Build a JSON key exists expression.

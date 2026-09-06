@@ -205,6 +205,57 @@ trait Qualifier
     }
 
     /**
+     * Validate and quote a table name for a statement that writes to it.
+     *
+     * getQualifiedTable() also sets the alias, which is what a SELECT wants and
+     * an INSERT, UPDATE or DELETE does not — those name their columns bare. The
+     * write builders therefore called quote() directly and so skipped both the
+     * validation every read path gets and the schema handling, which left
+     * "public.user" quoted as one identifier naming a table no server has.
+     *
+     * @param string $table The table name, optionally schema-qualified.
+     * @return string The quoted table reference.
+     * @throws InvalidArgumentException If the table name contains invalid characters.
+     */
+    protected function quoteTable(string $table): string
+    {
+        self::validateIdentifier($table);
+
+        return $this->quoteTableName($table);
+    }
+
+    /**
+     * Validate and quote a column name.
+     *
+     * Quoting alone does not make a column name safe: the grammars double an
+     * embedded quote character rather than reject it, so a name carrying its
+     * own punctuation survived into the statement as usable SQL.
+     *
+     * @param string $column The column name.
+     * @return string The quoted column name.
+     * @throws InvalidArgumentException If the column name contains invalid characters.
+     */
+    protected function quoteColumn(string $column): string
+    {
+        self::validateIdentifier($column);
+
+        return $this->quote($column);
+    }
+
+    /**
+     * Whether the connection's engine accepts MySQL's statement modifiers.
+     *
+     * Shared by the Ignore and LowPriority traits, which are used together by
+     * Update and Delete and so cannot each declare it.
+     *
+     * @return bool
+     */
+    protected function supportsModifiers(): bool
+    {
+        return $this->getGrammar()->supportsStatementModifiers();
+    }
+
+    /**
      * Quote a table name, handling schema-qualified names (schema.table).
      *
      * @param string $table The table name, optionally schema-qualified.

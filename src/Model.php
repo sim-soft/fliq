@@ -1058,34 +1058,16 @@ abstract class Model implements ArrayAccess
         $model = new static();
         $table = $model->getTable();
         $connectionName = $model->getConnectionName();
-        $grammar = Connection::grammar($connectionName);
         $inserted = 0;
 
-        $columns = array_keys($records[0]);
         $chunkSize = max(1, $chunkSize);
 
+        // Built here from a Raw, this assembled the same multi-row statement
+        // Insert already builds — minus the identifier validation, and minus the
+        // check that no record names a column the first one does not, whose
+        // value would otherwise be dropped without a word.
         foreach (array_chunk($records, $chunkSize) as $chunk) {
-            $placeholders = '(' . implode(',', array_fill(0, count($columns), '?')) . ')';
-            $allPlaceholders = implode(',', array_fill(0, count($chunk), $placeholders));
-
-            $quotedColumns = array_map(
-                static fn(string $col): string => $grammar->quoteIdentifier($col),
-                $columns
-            );
-
-            $sql = 'INSERT INTO ' . $grammar->quoteIdentifier($table)
-                . ' (' . implode(',', $quotedColumns) . ') VALUES ' . $allPlaceholders;
-
-            $binds = [];
-            foreach ($chunk as $record) {
-                foreach ($columns as $col) {
-                    $binds[] = $record[$col] ?? null;
-                }
-            }
-
-            $raw = new Raw($sql, $binds);
-            $raw->withConnection($connectionName);
-            $raw->execute();
+            (new Insert($table, $chunk))->withConnection($connectionName)->execute();
             $inserted += count($chunk);
         }
 

@@ -213,9 +213,9 @@ Insert many records efficiently using chunked multi-row INSERT statements.
 
 ```php
 $records = [
-    ['name' => 'Alice', 'email' => 'alice@example.com', 'status' => 1],
-    ['name' => 'Bob', 'email' => 'bob@example.com', 'status' => 1],
-    ['name' => 'Charlie', 'email' => 'charlie@example.com', 'status' => 0],
+    ['username' => 'Alice', 'email' => 'alice@example.com', 'status_code' => 1],
+    ['username' => 'Bob', 'email' => 'bob@example.com', 'status_code' => 1],
+    ['username' => 'Charlie', 'email' => 'charlie@example.com', 'status_code' => 0],
 ];
 
 /* Insert all records (default chunk size: 500) */
@@ -226,7 +226,33 @@ $inserted = User::insertBatch($records);
 $inserted = User::insertBatch($largeDataset, 1000);
 ```
 
-All records must have the same column structure (based on the first record's keys).
+### Column structure
+
+Every record is written against the first record's keys, which is what makes one
+statement per chunk possible. The two ways a later record can differ are not
+treated alike:
+
+```php
+/* Fine — an omitted column is inserted as NULL, so published_at must be nullable */
+Post::insertBatch([
+    ['user_id' => 1, 'title' => 'First', 'slug' => 'first', 'body' => '...',
+     'published_at' => '2026-01-01 09:00:00'],
+    ['user_id' => 1, 'title' => 'Draft', 'slug' => 'draft', 'body' => '...'],
+]);
+
+/* InvalidArgumentException — 'view_count' has no place in the statement */
+Post::insertBatch([
+    ['user_id' => 1, 'title' => 'First', 'slug' => 'first', 'body' => '...'],
+    ['user_id' => 1, 'title' => 'Second', 'slug' => 'second', 'body' => '...',
+     'view_count' => 10],
+]);
+```
+
+A missing value is a value the caller did not give, and it is sent as NULL — so
+a column the first record names must be nullable, or accept the NULL some other
+way. An extra one is a value the caller did give and the database would never
+have seen, so it is refused rather than dropped. Key order does not matter —
+each value binds to the column it names.
 
 ---
 

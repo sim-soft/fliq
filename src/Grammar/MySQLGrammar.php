@@ -218,6 +218,14 @@ class MySQLGrammar implements Grammar
     /**
      * {@inheritdoc}
      */
+    public function supportsStatementModifiers(): bool
+    {
+        return true;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function jsonKeyExists(string $column, string $path): string
     {
         $jsonPath = $this->stringLiteral('$.' . $path);

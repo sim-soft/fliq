@@ -5,6 +5,9 @@ namespace Simsoft\DB\Drivers;
 use PDO;
 use PDOException;
 use PDOStatement;
+use Simsoft\DB\Builder\Delete;
+use Simsoft\DB\Builder\Insert;
+use Simsoft\DB\Builder\Update;
 use Simsoft\DB\Exceptions\ConnectionException;
 use Simsoft\DB\Interfaces\Executable;
 
@@ -109,6 +112,20 @@ class SQLiteDriver extends Driver
         $sql = $query->getSQL();
         $binds = $query->getBinds();
 
+        // SQLite has supported RETURNING since 3.35, and the grammar says so, so
+        // the clause was emitted and the rows it produced were left in the
+        // statement and thrown away. getReturningResult() answered null for a
+        // statement that had returned rows, which is the same answer it gives
+        // for one that returned none.
+        if ($this->capturesReturning($query)) {
+            $stmt = $this->prepareStatement($sql);
+            $this->bindTypedValues($stmt, $binds ?? []);
+            $result = $stmt->execute();
+            $query->setReturningResult($stmt->fetchAll());
+
+            return $result;
+        }
+
         if ($binds === null) {
             return $conn->exec($sql) !== false;
         }
@@ -116,6 +133,19 @@ class SQLiteDriver extends Driver
         $stmt = $this->prepareStatement($sql);
         $this->bindTypedValues($stmt, $binds);
         return $stmt->execute();
+    }
+
+    /**
+     * Whether this statement carries a RETURNING clause whose rows to keep.
+     *
+     * @param Executable $query The query about to run.
+     * @return bool
+     * @phpstan-assert-if-true Insert|Update|Delete $query
+     */
+    private function capturesReturning(Executable $query): bool
+    {
+        return ($query instanceof Insert || $query instanceof Update || $query instanceof Delete)
+            && $query->hasReturning();
     }
 
     /**

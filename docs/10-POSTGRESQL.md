@@ -159,7 +159,36 @@ DB::insertOrIgnore('user', [
     'email' => 'alice@example.com',
     'name' => 'Alice',
 ]);
+
+/* Several rows at once — one statement, each row skipped independently */
+/* INSERT INTO "user" ("email", "name") VALUES (?,?),(?,?) ON CONFLICT DO NOTHING */
+DB::insertOrIgnore('user', [
+    ['email' => 'alice@example.com', 'name' => 'Alice'],
+    ['email' => 'bob@example.com', 'name' => 'Bob'],
+]);
 ```
+
+### Knowing whether the row was inserted
+
+`ON CONFLICT DO NOTHING` reports success whether it wrote a row or skipped one,
+so ask for the row back:
+
+```php
+use Simsoft\DB\Builder\Insert;
+
+$insert = (new Insert('user', ['email' => 'alice@example.com', 'name' => 'Alice']))
+    ->ignore()
+    ->returning('id')
+    ->withConnection('pgsql');
+$insert->execute();
+
+$insert->getReturningResult(); /* [['id' => 42]] inserted, [] skipped */
+$insert->getLastInsertId();    /* '42' inserted, null skipped */
+```
+
+`getLastInsertId()` is null rather than a sequence value when the insert was
+skipped: the conflicting attempt still advances the sequence, so that number
+names no row.
 
 ### Upsert (DO UPDATE)
 

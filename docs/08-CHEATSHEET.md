@@ -345,7 +345,7 @@ User::transaction(function () {
 | PG websearch        | `->whereFulltext('body', '"exact" -exclude', 'websearch')` |
 | Or fulltext         | `->orWhereFulltext('body', 'optimization')`                |
 
-## RETURNING (PostgreSQL)
+## RETURNING (PostgreSQL, SQLite 3.35+)
 
 | Task              | Code                                         |
 |-------------------|----------------------------------------------|
@@ -353,6 +353,8 @@ User::transaction(function () {
 | Update returning  | `(new Update(...))->returning('id', 'name')` |
 | Delete returning  | `(new Delete(...))->returning('id')`         |
 | Get returned rows | `$builder->getReturningResult()`             |
+
+On MySQL the clause is not emitted and `getReturningResult()` is `null`.
 
 ## Advisory Locks (PostgreSQL)
 
