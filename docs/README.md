@@ -115,7 +115,8 @@ Requires PHP 8.4+ with `ext-pdo`.
 - hasOne, hasMany, viaTable (many-to-many)
 - Nested eager loading: `with('posts.comments.author')`
 - Constrained eager loading with callbacks
-- Relation filtering: `has()`, `doesntHave()`, `whereHas()`
+- Relation filtering: `has()`, `doesntHave()`, `whereHas()` — including
+  self-referencing and many-to-many relations, and under `alias()`
 - Write operations: `save()`, `saveMany()`, `attach()`, `detach()`, `sync()`
 
 ### Collections

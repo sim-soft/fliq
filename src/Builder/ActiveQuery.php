@@ -2878,6 +2878,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string $relationName The relation method name on the model.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
     public function has(string $relationName, string $logicalOperator = 'AND'): static
     {
@@ -2890,6 +2891,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string $relationName The relation method name on the model.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
     public function doesntHave(string $relationName, string $logicalOperator = 'AND'): static
     {
@@ -2905,21 +2907,17 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param callable|null $callback Optional callback to add conditions to the sub-query.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
     public function whereHas(string $relationName, ?callable $callback = null, string $logicalOperator = 'AND'): static
     {
         $subQuery = $this->buildRelationExistsQuery($relationName, $callback);
-        if ($subQuery === null) {
-            return $this;
-        }
-
-        $sql = "EXISTS ($subQuery)";
 
         if ($this->conditions && end($this->conditions) !== '(') {
             $this->conditions[] = $logicalOperator;
         }
 
-        $this->conditions[] = $sql;
+        $this->conditions[] = "EXISTS ($subQuery)";
         return $this;
     }
 
@@ -2930,21 +2928,17 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param callable|null $callback Optional callback to add conditions to the sub-query.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
     public function whereDoesntHave(string $relationName, ?callable $callback = null, string $logicalOperator = 'AND'): static
     {
         $subQuery = $this->buildRelationExistsQuery($relationName, $callback);
-        if ($subQuery === null) {
-            return $this;
-        }
-
-        $sql = "NOT EXISTS ($subQuery)";
 
         if ($this->conditions && end($this->conditions) !== '(') {
             $this->conditions[] = $logicalOperator;
         }
 
-        $this->conditions[] = $sql;
+        $this->conditions[] = "NOT EXISTS ($subQuery)";
         return $this;
     }
 
@@ -2953,47 +2947,38 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *
      * @param string $relationName The relation method name.
      * @param callable|null $callback Optional callback for additional conditions.
-     * @return string|null The sub-query SQL, or null if the relation doesn't exist.
+     * @return string The sub-query SQL.
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
-    private function buildRelationExistsQuery(string $relationName, ?callable $callback): ?string
+    private function buildRelationExistsQuery(string $relationName, ?callable $callback): string
     {
-        if (!$this->modelClass || !method_exists($this->modelClass, $relationName)) {
-            return null;
-        }
+        $relation = $this->resolveRelation($relationName);
 
         /** @var Model $model */
         $model = new $this->modelClass();
-        $relation = $model->{$relationName}();
 
-        if (!$relation instanceof Relation) {
-            return null;
-        }
+        // The parent row is referenced by the name it has in THIS query. Built
+        // from $model->getTable(), an aliased query produced
+        // `post`.`user_id` = `user`.`id` under FROM `user` `u` and died with
+        // "Unknown column 'user.id'" — every relation filter was unusable
+        // together with alias().
+        $parent = $this->getAlias() ?? $model->getTable();
 
-        $foreignKey = $relation->getForeignKey();
-        $localKey = $relation->getLocalKey();
-        $relatedClass = $relation->getRelatedClass();
-
-        // Build: SELECT 1 FROM related_table WHERE related.fk = parent.local_key
-        /** @var Model $relatedModel */
-        $relatedModel = new $relatedClass();
-        $relatedTable = $relatedModel->getTable();
-        $parentTable = $model->getTable();
-
-        $quotedTable = $this->quote($relatedTable);
-        $fk = $this->quote($foreignKey);
-        $parentRef = $this->quote($parentTable) . '.' . $this->quote($localKey);
-
+        // The sub-query must speak the same dialect as its parent. A default
+        // ActiveQuery resolves the DEFAULT connection's grammar, so a query on
+        // any other connection mixed quoting styles in a single statement —
+        // SELECT "user".* ... EXISTS (SELECT 1 FROM `post` ...) — which no
+        // engine parses.
         $subQuery = new ActiveQuery();
+        $subQuery->withConnection($this->getConnectionName());
         $subQuery->selectRaw('1');
-        $subQuery->from($relatedTable);
-        $subQuery->whereRaw("$quotedTable.$fk = $parentRef");
 
-        // Apply user callback for additional conditions
+        $this->relationExistsSource($subQuery, $relation, $parent);
+
         if ($callback !== null) {
             $callback($subQuery);
         }
 
-        // Build the SQL and collect binds
         $sql = $subQuery->getSQL();
         $binds = $subQuery->getBinds();
         if ($binds !== null) {
@@ -3001,6 +2986,90 @@ class ActiveQuery implements Executable, Updatable, Deletable
         }
 
         return $sql;
+    }
+
+    /**
+     * Resolve a relation name against the query's model.
+     *
+     * @param string $relationName The relation method name.
+     * @return Relation
+     * @throws InvalidArgumentException If the name is not a relation on the model.
+     */
+    private function resolveRelation(string $relationName): Relation
+    {
+        // Returning the query untouched on a name that is not a relation made
+        // has('psots') a filter that silently did nothing: the caller asked to
+        // narrow the result and got every row back instead. A typo must not
+        // widen a result set.
+        if (!$this->modelClass) {
+            throw new InvalidArgumentException(
+                "Cannot filter by the relation '$relationName': this query has no model to resolve it against."
+            );
+        }
+
+        $class = is_string($this->modelClass) ? $this->modelClass : $this->modelClass::class;
+
+        if (!method_exists($this->modelClass, $relationName)) {
+            throw new InvalidArgumentException("$class has no method '$relationName' to use as a relation.");
+        }
+
+        /** @var Model $model */
+        $model = new $this->modelClass();
+        $relation = $model->{$relationName}();
+
+        if (!$relation instanceof Relation) {
+            throw new InvalidArgumentException("$class::$relationName() does not return a relation.");
+        }
+
+        return $relation;
+    }
+
+    /**
+     * Point an EXISTS sub-query at the related rows, correlated to the parent.
+     *
+     * @param ActiveQuery $subQuery The sub-query to populate.
+     * @param Relation $relation The relation being tested.
+     * @param string $parent The name the parent row is known by in the outer query.
+     * @return void
+     */
+    private function relationExistsSource(ActiveQuery $subQuery, Relation $relation, string $parent): void
+    {
+        /** @var Model $relatedModel */
+        $relatedModel = new ($relation->getRelatedClass())();
+        $relatedTable = $relatedModel->getTable();
+        $foreignKey = $relation->getForeignKey();
+
+        $parentRef = $this->quote($parent) . '.' . $this->quote($relation->getLocalKey());
+
+        $viaTable = $relation->getViaTable();
+        $viaLink = $relation->getViaLink();
+
+        // Many-to-many: the parent is not in the related table at all, it is in
+        // the junction. Ignoring viaTable produced `tag`.`tag_id` = `post`.`id`
+        // — a column that does not exist — so every M:N relation filter raised
+        // "Unknown column" rather than answering. Only the junction is needed
+        // to decide existence; the related table itself adds nothing.
+        if ($viaTable !== null && $viaLink !== null) {
+            $junction = $viaTable === $parent ? "{$viaTable}_exists" : $viaTable;
+            $subQuery->from($junction === $viaTable ? $viaTable : "$viaTable $junction");
+            $subQuery->whereRaw(
+                $subQuery->quote($junction) . '.' . $subQuery->quote((string)key($viaLink)) . " = $parentRef"
+            );
+            return;
+        }
+
+        // A self-referencing relation puts the same name on both sides, so an
+        // unaliased sub-query resolved `category`.`parent_id` = `category`.`id`
+        // against its own FROM. That is a row compared to itself, and it
+        // answered with the wrong rows in silence — 0 parents instead of 3, and
+        // every row for doesntHave() instead of the 6 that have no children.
+        // Aliasing only on a collision keeps `related_table`.`col` working in
+        // callbacks everywhere else.
+        $related = $relatedTable === $parent ? "{$relatedTable}_exists" : $relatedTable;
+        $subQuery->from($related === $relatedTable ? $relatedTable : "$relatedTable $related");
+        $subQuery->whereRaw(
+            $subQuery->quote($related) . '.' . $subQuery->quote($foreignKey) . " = $parentRef"
+        );
     }
 
     /**

@@ -76,6 +76,36 @@ All notable changes to `simsoft/fliq` are documented here.
 
 **Data Integrity**
 
+- **Relation filters silently returned every row for an unrecognised name** —
+  `has()`, `doesntHave()`, `whereHas()` and `whereDoesntHave()` returned the
+  query untouched when the name was not a relation, so `has('psots')` dropped
+  the filter and answered with the whole table. A filter that cannot be applied
+  widens the result set, which is the one wrong answer a caller has no way to
+  see. All four now throw `InvalidArgumentException`, naming the model and
+  distinguishing a missing method from one that does not return a `Relation`.
+- **Relation filters were unusable together with `alias()`** — the EXISTS
+  sub-query correlated to the model's table name rather than the name the parent
+  has in the query, so `User::find()->alias('u')->has('posts')` emitted
+  ``` `post`.`user_id` = `user`.`id` ``` under ``` FROM `user` `u` ``` and raised
+  `Unknown column 'user.id' in 'where clause'`. The correlation now uses the
+  query's alias when one is set.
+- **Self-referencing relations selected the wrong rows in silence** — the inner
+  and outer queries used the same table name, so the correlation resolved
+  against the sub-query's own `FROM` and compared each row to itself.
+  `Category::find()->has('children')` returned 0 parents where the database has
+  3, and `doesntHave('children')` returned every row instead of the 6 leaves.
+  The inner table is now aliased `<table>_exists` when — and only when — it
+  would otherwise collide, so callbacks that qualify by the related table name
+  keep working everywhere else.
+- **Many-to-many relation filters raised `Unknown column`** — `viaTable()` was
+  ignored, so the junction's foreign key was looked for on the related table:
+  `Post::find()->has('tags')` emitted ``` `tag`.`tag_id` = `post`.`id` ```, a
+  column that exists nowhere. Existence is now decided on the junction table,
+  which is all that is needed and leaves the callback constraining the junction.
+- **The sub-query was built with the default connection's grammar** — a query on
+  any other connection mixed quoting styles in a single statement:
+  `SELECT "user".* ... EXISTS (SELECT 1 FROM ``post`` ...)`, which parses on
+  neither engine. The sub-query now inherits its parent's connection.
 - **`arrayContains()` never worked for a string on MySQL** — the candidate value
   was bound straight into `JSON_CONTAINS(col, ?, '$')`, which requires JSON
   text rather than a bare value, so every string raised `Invalid JSON text in

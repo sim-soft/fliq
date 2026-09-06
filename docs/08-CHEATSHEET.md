@@ -152,6 +152,12 @@ or the value is compared as text on MySQL and will not match.
 | Relation filter | `->whereHas('posts', fn($query) => $query->where(...))` |
 | Doesn't have    | `->doesntHave('posts')`                                 |
 
+Relation filters work under `alias()`, and throw `InvalidArgumentException` if
+the name is not a relation on the model. A self-referencing relation names its
+inner table `<table>_exists`; an M:N relation is tested on the junction table,
+so a callback constrains the junction rather than the related table. See
+[Relations](04-RELATION.md#aliases-self-relations-and-junction-tables).
+
 ## Collection
 
 | Task               | Code                                                             |

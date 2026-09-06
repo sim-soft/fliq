@@ -333,6 +333,53 @@ $users = User::find()
     ->get();
 ```
 
+### The relation name must exist
+
+All four methods resolve the name against the model and throw
+`InvalidArgumentException` if it is not a relation:
+
+```php
+User::find()->has('psots');    // InvalidArgumentException: no method 'psots'
+User::find()->has('getTable'); // InvalidArgumentException: does not return a relation
+```
+
+A filter that cannot be applied would otherwise return *more* rows than asked
+for — the one wrong answer a caller has no way to notice.
+
+### Aliases, self-relations and junction tables
+
+The sub-query correlates to whatever the parent is called in the query it is
+embedded in, so `alias()` works with any relation filter:
+
+```php
+/* SELECT `u`.* FROM `user` `u`
+   WHERE EXISTS (SELECT 1 FROM `post` WHERE `post`.`user_id` = `u`.`id`) */
+User::find()->alias('u')->has('posts')->get();
+```
+
+A self-referencing relation would put the same name on both sides, so the inner
+table is given a `_exists` suffix. Use that name to qualify columns in a
+callback:
+
+```php
+/* SELECT `category`.* FROM `category` WHERE EXISTS
+     (SELECT 1 FROM `category` `category_exists`
+      WHERE `category_exists`.`parent_id` = `category`.`id`) */
+Category::find()->has('children')->get();
+```
+
+For a `viaTable()` (M:N) relation, existence is decided on the junction table —
+the related table itself is not queried, so a callback constrains the junction:
+
+```php
+/* SELECT `post`.* FROM `post` WHERE EXISTS
+     (SELECT 1 FROM `post_tag` WHERE `post_tag`.`post_id` = `post`.`id`
+      AND `post_tag`.`tag_id` < ?) */
+Post::find()
+    ->whereHas('tags', fn($query) => $query->where('tag_id', '<', 3))
+    ->get();
+```
+
 ## Key Mapping Explained
 
 ### Direct hasOne / hasMany
