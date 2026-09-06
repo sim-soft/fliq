@@ -9,7 +9,7 @@ namespace Simsoft\DB\Grammar;
  */
 class MySQLGrammar implements Grammar
 {
-    use EscapesStringLiteral, ExplainFormat, FulltextMode;
+    use EscapesStringLiteral, ExplainFormat, FulltextMode, JsonKeyPath;
 
     /** @var array<int, string> Plan formats MySQL accepts after FORMAT=. */
     private const EXPLAIN_FORMATS = ['text', 'traditional', 'json', 'tree'];
@@ -228,6 +228,7 @@ class MySQLGrammar implements Grammar
      */
     public function jsonKeyExists(string $column, string $path): string
     {
+        $this->assertJsonKeyPath($path);
         $jsonPath = $this->stringLiteral('$.' . $path);
         return "JSON_CONTAINS_PATH($column, 'one', $jsonPath)";
     }

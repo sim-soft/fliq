@@ -22,6 +22,9 @@ trait Qualifier
         'REGEXP', 'NOT REGEXP', 'RLIKE',
     ];
 
+    /** @var array<int, string> Logical operators permitted between conditions */
+    private const ALLOWED_LOGICAL_OPERATORS = ['AND', 'OR'];
+
     /** @var null|string The table alias */
     protected ?string $alias = null;
 
@@ -310,6 +313,33 @@ trait Qualifier
         throw new InvalidArgumentException(
             "Invalid operator: '$operator'. Allowed operators: "
             . implode(', ', self::ALLOWED_OPERATORS) . '.'
+        );
+    }
+
+    /**
+     * Validate a logical operator joining two conditions.
+     *
+     * The logical operator is the trailing argument of some twenty condition
+     * methods and, like the comparison operator, is interpolated rather than
+     * bound. An unrecognised value was previously spliced in as a bare token,
+     * so isNull('deleted_at', 'OR 1=1 -- ') produced a WHERE clause that
+     * commented out the rest of the conditions and returned the whole table.
+     *
+     * @param string $logicalOperator The operator to validate.
+     * @return string The normalized (uppercased) operator.
+     * @throws InvalidArgumentException If the operator is not AND or OR.
+     */
+    protected function validateLogicalOperator(string $logicalOperator): string
+    {
+        $normalised = strtoupper(trim($logicalOperator));
+
+        if (in_array($normalised, self::ALLOWED_LOGICAL_OPERATORS, true)) {
+            return $normalised;
+        }
+
+        throw new InvalidArgumentException(
+            "Invalid logical operator: '$logicalOperator'. Allowed operators: "
+            . implode(', ', self::ALLOWED_LOGICAL_OPERATORS) . '.'
         );
     }
 

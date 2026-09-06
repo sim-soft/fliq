@@ -301,12 +301,15 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param array<int, string> $conditions
      * @param string $logicalOperator
      * @return void
+     * @throws InvalidArgumentException If the logical operator is not AND or OR.
      */
     private function mergeConditions(array $conditions, string $logicalOperator): void
     {
         if (empty($conditions)) {
             return;
         }
+
+        $logicalOperator = $this->validateLogicalOperator($logicalOperator);
 
         if (!empty($this->conditions)) {
             $this->conditions[] = $logicalOperator;
@@ -774,12 +777,33 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     private function addConditionSQL(string $sql, mixed $bindValue, string $logicalOperator): void
     {
+        $this->pushCondition($sql, $logicalOperator);
+        $this->appendBinds($bindValue);
+    }
+
+    /**
+     * Append a condition fragment, joining it to any preceding condition.
+     *
+     * Every condition method needs the same three steps: validate the logical
+     * operator, emit it unless this is the first condition in the current
+     * group, then push the fragment. Nine methods each inlined that sequence
+     * and none of them validated, so this exists to give them one
+     * implementation and one place where the operator is checked.
+     *
+     * @param string $sql The condition SQL fragment.
+     * @param string $logicalOperator The logical operator. Either 'AND' or 'OR'.
+     * @return void
+     * @throws InvalidArgumentException If the logical operator is not AND or OR.
+     */
+    private function pushCondition(string $sql, string $logicalOperator): void
+    {
+        $logicalOperator = $this->validateLogicalOperator($logicalOperator);
+
         if ($this->conditions && end($this->conditions) !== '(') {
             $this->conditions[] = $logicalOperator;
         }
 
         $this->conditions[] = $sql;
-        $this->appendBinds($bindValue);
     }
 
     /**
@@ -866,12 +890,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function isNull(string $attribute, string $logicalOperator = 'AND'): static
     {
         $sql = $this->queryAttribute($attribute) . ' IS NULL';
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -896,12 +915,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function notNull(string $attribute, string $logicalOperator = 'AND'): static
     {
         $sql = $this->queryAttribute($attribute) . ' IS NOT NULL';
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -1077,12 +1091,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
 
         $group = '(' . implode(" $joiner ", $parts) . ')';
         $sql = $negate ? "NOT $group" : $group;
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -1790,9 +1799,16 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string|Clause $query the SQL query statement
      * @param null|string $operator The logical operator. Either: "AND" or "OR".
      * @return static
+     * @throws InvalidArgumentException If the logical operator is not AND or OR.
      */
     protected function onCondition(string|Clause $query, ?string $operator = null): static
     {
+        // Null means "this is the first condition, do not join it to anything",
+        // which is distinct from an unrecognised operator and stays permitted.
+        if ($operator !== null) {
+            $operator = $this->validateLogicalOperator($operator);
+        }
+
         $binds = null;
 
         if ($query instanceof Clause) {
@@ -2278,12 +2294,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         $operator = $this->validateOperator($operator);
         $sql = $this->queryAttribute($first) . " $operator " . $this->queryAttribute($second);
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -2411,12 +2422,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         [$col, $path] = $this->parseJsonPath($column);
         $sql = $this->getGrammar()->jsonKeyExists($this->qualifyJsonColumn($col), $path);
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -2431,12 +2437,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         [$col, $path] = $this->parseJsonPath($column);
         $sql = 'NOT ' . $this->getGrammar()->jsonKeyExists($this->qualifyJsonColumn($col), $path);
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -2929,11 +2930,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         $subQuery = $this->buildRelationExistsQuery($relationName, $callback);
 
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = "EXISTS ($subQuery)";
+        $this->pushCondition("EXISTS ($subQuery)", $logicalOperator);
         return $this;
     }
 
@@ -2950,11 +2947,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         $subQuery = $this->buildRelationExistsQuery($relationName, $callback);
 
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = "NOT EXISTS ($subQuery)";
+        $this->pushCondition("NOT EXISTS ($subQuery)", $logicalOperator);
         return $this;
     }
 

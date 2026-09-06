@@ -73,6 +73,49 @@ All notable changes to `simsoft/fliq` are documented here.
   'phrase')` matched rows containing neither phrase. The term stays bound, and
   the quote is now replaced with a space before the phrase is assembled; the
   same applies to SQLite's FTS5 phrase mode.
+- **Logical operator injection** — the operator joining a condition to the one
+  before it is interpolated rather than bound, and was accepted unvalidated as
+  the trailing argument of some twenty condition methods. It reached the WHERE
+  clause as a bare token, so
+  `where('id', '=', 999)->isNull('deleted_at', 'OR 1=1 -- ')` produced
+  ``WHERE `id` = ? OR 1=1 --  `deleted_at` IS NULL``: the `OR` made the
+  restriction irrelevant and the comment marker removed what followed, returning
+  every row of a table a caller had narrowed to one. Nine methods each inlined
+  their own copy of the join, so they now share one `pushCondition()` helper
+  and one validation point; `AND` and `OR` are accepted in any case and anything
+  else is rejected with `InvalidArgumentException`. Affects `where`, `not`,
+  `isNull`, `notNull`, `in`, `notIn`, `regex`, `notRegex`, `containsWords`,
+  `whereAny`, `whereAll`, `whereNone`, `whereColumn`, `whereDate`,
+  `whereFulltext`, `whereHas`, `whereDoesntHave`, `jsonContains`,
+  `jsonNotContains`, `jsonHas`, `jsonMissing`, `jsonLength` and
+  `whereJsonValue`, and every `or`-prefixed variant of them.
+
+**Query Builder — JSON**
+
+- **A JSON column without a `->key` built invalid or silently wrong SQL** — the
+  JSON methods take the path inside the column string, so `jsonHas('meta')`
+  leaves the path empty. That empty path means the document root, and the three
+  grammars disagreed about it. `jsonHas('metadata')` built
+  `JSON_CONTAINS_PATH(metadata, 'one', '$.')` on MySQL, which the server rejects
+  outright, but on PostgreSQL it built `jsonb_exists(metadata, '')` and ran:
+  the query asked whether a key named `''` existed, which is never true, so
+  `jsonHas('metadata')` reported that none of the 10 fixture rows had a metadata
+  document and `jsonMissing('metadata')` reported that all 10 lacked one — both
+  exactly backwards, with no error. The document root is not a key, so both
+  methods now reject an empty path on all three grammars with a message naming
+  the fix (`'column->key'`, or `notNull('column')` to test that the document is
+  present).
+- **PostgreSQL answered root-path containment, extraction and length wrongly** —
+  where MySQL and SQLite already read an empty path as the document root
+  (`'$'`), `PostgresGrammar` ran `explode('.', '')`, which yields `['']`, and
+  navigated to a key named `''` instead. `jsonContains('metadata', ...)`
+  returned 0 rows against a fixture where MySQL returned 3. The root now emits
+  `column @> ?::jsonb`, `column` / `column #>> '{}'` and
+  `jsonb_array_length(column)`, each verified against the MySQL answer for the
+  same question. Note that `jsonb_array_length` requires an array at the path,
+  at the root as anywhere else, so a length query against a JSON *object*
+  answers on MySQL and errors on PostgreSQL — that divergence is not specific to
+  the root and is now documented.
 
 **Data Integrity**
 
@@ -773,6 +816,16 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   reading the property gives. `getAttributes()` returns raw storage as before.
   **This is breaking** for code that expected `toArray()` to carry the encoded
   string.
+- Condition methods now accept only `AND` or `OR` as the logical operator
+  joining a condition to the one before it, in any case and with surrounding
+  whitespace ignored. **This is breaking** for code passing anything else — but
+  that code was producing a WHERE clause containing its argument as a bare SQL
+  token, not the query it asked for.
+- `jsonHas()` and `jsonMissing()` now throw `InvalidArgumentException` when the
+  column carries no `->key`. **This is breaking** for code calling them with a
+  bare column — on MySQL that call already failed at the server, and on
+  PostgreSQL it returned the opposite of the right answer. Use
+  `notNull('column')` to test that the document is present.
 
 ### Added
 
@@ -993,6 +1046,17 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   bind count — the specific breakage the `Clause` form produced. A reflection
   test compares all 32 base/or-variant signatures so a future or-variant cannot
   drift from its base. 41 of the 57 fail against the unfixed code.
+- 121 tests covering logical operator validation and JSON root paths (78 unit,
+  43 integration). The operator tests sweep every condition method that takes
+  one, asserting each rejects an injected value, still accepts `AND` and `OR`,
+  and normalises case; one drives the reported payload
+  (`'OR 1=1 -- '`) through the builder and counts the rows the server returns,
+  so it measures the leak rather than the SQL text. The JSON tests check both
+  halves of the empty-path defect: that key-existence is refused where there is
+  no key, and that the root forms which do have a meaning give the same answer
+  on PostgreSQL as on MySQL against the same fixture — the PostgreSQL answers
+  were wrong rather than absent, so a SQL-text assertion would have passed. 67
+  of the 121 fail against the unfixed code.
 
 ### Documentation
 
@@ -1085,6 +1149,24 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   both array forms, and says why the triplet list is not parenthesised while the
   map is. Every example was run before being written down — the first draft of
   this one claimed parentheses the builder does not emit.
+- New "Joining a condition with OR" subsection in the Where Clauses guide. The
+  trailing logical operator is a parameter of some twenty public methods and
+  appeared in no documentation at all, which is part of why nothing checked it:
+  it now covers the `AND` default, the equivalence with the `or`-prefixed
+  variants, that only `AND` and `OR` are accepted, and that the argument must
+  never be built from request data.
+- The `jsonHas()` / `jsonMissing()` sections of the query builder guide and the
+  cheatsheet now state that a `->key` is required and point at `notNull()` for
+  testing that the document itself is present.
+- New "The Document Root" subsection in the PostgreSQL guide, covering the
+  forms a bare JSON column produces and the `jsonb_array_length` divergence from
+  MySQL's `JSON_LENGTH` on objects.
+- Two JSON examples in the query builder guide stated SQL the builder does not
+  produce: `jsonHas()` was documented as building
+  `"user"."meta" -> 'address' IS NOT NULL` on PostgreSQL when it builds
+  `jsonb_exists("user"."meta", 'address')`, and the SQLite `jsonContains()`
+  comment was truncated mid-expression. Every JSON example in the section was
+  run against all three grammars and the comments corrected to match.
 
 ---
 

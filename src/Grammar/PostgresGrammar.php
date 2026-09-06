@@ -11,7 +11,7 @@ use InvalidArgumentException;
  */
 class PostgresGrammar implements Grammar
 {
-    use EscapesStringLiteral, ExplainFormat, FulltextMode;
+    use EscapesStringLiteral, ExplainFormat, FulltextMode, JsonKeyPath;
 
     /** @var array<int, string> Plan formats PostgreSQL accepts in the option list. */
     private const EXPLAIN_FORMATS = ['text', 'json', 'yaml', 'xml'];
@@ -110,6 +110,13 @@ class PostgresGrammar implements Grammar
      */
     public function jsonExtract(string $column, string $path, bool $asText = true): string
     {
+        // An empty path is the document root. MySQL and SQLite already read it
+        // that way ('$'); here explode('.', '') yields [''], which navigates to
+        // a key named '' instead and matches nothing.
+        if ($path === '') {
+            return $asText ? "$column #>> '{}'" : $column;
+        }
+
         $parts = explode('.', $path);
         $operator = $asText ? '->>' : '->';
 
@@ -133,6 +140,11 @@ class PostgresGrammar implements Grammar
      */
     public function jsonContains(string $column, string $path): string
     {
+        // Containment against the whole document, matching MySQL's '$'.
+        if ($path === '') {
+            return "$column @> ?::jsonb";
+        }
+
         // PostgreSQL: column->'path' @> ?::jsonb
         $parts = explode('.', $path);
 
@@ -153,6 +165,14 @@ class PostgresGrammar implements Grammar
      */
     public function jsonLength(string $column, string $path): string
     {
+        // Length of the document itself. jsonb_array_length requires an array
+        // here, as it does at any other path — that divergence from MySQL's
+        // JSON_LENGTH, which also counts object keys, is not specific to the
+        // root and is documented on the method.
+        if ($path === '') {
+            return "jsonb_array_length($column)";
+        }
+
         $parts = explode('.', $path);
 
         if (count($parts) === 1) {
@@ -253,6 +273,7 @@ class PostgresGrammar implements Grammar
      */
     public function jsonKeyExists(string $column, string $path): string
     {
+        $this->assertJsonKeyPath($path);
         $parts = explode('.', $path);
 
         if (count($parts) === 1) {

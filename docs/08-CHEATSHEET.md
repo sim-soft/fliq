@@ -113,6 +113,9 @@ Clamp anything that comes from a URL: `$page = max(1, (int)($_GET['page'] ?? 1))
 
 Aliases: `whereJsonContains`, `whereJsonDoesntContain`, `whereJsonContainsKey`, `whereJsonDoesntContainKey`, `whereJsonLength`
 
+`jsonHas` and `jsonMissing` need a `->key`; a bare column throws. Use
+`->notNull('meta')` to test that the document itself is present.
+
 ## Array Columns
 
 | Task                 | Code                                             |

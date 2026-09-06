@@ -403,6 +403,27 @@ User::find()->where('meta->address.city', '=', 'Tokyo')->get();
 User::find()->jsonHas('meta->settings.theme')->get();
 ```
 
+### The Document Root
+
+A column written without `->` addresses the whole document. PostgreSQL spells
+that differently from MySQL's `'$'`, so the grammar emits its own form:
+
+```php
+/* WHERE "user"."meta" @> ?::jsonb  — containment against the document */
+User::find()->jsonContains('meta', ['priority' => 1])->get();
+
+/* WHERE jsonb_array_length("user"."tags") = ? */
+User::find()->whereJsonLength('tags', '=', 2)->get();
+```
+
+`jsonb_array_length` requires an array at the path, at the root as anywhere
+else. MySQL's `JSON_LENGTH` also counts the keys of an object, so a length
+query against a JSON *object* answers on MySQL and errors here.
+
+`jsonHas()` and `jsonMissing()` test for a key, and the root is not one — both
+raise `InvalidArgumentException` if the column has no `->key`. Use
+`notNull('meta')` to test that the document is present.
+
 ---
 
 ## Array Columns

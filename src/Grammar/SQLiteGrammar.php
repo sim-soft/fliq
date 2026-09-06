@@ -16,6 +16,7 @@ class SQLiteGrammar implements Grammar
     }
     use ExplainFormat;
     use FulltextMode;
+    use JsonKeyPath;
 
     /** @var array<int, string> SQLite has one plan shape and no FORMAT option. */
     private const EXPLAIN_FORMATS = ['text'];
@@ -245,6 +246,7 @@ class SQLiteGrammar implements Grammar
      */
     public function jsonKeyExists(string $column, string $path): string
     {
+        $this->assertJsonKeyPath($path);
         $jsonPath = $this->stringLiteral('$.' . $path);
         return "json_type($column, $jsonPath) IS NOT NULL";
     }

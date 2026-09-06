@@ -298,6 +298,41 @@ User::find()->where('status', '=', 'active'); /* identical */
 So `where('status', 'active')` is *not* treated as the operator `'active'` —
 the shortcut is applied first. Both forms are safe.
 
+### Joining a condition with OR
+
+Most condition methods take a trailing logical operator saying how to join the
+condition to the one before it. It defaults to `AND`:
+
+```php
+/* WHERE `user`.`role` = ? AND `user`.`deleted_at` IS NULL */
+User::find()->where('role', '=', 'admin')->isNull('deleted_at');
+
+/* WHERE `user`.`role` = ? OR `user`.`deleted_at` IS NULL */
+User::find()->where('role', '=', 'admin')->isNull('deleted_at', 'OR');
+```
+
+Every such method also has an `or`-prefixed variant that reads better and means
+exactly the same thing:
+
+```php
+/* WHERE `user`.`role` = ? OR `user`.`deleted_at` IS NULL */
+User::find()->where('role', '=', 'admin')->orIsNull('deleted_at');
+```
+
+Only `AND` and `OR` are accepted, in any case. The operator is written into the
+SQL rather than bound as a parameter, so anything else is refused rather than
+passed through to the server:
+
+```php
+// InvalidArgumentException: Invalid logical operator: 'XOR'.
+//                           Allowed operators: AND, OR.
+User::find()->where('role', '=', 'admin')->isNull('deleted_at', 'XOR');
+```
+
+Never build this argument from request data. It selects between two fixed
+keywords, so there is nothing a user needs to choose here; if a filter is
+optional, use [`when()`](#conditional-clauses) or the `or` variant instead.
+
 ## Null Conditions
 
 Methods: `isNull()`, `orIsNull()`, `notNull()`, `orNotNull()`
@@ -762,13 +797,18 @@ Use `->` to separate column from path, and `.` for nested keys:
 ```php
 /* MySQL:      WHERE JSON_CONTAINS(`user`.`tags`, ?, '$')
    PostgreSQL: WHERE "user"."tags" @> ?::jsonb
-   SQLite:     WHERE EXISTS (SELECT 1 FROM json_each("user"."tags") WHERE json_each.value = ?) */
+   SQLite:     WHERE EXISTS (SELECT 1 FROM json_each("user"."tags", '$')
+                             WHERE json_each.value = json_extract(?, '$')) */
 User::find()->jsonContains('tags', 'php')->get();
 
 // Nested path
-/* MySQL: WHERE JSON_CONTAINS(`user`.`meta`, ?, '$.skills') */
+/* MySQL:      WHERE JSON_CONTAINS(`user`.`meta`, ?, '$.skills')
+   PostgreSQL: WHERE "user"."meta" -> 'skills' @> ?::jsonb */
 User::find()->jsonContains('meta->skills', 'docker')->get();
 ```
+
+A column written without `->` addresses the whole document rather than a key
+inside it, which is what `jsonContains('tags', ...)` above relies on.
 
 ### `jsonNotContains()` — Value NOT in JSON array
 
@@ -781,15 +821,27 @@ User::find()->jsonNotContains('tags', 'spam')->get();
 
 ```php
 /* MySQL:      WHERE JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.address')
-   PostgreSQL: WHERE "user"."meta" -> 'address' IS NOT NULL */
+   PostgreSQL: WHERE jsonb_exists("user"."meta", 'address')
+   SQLite:     WHERE json_type("user"."meta", '$.address') IS NOT NULL */
 User::find()->jsonHas('meta->address')->get();
 ```
 
 ### `jsonMissing()` — JSON path does not exist
 
 ```php
-/* MySQL: WHERE NOT JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.phone') */
+/* MySQL:      WHERE NOT JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.phone')
+   PostgreSQL: WHERE NOT jsonb_exists("user"."meta", 'phone') */
 User::find()->jsonMissing('meta->phone')->get();
+```
+
+Both methods test for a **key**, so the column must carry one:
+
+```php
+// Throws InvalidArgumentException — the document root is not a key.
+User::find()->jsonHas('meta')->get();
+
+// To test that the document itself is present, ask for the column instead.
+User::find()->notNull('meta')->get();
 ```
 
 ### `jsonLength()` — Check JSON array length

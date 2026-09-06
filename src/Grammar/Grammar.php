@@ -2,6 +2,8 @@
 
 namespace Simsoft\DB\Grammar;
 
+use InvalidArgumentException;
+
 /**
  * Grammar interface.
  *
@@ -206,8 +208,10 @@ interface Grammar
      * Build a JSON key exists expression.
      *
      * @param string $column The JSON column name (quoted).
-     * @param string $path The JSON path.
+     * @param string $path The JSON path. Must not be empty: the document root
+     *                     is not a key, so there is nothing to test for.
      * @return string The SQL expression.
+     * @throws InvalidArgumentException If the path is empty.
      */
     public function jsonKeyExists(string $column, string $path): string;
 
