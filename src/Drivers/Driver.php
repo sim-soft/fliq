@@ -413,9 +413,44 @@ abstract class Driver
     /**
      * Get last insert id.
      *
+     * Answers false when the connection has no insert id to report, either
+     * because nothing has been inserted on it or because the statement that
+     * ran generated no key.
+     *
      * @return false|string
      */
     abstract public function lastInsertId(): false|string;
+
+    /**
+     * Normalise a PDO insert id to the contract above.
+     *
+     * PDO::lastInsertId() reports "no id" as the string "0" — for MySQL and
+     * SQLite directly, and for PostgreSQL by throwing, since it calls lastval()
+     * and the server raises "lastval is not yet defined in this session" until
+     * some sequence has been used. Neither is an id: no auto-increment column
+     * or sequence produces 0, and a PostgreSQL insert into a table without a
+     * sequence (a composite-key join table, say) never defines lastval at all.
+     *
+     * The three PDO-backed drivers passed both straight through, so the same
+     * "nothing was inserted" fact reached callers three different ways: '0'
+     * from MySQL and SQLite, an uncaught PDOException from PostgreSQL, and
+     * false from MySQLi. Execute::getLastInsertId() maps only false to null, so
+     * '0' surfaced as the string id "0" and the PostgreSQL case escaped as an
+     * exception from a method typed ?string.
+     *
+     * @param callable(): (string|false) $read Reads the driver's raw insert id.
+     * @return false|string
+     */
+    protected function normalizeInsertId(callable $read): false|string
+    {
+        try {
+            $id = $read();
+        } catch (\Throwable) {
+            return false;
+        }
+
+        return ($id === false || $id === '' || $id === '0') ? false : $id;
+    }
 
     /**
      * Constructor.

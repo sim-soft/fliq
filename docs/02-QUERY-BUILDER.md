@@ -485,6 +485,8 @@ $users = (new ActiveQuery())
 
 Methods: `exists()`, `notExists()`, `orExists()`, `orNotExists()`
 
+Each takes a sub-query and adds an `EXISTS` condition to the current query:
+
 ```php
 /* WHERE EXISTS (SELECT * FROM orders WHERE orders.user_id = user.id) */
 $users = (new ActiveQuery())
@@ -495,6 +497,19 @@ $users = (new ActiveQuery())
     ->on('mysql')
     ->get();
 ```
+
+To ask instead whether the query itself matches anything, use `hasRecords()`.
+It fetches at most one row, so the cost does not grow with the number of
+matches:
+
+```php
+if (User::find()->where('email', '=', $email)->hasRecords()) {
+    throw new RuntimeException('That address is already registered.');
+}
+```
+
+> **Note:** `hasRecords()` is the row-existence check. `exists()` is the SQL
+> `EXISTS` sub-query condition above, and always takes a query argument.
 
 ## Regex / Contains
 

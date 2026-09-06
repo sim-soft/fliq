@@ -28,7 +28,12 @@ trait Fetchable
      */
     public function first(): mixed
     {
-        $result = $this->limit(1)->query($this);
+        // Limiting a clone rather than $this. The limit used to be written onto
+        // the receiver, so it outlived the call: after $q->first(), the same $q
+        // answered every later all(), getArray(), each() and cursor() with a
+        // single row, and reported no error while doing it.
+        $query = (clone $this)->limit(1);
+        $result = $this->query($query);
         if (!$result) {
             return $this->modelClass ? null : [];
         }
@@ -301,14 +306,22 @@ trait Fetchable
     /**
      * Check if any records exist matching the current conditions.
      *
-     * Uses SELECT 1 LIMIT 1 for efficiency.
+     * Fetches at most one row, so the cost does not grow with the match count.
+     *
+     * Named hasRecords() rather than exists(): ActiveQuery declares its own
+     * exists(ActiveQuery|Raw $query) for the SQL EXISTS sub-query condition,
+     * and a class method silently wins over a trait method of the same name.
+     * The trait's no-argument version was therefore unreachable — calling it
+     * as documented raised ArgumentCountError, not a false.
      *
      * @return bool
      */
-    public function exists(): bool
+    public function hasRecords(): bool
     {
-        $result = $this->limit(1)->query($this);
-        return !empty($result);
+        // Limiting a clone, so a caller can keep using the query afterwards.
+        $query = (clone $this)->limit(1);
+
+        return !empty($this->query($query));
     }
 
     /**

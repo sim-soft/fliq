@@ -170,7 +170,7 @@ class SQLiteDriver extends Driver
      */
     public function lastInsertId(): false|string
     {
-        return $this->requireConnection()->lastInsertId();
+        return $this->normalizeInsertId(fn(): string|false => $this->requireConnection()->lastInsertId());
     }
 
     /**

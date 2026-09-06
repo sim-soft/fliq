@@ -6,6 +6,57 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Collections and query reuse**
+
+- **The documented row-existence check always threw** — `ActiveQuery` declares
+  its own `exists(ActiveQuery|Raw $query)` for the SQL `EXISTS` sub-query
+  condition, and PHP resolves a class/trait method-name collision silently in
+  the class's favour. `Fetchable::exists(): bool` was therefore unreachable, and
+  the example printed in the cheatsheet —
+  `User::find()->where('email', $e)->exists()` — raised `ArgumentCountError`
+  rather than answering. The trait method is now `hasRecords()`, so both the
+  row check and the sub-query condition are callable. **Breaking:** callers of
+  the (never working) no-argument `exists()` must use `hasRecords()`; the
+  sub-query form is unchanged.
+- **`first()` narrowed the query it was called on, permanently** — the `LIMIT 1`
+  was written onto the receiver rather than a copy, so it outlived the call.
+  After `$query->first()`, that same `$query` answered every later `all()`,
+  `getArray()`, `get()`, `each()` and `cursor()` with a single row and reported
+  no error while doing it. It now limits a clone, as `paginate()` and
+  `chunkById()` already did. `hasRecords()` does the same.
+- **`Collection::all()` silently returned one page of records** — `lazy()`
+  fetches each page as its own query, so without `indexBy()` every page was
+  keyed from zero again and the keys repeated across pages. Iterating with
+  `foreach` hid this, but anything that materialised the generator —
+  `iterator_to_array()`, and so `all()` — let each page overwrite the one before
+  it. A ten-row table read in pages of four returned four records. Keys are now
+  numbered continuously across the whole iteration; keys chosen by `indexBy()`
+  are still preserved.
+- **Chaining `filter()` or `map()` discarded all but the last callback** — each
+  had a single storage slot, so `->filter($a)->filter($b)` applied only `$b`,
+  and `->map($a)->map($b)` handed `$b` the unmapped record. Filters also always
+  ran on the raw record whatever the call order, so a `filter()` after a `map()`
+  never saw the mapped value. Both now append to one ordered pipeline and run in
+  the order they were added, each stage seeing what the stage before it
+  produced. **Breaking for subclasses:** the protected `Collection::$filterCallback`
+  and `$mapCallback` properties are replaced by a single ordered `$stages` list.
+- **`batch()` ignored `filter()` and `map()`** — it resolved raw records itself
+  instead of reading through the shared pipeline, so batching a filtered
+  collection yielded every row while iterating the very same collection yielded
+  only the matches. It now applies both. A batch can be shorter than the
+  requested size, which is how many rows are fetched per query rather than how
+  many survive, and a page where nothing survives is skipped rather than yielded
+  as an empty array.
+- **The four drivers disagreed on "no insert id", three different ways** — for
+  the same fact, MySQLi answered `false`, the PDO and SQLite drivers answered
+  the string `'0'`, and PostgreSQL threw an uncaught `PDOException` (`lastval is
+  not yet defined in this session`) out of `getLastInsertId()`, a method typed
+  `?string`. Since `Execute::getLastInsertId()` maps only `false` to `null`,
+  `'0'` reached callers as the string id `"0"` — an id no auto-increment column
+  or sequence ever produces. A shared `Driver::normalizeInsertId()` now maps the
+  throw and both empty forms to `false`, so all four agree and
+  `getLastInsertId()` answers `null`.
+
 **Security**
 
 - **Identifier quoting could be escaped** — `quoteIdentifier()` wrapped names in
@@ -1124,6 +1175,32 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   untyped, argument-taking, static, protected and inherited — through both
   reading and `isset()`, and one test asserts eager- and lazy-loaded relations
   serialize byte-identically. 37 of the 61 fail against the unfixed code.
+- 61 collection tests covering chunked iteration and the filter/map pipeline,
+  run against in-memory SQLite so the row set is exact. Six chunk sizes — under,
+  over and exactly dividing the row count — each drive materialisation, `all()`,
+  key continuity, per-record identity and `foreach`, so a fix that merely
+  renumbers keys without keeping records is caught. The pipeline tests assert
+  that two and three chained filters narrow rather than replace, that a second
+  `map()` receives the first's output, that a `filter()` after a `map()` sees
+  the mapped value, that deriving a chain leaves the collection it came from
+  untouched, and that `batch()` agrees with iterating the same collection.
+  31 of the 61 fail against the unfixed code.
+- 44 integration tests for the same behaviour against live MySQL, checked
+  against counts the server computes rather than hand-written lists. A provider
+  drives all six whole-table reads (`all()`, `getArray()`, `get()->all()`,
+  `each()`, `cursor()`, `batch()`) after both `first()` and `hasRecords()`, and
+  the chained-filter tests first assert that either condition alone matches more
+  rows than the pair, so they cannot pass while the callbacks overwrite one
+  another. Also covers the sub-query `exists()` condition against
+  `COUNT(DISTINCT user_id)`, and insert ids for a statement that inserted
+  nothing, a connection that has inserted nothing, and a real insert.
+  23 of the 44 fail against the unfixed code.
+- 18 unit tests pinning the method-resolution and driver contracts that the
+  fixes depend on: that `hasRecords()` resolves to the trait file rather than
+  being shadowed, that no other `Fetchable` method is shadowed by `ActiveQuery`,
+  that `first()` and `hasRecords()` leave a query's SQL and bindings unchanged,
+  that all three PDO-backed drivers route through `normalizeInsertId()`, and
+  that all four drivers declare the same `false|string` return.
 
 ### Documentation
 
@@ -1243,6 +1320,21 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   discards the pending change, and the `QueryException` raised when an existing
   model has no primary key value. Every example was run against the fixture
   before being written down.
+- The cheatsheet's exists-check row called the method that always threw. It now
+  shows `hasRecords()`, and the query builder guide's Exists Clauses section
+  distinguishes the two: `hasRecords()` asks whether the query matches anything,
+  `exists()` adds the SQL `EXISTS` sub-query condition and always takes a query.
+- The collections guide documented a doubled `filter()` chain, which silently
+  applied only the second callback. That section now states that filters and
+  maps compose and run in the order they were added, with an example of a
+  `filter()` after a `map()` receiving the mapped value rather than the model.
+- The collections guide claimed `count()` on a filtered collection returns the
+  filtered count in the very example whose parenthetical says it does not. The
+  number now matches the note above it.
+- The collections guide's `batch()` section now says that filters and maps
+  apply, that the size is how many rows are fetched per query rather than how
+  many come back, and that a fully filtered-out page is skipped. Every example
+  in the guide was run against the fixture before being written down.
 
 ---
 

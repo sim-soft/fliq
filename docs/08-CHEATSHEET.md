@@ -39,7 +39,7 @@ User::find()->active()->admins()->get();
 | Create               | `$user = new User([...]); $user->save();`       |
 | Update               | `$user->name = 'new'; $user->save();`           |
 | Delete               | `$user->delete()`                               |
-| Exists check         | `User::find()->where('email', $e)->exists()`    |
+| Exists check         | `User::find()->where('email', '=', $e)->hasRecords()` |
 
 ## Query Builder
 

@@ -27,14 +27,27 @@ class Collection implements IteratorAggregate, Countable
     /** @var int|null Cached total count */
     protected ?int $totalCount = null;
 
+    /** @var string Pipeline stage that drops records. */
+    private const STAGE_FILTER = 'filter';
+
+    /** @var string Pipeline stage that transforms records. */
+    private const STAGE_MAP = 'map';
+
     /** @var string|null Attribute to pluck */
     protected ?string $pluckAttribute = null;
 
-    /** @var callable|null Filter callback applied during lazy iteration */
-    protected $filterCallback = null;
-
-    /** @var callable|null Map transformation applied during lazy iteration */
-    protected $mapCallback = null;
+    /**
+     * Filter and map callbacks, in the order they were added.
+     *
+     * One ordered list rather than a slot each: with a slot per kind, a second
+     * filter() or map() overwrote the first instead of composing with it, and
+     * filters always ran on the raw record whatever the call order. So
+     * ->filter(a)->filter(b) applied only b, ->map(a)->map(b) handed b the
+     * unmapped record, and both did so silently.
+     *
+     * @var array<int, array{0: string, 1: callable}>
+     */
+    protected array $stages = [];
 
     /**
      * Constructor.
@@ -119,36 +132,23 @@ class Collection implements IteratorAggregate, Countable
      */
     public function lazy(?int $size = null): Generator
     {
-        // If the query already has an explicit limit, execute as-is (don't paginate)
+        // An explicit limit is fetched as a single query, and its keys are its
+        // own, so there is nothing to renumber.
         if ($this->query->hasLimit()) {
-            $results = iterator_to_array(
-                $this->asArray ? $this->query->getArray() : $this->query->all()
-            );
-
-            yield from $this->yieldResults($results);
+            yield from $this->yieldResults($this->fetchRows($this->query));
             return;
         }
 
-        $size = $size ?? $this->chunkSize;
-        $page = 0;
+        // Each page is fetched as its own query, so without indexBy() every page
+        // is keyed from zero again and the keys repeat across pages. Iterating
+        // with foreach hid that, but any caller that materialised the generator
+        // — iterator_to_array(), and so all() — saw each page overwrite the one
+        // before it and got back a single page's worth of records with no error.
+        // A running position keeps the keys unique across the whole iteration.
+        $position = 0;
 
-        while (true) {
-            $query = clone $this->query;
-            $query->page(++$page, $size);
-
-            $results = iterator_to_array(
-                $this->asArray ? $query->getArray() : $query->all()
-            );
-
-            if (empty($results)) {
-                return;
-            }
-
-            yield from $this->yieldResults($results);
-
-            if (\count($results) < $size) {
-                return;
-            }
+        foreach ($this->rawPages(max(1, $size ?? $this->chunkSize)) as $results) {
+            yield from $this->yieldResults($results, $position);
         }
     }
 
@@ -156,23 +156,74 @@ class Collection implements IteratorAggregate, Countable
      * Yield resolved, filtered, and mapped results.
      *
      * @param array<int|string, mixed> $results Raw query results.
+     * @param int|null $position Running position across pages, advanced in place.
+     *                           Null keeps each record's own key, which is what
+     *                           indexBy() asked for.
      * @return Generator
      */
-    private function yieldResults(array $results): Generator
+    private function yieldResults(array $results, ?int &$position = null): Generator
     {
+        // Keys chosen by indexBy() carry meaning and are already unique across
+        // pages, so they are kept; positional ones are renumbered.
+        $keepKeys = $position === null || $this->query->hasIndexBy();
+
         foreach ($results as $key => $record) {
             $value = $this->resolveValue($record);
 
-            if ($this->filterCallback !== null && !($this->filterCallback)($value, $key)) {
+            if (!$this->applyStages($value, $key)) {
                 continue;
             }
 
-            if ($this->mapCallback !== null) {
-                $value = ($this->mapCallback)($value, $key);
+            if ($keepKeys) {
+                yield $key => $value;
+                continue;
             }
 
-            yield $key => $value;
+            yield $position++ => $value;
         }
+    }
+
+    /**
+     * Run the filter/map stages over one value, in the order they were added.
+     *
+     * Each stage sees what the stage before it produced, so a map feeds the
+     * filter after it and vice versa.
+     *
+     * @param mixed $value The resolved record, transformed in place by maps.
+     * @param int|string $key The record's key, passed to every callback.
+     * @return bool False if a filter rejected the record.
+     */
+    private function applyStages(mixed &$value, int|string $key): bool
+    {
+        foreach ($this->stages as [$kind, $callback]) {
+            if ($kind === self::STAGE_MAP) {
+                $value = $callback($value, $key);
+                continue;
+            }
+
+            if (!$callback($value, $key)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Copy this collection with one more pipeline stage on the end.
+     *
+     * @param string $kind Either STAGE_FILTER or STAGE_MAP.
+     * @param callable $callback The stage callback.
+     * @return static
+     */
+    private function withStage(string $kind, callable $callback): static
+    {
+        $copy = clone $this;
+        $copy->query = clone $this->query;
+        $copy->stages = [...$this->stages, [$kind, $callback]];
+        $copy->totalCount = null; // invalidate cached count
+
+        return $copy;
     }
 
     /**
@@ -180,48 +231,89 @@ class Collection implements IteratorAggregate, Countable
      *
      * Does not mutate the collection's chunk size.
      *
+     * Applies filter() and map() like every other read does. It used to skip
+     * them, so batching a filtered collection yielded the raw, unfiltered rows
+     * while iterating the same collection yielded the filtered ones. A batch
+     * can therefore be shorter than $size, since $size is how many rows are
+     * fetched per query, not how many survive.
+     *
      * @param int $size Batch size.
      * @return Generator
      */
     public function batch(int $size = 100): Generator
     {
-        // If the query already has an explicit limit, execute as-is in one batch
+        foreach ($this->rawPages(max(1, $size)) as $results) {
+            $batch = $this->resolveBatch($results);
+
+            // A page whose records were all filtered out is not the end of the
+            // data, so it is skipped rather than yielded as an empty array.
+            if ($batch !== []) {
+                yield $batch;
+            }
+        }
+    }
+
+    /**
+     * Yield raw, unresolved pages of rows until the data runs out.
+     *
+     * @param int<1, max> $size Rows to fetch per query.
+     * @return Generator<int, array<int|string, mixed>>
+     */
+    private function rawPages(int $size): Generator
+    {
+        // An explicit limit is the caller's own bound, so it is fetched as one
+        // query and split locally rather than paged over.
         if ($this->query->hasLimit()) {
-            $results = iterator_to_array(
-                $this->asArray ? $this->query->getArray() : $this->query->all()
-            );
-
-            if (empty($results)) {
-                return;
-            }
-
-            foreach (array_chunk($results, max(1, $size)) as $chunk) {
-                yield array_map(fn($record) => $this->resolveValue($record), $chunk);
-            }
-
+            yield from array_chunk($this->fetchRows($this->query), $size, true);
             return;
         }
 
         $page = 0;
 
         while (true) {
-            $query = clone $this->query;
-            $query->page(++$page, $size);
+            $results = $this->fetchRows((clone $this->query)->page(++$page, $size));
 
-            $results = iterator_to_array(
-                $this->asArray ? $query->getArray() : $query->all()
-            );
-
-            if (empty($results)) {
-                return;
+            if ($results !== []) {
+                yield $results;
             }
 
-            yield array_map(fn($record) => $this->resolveValue($record), $results);
-
+            // Only the raw page size decides whether to ask for another page.
             if (\count($results) < $size) {
                 return;
             }
         }
+    }
+
+    /**
+     * Run a query and collect its rows.
+     *
+     * @param ActiveQuery $query The query to run.
+     * @return array<int|string, mixed>
+     */
+    private function fetchRows(ActiveQuery $query): array
+    {
+        return iterator_to_array($this->asArray ? $query->getArray() : $query->all());
+    }
+
+    /**
+     * Resolve one page of raw rows into the records a batch should carry.
+     *
+     * @param array<int|string, mixed> $results Raw query results.
+     * @return array<int, mixed> Surviving records, renumbered from zero.
+     */
+    private function resolveBatch(array $results): array
+    {
+        $batch = [];
+
+        foreach ($results as $key => $record) {
+            $value = $this->resolveValue($record);
+
+            if ($this->applyStages($value, $key)) {
+                $batch[] = $value;
+            }
+        }
+
+        return $batch;
     }
 
     /**
@@ -248,12 +340,7 @@ class Collection implements IteratorAggregate, Countable
      */
     public function page(int $page, int $perPage = 50): array
     {
-        $query = clone $this->query;
-        $query->page($page, $perPage);
-
-        $results = iterator_to_array(
-            $this->asArray ? $query->getArray() : $query->all()
-        );
+        $results = $this->fetchRows((clone $this->query)->page($page, $perPage));
 
         return iterator_to_array($this->yieldResults($results));
     }
@@ -289,16 +376,15 @@ class Collection implements IteratorAggregate, Countable
      *
      * The callback receives (value, key) and should return true to keep the record.
      *
+     * Composes with any filter or map already applied, rather than replacing
+     * it: ->filter($a)->filter($b) keeps only records passing both.
+     *
      * @param callable $callback The filter callback.
      * @return static
      */
     public function filter(callable $callback): static
     {
-        $filtered = clone $this;
-        $filtered->query = clone $this->query;
-        $filtered->filterCallback = $callback;
-        $filtered->totalCount = null; // invalidate cached count
-        return $filtered;
+        return $this->withStage(self::STAGE_FILTER, $callback);
     }
 
     /**
@@ -306,15 +392,15 @@ class Collection implements IteratorAggregate, Countable
      *
      * The callback receives (value, key) and returns the transformed value.
      *
+     * Composes with any map or filter already applied, rather than replacing
+     * it: ->map($a)->map($b) passes $a's output into $b.
+     *
      * @param callable $callback The map callback.
      * @return static
      */
     public function map(callable $callback): static
     {
-        $mapped = clone $this;
-        $mapped->query = clone $this->query;
-        $mapped->mapCallback = $callback;
-        return $mapped;
+        return $this->withStage(self::STAGE_MAP, $callback);
     }
 
     /**
@@ -395,12 +481,31 @@ class Collection implements IteratorAggregate, Countable
      */
     public function isEmpty(): bool
     {
-        if ($this->filterCallback !== null) {
+        if ($this->hasFilter()) {
             // With filter, must iterate to determine emptiness
             return $this->first() === null;
         }
 
         return $this->count() === 0;
+    }
+
+    /**
+     * Whether any stage can drop records.
+     *
+     * A map never changes how many records come out, so only filters matter
+     * to emptiness.
+     *
+     * @return bool
+     */
+    private function hasFilter(): bool
+    {
+        foreach ($this->stages as [$kind]) {
+            if ($kind === self::STAGE_FILTER) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
