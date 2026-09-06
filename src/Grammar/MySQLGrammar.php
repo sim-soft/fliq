@@ -9,7 +9,7 @@ namespace Simsoft\DB\Grammar;
  */
 class MySQLGrammar implements Grammar
 {
-    use EscapesStringLiteral, ExplainFormat;
+    use EscapesStringLiteral, ExplainFormat, FulltextMode;
 
     /** @var array<int, string> Plan formats MySQL accepts after FORMAT=. */
     private const EXPLAIN_FORMATS = ['text', 'traditional', 'json', 'tree'];
@@ -261,6 +261,7 @@ class MySQLGrammar implements Grammar
         // Searching 'database -systems' in plain mode returned nothing, because
         // the '-' was parsed as an exclusion, and an ordinary term like
         // 'C++ database' raised "syntax error, unexpected '+'" outright.
+        $mode = $this->normaliseFulltextMode($mode);
         $cols = implode(', ', $columns);
 
         // A phrase is quoted inside BOOLEAN MODE, so the quotes have to be

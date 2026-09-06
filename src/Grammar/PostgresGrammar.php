@@ -11,7 +11,7 @@ use InvalidArgumentException;
  */
 class PostgresGrammar implements Grammar
 {
-    use EscapesStringLiteral, ExplainFormat;
+    use EscapesStringLiteral, ExplainFormat, FulltextMode;
 
     /** @var array<int, string> Plan formats PostgreSQL accepts in the option list. */
     private const EXPLAIN_FORMATS = ['text', 'json', 'yaml', 'xml'];
@@ -287,6 +287,8 @@ class PostgresGrammar implements Grammar
      */
     public function fulltextSearch(array $columns, string $mode = 'plain', string $language = 'english'): string
     {
+        $mode = $this->normaliseFulltextMode($mode);
+
         // The text search config is a literal, not a bindable parameter.
         $config = $this->stringLiteral($language);
 

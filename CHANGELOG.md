@@ -285,6 +285,35 @@ All notable changes to `simsoft/fliq` are documented here.
 
 **Query Builder**
 
+- **An unrecognised full-text search mode was answered in plain mode** — only
+  `plain`, `phrase` and `websearch` were recognised and everything else fell
+  through to the plain branch, which is not a wording difference. On MySQL a
+  caller asking for `'boolean'` — MySQL's own name for what this library calls
+  `websearch` — was answered `IN NATURAL LANGUAGE MODE`, where `+` and `-` are
+  stripped as punctuation: searching `'+PHP -Docker'` over the `post` fixture
+  returned five rows where `websearch` returns four, including the very row the
+  `-` was written to exclude. The required term was not required and the excluded
+  term was not excluded, and nothing in the result said the mode had been
+  ignored. PostgreSQL had the same fallthrough (`plainto_tsquery` in place of
+  `websearch_to_tsquery`), as did SQLite. All three grammars now raise
+  `InvalidArgumentException` naming the supported modes and pointing at
+  `websearch` for boolean operators, via the shared `Grammar\FulltextMode` trait.
+  Case and surrounding space are normalised rather than refused, as they already
+  were for `EXPLAIN` formats.
+- **`orWhere()` refused array forms `where()` accepts, and mis-built a `Clause`**
+  — its signature omitted `array` and `Clause` from the attribute and narrowed
+  the operator from `mixed` to `?string`, though it does nothing but call
+  `where()` with `'OR'`. `orWhere([['id', '>=', 1], ['id', '<=', 3]])` and
+  `orWhere(['id' => 1])` raised a `TypeError` for shapes documented on `where()`,
+  and `orWhere('score', 0)` failed on the non-string shorthand value. Worse,
+  `orWhere($clause)` was *accepted* — `Clause` is stringable, so it slipped
+  through the `callable|Raw` union — and the clause was flattened into the
+  attribute slot and then read as a null comparison, producing
+  ``... OR `user`.`created` >= ? AND `user`.`created` <= ? IS NULL`` with one
+  bind for three placeholders. That failed at execute with mysqli complaining
+  about argument counts rather than at the call that was wrong. The signature now
+  matches `where()` exactly. A sweep of all 32 base/or-variant pairs found this
+  to be the only mismatched one; a test now holds that line for the rest.
 - **`FROM` and `JOIN` were quoted for whichever connection was current when they
   were named, not the one the query ran on** — both were rendered eagerly by
   `from()` and `join()`, freezing that grammar into the stored string. A
@@ -662,6 +691,16 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
 
 ### Changed
 
+- `whereFulltext()` and `orWhereFulltext()` now throw `InvalidArgumentException`
+  for a mode other than `plain`, `phrase` or `websearch`. **This is breaking**
+  for code passing any other name — but that code was not getting the search it
+  asked for: the mode was silently replaced with `plain`, which on MySQL changes
+  which rows come back. `'boolean'` is the common case and the message names
+  `websearch` as its replacement. Case and surrounding whitespace are normalised,
+  so `'WebSearch'` and `' phrase '` continue to work.
+- `orWhere()`'s signature widened to match `where()`: `string|array|callable|Raw|
+  Clause` for the attribute and `mixed` for the operator. This only accepts more
+  than before, so no working call changes meaning.
 - `Model::update()` now filters its argument through the mass assignment rules.
   Attributes set directly (`$model->column = $value`) remain trusted and are
   still written, as are attributes set by lifecycle hooks such as the
@@ -943,6 +982,17 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   declared `DEFAULT 99` specifically to prove an explicit `null` reaches the
   database rather than being dropped from the `INSERT`. 35 of the 62 fail
   against the unfixed code.
+- 57 tests — 41 unit, 16 integration — covering the full-text mode and
+  `orWhere()`'s signature. The mode tests assert on the rows the server returns
+  for a term where the modes genuinely disagree (`'+PHP -Docker'` over the `post`
+  fixture, where the excluded row is present in `plain` and absent in
+  `websearch`) rather than on the SQL text, since the whole defect was that
+  plausible-looking SQL answered a different question. The `orWhere` tests pair
+  every accepted shape against the same shape through `where(..., 'OR')` and
+  require identical SQL and binds, and one asserts that placeholder count equals
+  bind count — the specific breakage the `Clause` form produced. A reflection
+  test compares all 32 base/or-variant signatures so a future or-variant cannot
+  drift from its base. 41 of the 57 fail against the unfixed code.
 
 ### Documentation
 
@@ -1025,6 +1075,16 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   `null` rather than `false`.
 - The model generator's type casting table now points at the same `NULL` rule,
   since a generated model's casts behave exactly like a hand-written one's.
+- The full-text sections of the PostgreSQL guide and the cheatsheet now state
+  that `plain`, `phrase` and `websearch` are the whole set and that any other
+  name raises, with `'boolean'` called out by name — it is MySQL's own word for
+  the mode and the one most likely to be typed. The mode table was already
+  correct about what the three modes do; what was missing was what happens to a
+  fourth.
+- The query builder guide's array-shapes subsection now shows `orWhere()` taking
+  both array forms, and says why the triplet list is not parenthesised while the
+  map is. Every example was run before being written down — the first draft of
+  this one claimed parentheses the builder does not emit.
 
 ---
 

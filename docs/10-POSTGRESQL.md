@@ -322,6 +322,23 @@ Post::find()->whereFulltext(['title', 'body'], 'database -systems')->get();
 Post::find()->whereFulltext(['title', 'body'], 'database -systems', 'websearch')->get();
 ```
 
+Those three are the whole set. Any other name raises
+`InvalidArgumentException` on every engine, rather than being answered in
+`plain` mode:
+
+```php
+/* InvalidArgumentException: Unsupported full-text search mode 'boolean' for
+   mysql. Supported modes: plain, phrase, websearch. For boolean operators
+   (+, -, "), use 'websearch'. */
+Post::find()->whereFulltext('title', '+PHP -Docker', 'boolean')->get();
+```
+
+`boolean` is worth naming because it is MySQL's own word for the mode, so it is
+the one a MySQL user reaches for. Answered in `plain` mode it returned *more*
+rows than asked for — the `-` was read as punctuation, so the excluded term was
+not excluded. Case and surrounding space are normalised, so `'WebSearch'` and
+`' phrase '` are accepted.
+
 MySQL requires a `FULLTEXT` index over exactly the columns searched. The
 `$language` argument is PostgreSQL-only; MySQL and SQLite ignore it.
 

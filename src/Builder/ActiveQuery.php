@@ -785,11 +785,23 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Or condition.
      *
-     * @param string|callable|Raw $attribute the attribute name
-     * @param string|null $operator the comparison operator or the attribute value
+     * Accepts everything where() accepts. The signature used to omit the array
+     * and Clause forms and narrow the operator to ?string, so orWhere([...])
+     * raised a TypeError and orWhere($clause) stringified the clause into the
+     * attribute slot, building SQL that could not be executed.
+     *
+     * @param string|array<int, array<int, mixed>>|array<string, mixed>|callable|Raw|Clause $attribute the attribute
+     * @param mixed $operator the comparison operator or the attribute value
      * @param mixed $value the value for the attribute
+     * @return static
+     * @throws InvalidArgumentException If the operator is not on the whitelist,
+     *     or its value does not match the shape the operator needs.
      */
-    public function orWhere(string|callable|Raw $attribute, ?string $operator = '=', mixed $value = null): static
+    public function orWhere(
+        string|array|callable|Raw|Clause $attribute,
+        mixed $operator = '=',
+        mixed $value = null
+    ): static
     {
         return $this->where($attribute, $operator, $value, 'OR');
     }
@@ -2676,9 +2688,12 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param array<int, string>|string $columns Column(s) to search.
      * @param string $term The search term.
      * @param string $mode The search mode: 'plain', 'phrase', or 'websearch'.
+     *     Use 'websearch' for boolean operators (+, -, "); any other name is
+     *     refused rather than answered in plain mode.
      * @param string $language The text search config/language. Default: 'english'.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the mode is not one of the three supported.
      */
     public function whereFulltext(
         array|string $columns,
@@ -2703,6 +2718,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string $mode The search mode: 'plain', 'phrase', or 'websearch'.
      * @param string $language The text search config/language. Default: 'english'.
      * @return static
+     * @throws InvalidArgumentException If the mode is not one of the three supported.
      */
     public function orWhereFulltext(
         array|string $columns,

@@ -15,6 +15,7 @@ class SQLiteGrammar implements Grammar
         literal as private defaultLiteral;
     }
     use ExplainFormat;
+    use FulltextMode;
 
     /** @var array<int, string> SQLite has one plan shape and no FORMAT option. */
     private const EXPLAIN_FORMATS = ['text'];
@@ -271,6 +272,8 @@ class SQLiteGrammar implements Grammar
         // nothing about body. FTS5 scopes MATCH to one column at a time and a
         // search expression carries a single bound term, so the extra columns
         // cannot be honoured here — say so rather than answering for one.
+        $mode = $this->normaliseFulltextMode($mode);
+
         if ($columns === []) {
             throw new InvalidArgumentException('Full-text search requires at least one column.');
         }

@@ -190,6 +190,23 @@ In the list form every entry must be a full triplet; a shorter one throws an
 is bound as a value rather than becoming an `IS NULL` check — use
 [`isNull()`](#null-conditions) for that.
 
+`orWhere()` takes everything `where()` takes — both array shapes, a closure, a
+`Raw`, and a clause object — and differs only in joining with `OR`:
+
+```php
+/* WHERE `user`.`id` = ? OR `user`.`score` >= ? AND `user`.`id` IN (?,?) */
+$users = User::find()
+    ->where('id', 10)
+    ->orWhere([
+        ['score', '>=', 150],
+        ['id', 'IN', [1, 2]],
+    ])
+    ->get();
+```
+
+The list form is not wrapped, and does not need to be: SQL binds `AND` tighter
+than `OR`, so the triplets already group as one unit against the `OR`.
+
 ### Which operators can I use?
 
 The middle argument of `where()` is the **comparison operator**. Only these are

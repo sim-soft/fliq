@@ -223,9 +223,10 @@ interface Grammar
      * Build a full-text search expression.
      *
      * @param array<int, string> $columns The columns to search.
-     * @param string $mode The search mode (e.g., 'plain', 'phrase', 'websearch').
+     * @param string $mode The search mode: 'plain', 'phrase' or 'websearch'.
      * @param string $language The text search language/config.
      * @return string The SQL expression with a ? placeholder for the search term.
+     * @throws \InvalidArgumentException If the mode is not one of the three supported.
      */
     public function fulltextSearch(array $columns, string $mode = 'plain', string $language = 'english'): string;
 

@@ -356,7 +356,9 @@ User::transaction(function () {
 | Or fulltext         | `->orWhereFulltext('body', 'optimization')`                |
 
 `whereFulltext()` works on all three engines. Only `websearch` reads operators
-in the term; `plain` never does. `$language` is PostgreSQL-only. MySQL needs a
+in the term; `plain` never does. `plain`, `phrase` and `websearch` are the only
+modes — anything else raises `InvalidArgumentException` (note `'boolean'` is
+MySQL's name for `websearch`). `$language` is PostgreSQL-only. MySQL needs a
 `FULLTEXT` index on exactly the columns searched; SQLite needs an FTS5 table and
 takes one column per call.
 
