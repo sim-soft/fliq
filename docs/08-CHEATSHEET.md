@@ -126,6 +126,10 @@ Aliases: `whereJsonContains`, `whereJsonDoesntContain`, `whereJsonContainsKey`, 
 Aliases: `whereArrayContains`, `whereArrayOverlaps`, `orWhereArrayContains`,
 `orWhereArrayOverlaps`
 
+Native on PostgreSQL, emulated over a JSON array column on MySQL and SQLite.
+Pass the element type (`'int'`, `'numeric'`, `'date'`, …) for anything but text,
+or the value is compared as text on MySQL and will not match.
+
 ## CASE WHEN Expressions
 
 | Task              | Code                                                                     |
@@ -340,10 +344,15 @@ User::transaction(function () {
 | Task                | Code                                                       |
 |---------------------|------------------------------------------------------------|
 | MySQL MATCH AGAINST | `MatchAgainst(['title'])->mustHave(['PHP'])`               |
-| PG plain search     | `->whereFulltext(['title', 'body'], 'database')`           |
-| PG phrase search    | `->whereFulltext('title', 'query builder', 'phrase')`      |
-| PG websearch        | `->whereFulltext('body', '"exact" -exclude', 'websearch')` |
+| Plain search        | `->whereFulltext(['title', 'body'], 'database')`           |
+| Phrase search       | `->whereFulltext('title', 'query builder', 'phrase')`      |
+| Websearch           | `->whereFulltext('body', '"exact" -exclude', 'websearch')` |
 | Or fulltext         | `->orWhereFulltext('body', 'optimization')`                |
+
+`whereFulltext()` works on all three engines. Only `websearch` reads operators
+in the term; `plain` never does. `$language` is PostgreSQL-only. MySQL needs a
+`FULLTEXT` index on exactly the columns searched; SQLite needs an FTS5 table and
+takes one column per call.
 
 ## RETURNING (PostgreSQL, SQLite 3.35+)
 

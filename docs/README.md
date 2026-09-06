@@ -87,12 +87,13 @@ Requires PHP 8.4+ with `ext-pdo`.
 - JOIN (inner, left, right, cross) with dot notation
 - JSON column queries with auto `->` path notation
 - Array column queries: `arrayContains()`, `arrayOverlaps()` (PostgreSQL native,
-  MySQL JSON fallback)
+  emulated over JSON on MySQL and SQLite)
 - Sub-queries, unions, aggregations (count, sum, avg, min, max)
 - Raw expressions: `selectRaw()`, `whereRaw()`, `orderByRaw()`, `havingRaw()`
 - Date filters: `whereDate()`, `whereMonth()`, `whereYear()`, `whereTime()`
 - Multi-column conditions: `whereAny()`, `whereAll()`, `whereNone()`
-- Full-text search: `whereFulltext()` (PostgreSQL tsvector, MySQL MATCH AGAINST)
+- Full-text search: `whereFulltext()` (PostgreSQL tsvector, MySQL MATCH AGAINST,
+  SQLite FTS5), with `plain`, `phrase` and `websearch` modes on each
 - Row-level locking: `forUpdate()`, `forShare()`, `forUpdateNoWait()`,
   `forUpdateSkipLocked()`
 - Conditional clauses: `when()`, `unless()`, `scope()`, `tap()`

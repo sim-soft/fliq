@@ -303,6 +303,44 @@ Post::find()
     ->get();
 ```
 
+### The same modes on other engines
+
+`whereFulltext()` works on MySQL and SQLite too, and the three modes mean the
+same thing on each — a term is only read as query syntax in `websearch` mode.
+
+| Mode        | PostgreSQL             | MySQL                       | SQLite (FTS5)   |
+|-------------|------------------------|-----------------------------|-----------------|
+| `plain`     | `plainto_tsquery`      | `IN NATURAL LANGUAGE MODE`  | `MATCH`         |
+| `phrase`    | `phraseto_tsquery`     | quoted, `IN BOOLEAN MODE`   | quoted `MATCH`  |
+| `websearch` | `websearch_to_tsquery` | `IN BOOLEAN MODE`           | `MATCH`         |
+
+```php
+/* Plain: the hyphen is part of the term, not an exclusion, on every engine */
+Post::find()->whereFulltext(['title', 'body'], 'database -systems')->get();
+
+/* Websearch: now the operators are the caller's, and are honoured */
+Post::find()->whereFulltext(['title', 'body'], 'database -systems', 'websearch')->get();
+```
+
+MySQL requires a `FULLTEXT` index over exactly the columns searched. The
+`$language` argument is PostgreSQL-only; MySQL and SQLite ignore it.
+
+SQLite searches one column per call, and only against a table created with
+`CREATE VIRTUAL TABLE ... USING fts5` — passing several columns raises
+`InvalidArgumentException` rather than searching the first and dropping the
+rest. To cover several columns, search each one:
+
+```php
+/* SQLite: InvalidArgumentException — FTS5 matches one column at a time */
+Post::find()->whereFulltext(['title', 'body'], 'database')->get();
+
+/* Search them separately instead */
+Post::find()
+    ->whereFulltext('title', 'database')
+    ->orWhereFulltext('body', 'database')
+    ->get();
+```
+
 ### GIN Index Recommendation
 
 For production performance, create a GIN index:

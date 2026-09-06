@@ -261,9 +261,36 @@ class SQLiteGrammar implements Grammar
      */
     public function fulltextSearch(array $columns, string $mode = 'plain', string $language = 'english'): string
     {
-        // SQLite FTS5 uses MATCH syntax on virtual tables — limited support
-        $col = $columns[0] ?? 'content';
-        return "$col MATCH ?";
+        // SQLite full-text search is FTS5, which only works on a virtual table.
+        // MATCH against an ordinary table fails at execution with "unable to
+        // use function MATCH in the requested context", so this emits SQL that
+        // runs only if the caller built the table with FTS5.
+        //
+        // Every column after the first used to be dropped in silence:
+        // whereFulltext(['title', 'body'], ...) searched title alone and said
+        // nothing about body. FTS5 scopes MATCH to one column at a time and a
+        // search expression carries a single bound term, so the extra columns
+        // cannot be honoured here — say so rather than answering for one.
+        if ($columns === []) {
+            throw new InvalidArgumentException('Full-text search requires at least one column.');
+        }
+
+        if (count($columns) > 1) {
+            throw new InvalidArgumentException(
+                'SQLite full-text search matches one column at a time; '
+                . count($columns) . ' were given. Search each column separately, '
+                . 'or match the FTS5 table itself to cover every column.'
+            );
+        }
+
+        // A phrase is quoted inside the FTS5 query. Building the quotes in SQL
+        // keeps the term bound; a double quote in the term is replaced with a
+        // space so it cannot close the phrase and be read as query syntax.
+        $placeholder = $mode === 'phrase'
+            ? '(\'"\' || REPLACE(?, \'"\', \' \') || \'"\')'
+            : '?';
+
+        return "$columns[0] MATCH $placeholder";
     }
 
     /**
@@ -271,7 +298,12 @@ class SQLiteGrammar implements Grammar
      */
     public function supportsFulltext(): bool
     {
-        return false; // FTS5 requires virtual tables, not general-purpose
+        // FTS5 is compiled into SQLite by default, so MATCH is available — but
+        // only against a table created with CREATE VIRTUAL TABLE ... USING
+        // fts5. Against an ordinary table the statement fails at execution with
+        // "unable to use function MATCH in the requested context"; that is a
+        // property of the table, not of the driver.
+        return true;
     }
 
     /**
@@ -288,6 +320,13 @@ class SQLiteGrammar implements Grammar
      */
     public function arrayOverlaps(string $column, int $count, string $type = 'text'): string
     {
+        // With no values this used to emit IN (), which SQLite happens to
+        // accept but every other engine rejects as a syntax error. An overlap
+        // with nothing matches nothing, so say that directly.
+        if ($count === 0) {
+            return '0 = 1';
+        }
+
         $placeholders = implode(',', array_fill(0, $count, '?'));
         return "EXISTS (SELECT 1 FROM json_each($column) WHERE json_each.value IN ($placeholders))";
     }

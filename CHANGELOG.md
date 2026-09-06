@@ -66,8 +66,63 @@ All notable changes to `simsoft/fliq` are documented here.
   now go through `quoteTable()` / `quoteColumn()`, which validate first — on
   every write builder, on the bulk column list, and on `setCounter()`, which
   writes its column on both sides of the assignment.
+- **A quote in a phrase search term reopened the query as operators** — MySQL
+  phrase mode wraps the term in double quotes inside `BOOLEAN MODE`, where a
+  quote in the term itself closed the phrase early and the remainder was read
+  as query syntax. `whereFulltext(['title', 'body'], 'data"base systems',
+  'phrase')` matched rows containing neither phrase. The term stays bound, and
+  the quote is now replaced with a space before the phrase is assembled; the
+  same applies to SQLite's FTS5 phrase mode.
 
 **Data Integrity**
+
+- **`arrayContains()` never worked for a string on MySQL** — the candidate value
+  was bound straight into `JSON_CONTAINS(col, ?, '$')`, which requires JSON
+  text rather than a bare value, so every string raised `Invalid JSON text in
+  argument 1 to function json_contains: "Invalid value." at position 0`.
+  Integers passed only by accident, `2` being valid JSON on its own. The
+  candidate is now built in SQL with `JSON_ARRAY(?)`, so the value stays bound
+  and the same call selects the same rows on MySQL, PostgreSQL and SQLite.
+- **Array elements were compared as strings on MySQL, so integers never
+  matched** — PDO binds every value as a string, so `JSON_ARRAY(?)` given `2`
+  built `["2"]`, which does not match a stored `[1,2]`.
+  `arrayContains('role_ids', 5, 'int')` and `arrayOverlaps('nums', [2, 9],
+  'int')` both returned nothing where PostgreSQL returned the row. The element
+  type the caller already passes for PostgreSQL's `::int[]` cast now also
+  selects a MySQL cast for the bound value (`SIGNED`, `DECIMAL`, `DATE`,
+  `DATETIME`, `CHAR`), chosen from a fixed map so the type never reaches the
+  statement as SQL.
+- **`arrayOverlaps($col, [])` emitted `IN ()` on SQLite** — a syntax error on
+  every other engine, accepted only because SQLite is lenient. It now emits
+  `0 = 1` and binds nothing, on both SQLite and MySQL; PostgreSQL's native
+  `ARRAY[]::text[]` was already valid. This matches how `like($col, [])`
+  already treats an empty value list.
+- **Every MySQL search mode ran in `BOOLEAN MODE`, which changed results and
+  crashed on ordinary terms** — `fulltextSearch()` ignored its `$mode` argument
+  entirely, so `plain` and `phrase` emitted the same SQL as `websearch`. In
+  boolean mode punctuation in the term is query syntax: searching
+  `'database -systems'` returned nothing, because the hyphen was read as an
+  exclusion the caller never wrote, and `'C++ database'` raised
+  `QueryException: syntax error, unexpected '+'` — an ordinary search term
+  crashed the query. `plain` now uses `NATURAL LANGUAGE MODE`, `phrase` quotes
+  the bound term, and `websearch` keeps `BOOLEAN MODE`, where the operators are
+  the caller's intent. The three modes now agree with their PostgreSQL
+  counterparts on the same data.
+- **SQLite full-text search dropped every column after the first** —
+  `whereFulltext(['title', 'body'], ...)` searched `title` alone and said
+  nothing about `body`, so the result was quietly incomplete. FTS5 scopes
+  `MATCH` to one column and a search expression carries one bound term, so
+  several columns cannot be honoured in a single expression; passing more than
+  one now raises `InvalidArgumentException` naming the alternative. An empty
+  column list, which previously fell back to a column named `content` that the
+  caller never mentioned, is refused for the same reason.
+- **SQLite reported that it had no full-text support while still emitting
+  `MATCH`** — `supportsFulltext()` returned `false`, but nothing consults it, so
+  callers got a statement that failed at execution with `unable to use function
+  MATCH in the requested context`. FTS5 is compiled into SQLite by default; the
+  requirement is a table created with `CREATE VIRTUAL TABLE ... USING fts5`,
+  which is a property of the table rather than the driver. The flag now reports
+  what the driver actually has.
 
 - **MySQL statement modifiers were emitted to every engine, and on PostgreSQL
   wrote to the wrong table** — `LOW_PRIORITY`, `IGNORE` and `QUICK` are MySQL

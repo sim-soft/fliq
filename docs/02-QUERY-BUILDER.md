@@ -904,24 +904,57 @@ $users = (new ActiveQuery())
 PostgreSQL supports native array column types (`text[]`, `int[]`, `varchar[]`).
 FLIQ provides fluent query methods for array containment and overlap checks.
 
+On MySQL and SQLite the same calls work against a JSON array column, so a query
+written once selects the same rows on all three engines.
+
 ### `arrayContains()` — Column contains a value
 
 ```php
-/* PostgreSQL: WHERE "user"."tags" @> ARRAY[?]::text[] */
+/* PostgreSQL: WHERE "user"."tags" @> ARRAY[?]::text[]
+   MySQL:      WHERE JSON_CONTAINS(`user`.`tags`, JSON_ARRAY(CAST(? AS CHAR)), '$')
+   SQLite:     WHERE EXISTS (SELECT 1 FROM json_each("user"."tags") WHERE json_each.value = ?) */
 User::find()->arrayContains('tags', 'php')->get();
 
 /* Integer array column */
+/* MySQL: WHERE JSON_CONTAINS(`user`.`role_ids`, JSON_ARRAY(CAST(? AS SIGNED)), '$') */
 User::find()->arrayContains('role_ids', 5, 'int')->get();
 ```
 
 ### `arrayOverlaps()` — Column has any of the given values
 
 ```php
-/* PostgreSQL: WHERE "user"."tags" && ARRAY[?, ?]::text[] */
+/* PostgreSQL: WHERE "user"."tags" && ARRAY[?, ?]::text[]
+   MySQL:      WHERE JSON_OVERLAPS(`user`.`tags`, JSON_ARRAY(CAST(? AS CHAR),CAST(? AS CHAR))) */
 User::find()->arrayOverlaps('tags', ['php', 'python'])->get();
 
 /* Integer array */
 User::find()->arrayOverlaps('department_ids', [1, 3, 5], 'int')->get();
+
+/* No values overlaps nothing — the condition is 0 = 1 and binds no value */
+User::find()->arrayOverlaps('tags', [])->get();
+```
+
+### The element type argument
+
+The third argument names the type of a single element. On PostgreSQL it is the
+cast in `ARRAY[?]::type[]`. On MySQL it decides how the bound value is compared:
+PDO sends every value as a string, so without it the integer `5` would be
+compared as `"5"` and would not match a stored `[1, 5]`.
+
+| `$type`                              | MySQL comparison |
+|--------------------------------------|------------------|
+| `text`, `varchar`, anything else      | as text          |
+| `int`, `integer`, `bigint`, `int4`, … | as an integer    |
+| `numeric`, `decimal`, `float`, …      | as a number      |
+| `date`                                | as a date        |
+| `timestamp`, `datetime`               | as a timestamp   |
+
+```php
+/* Matches a stored [1, 5] */
+User::find()->arrayContains('role_ids', 5, 'int')->get();
+
+/* Does NOT match a stored [1, 5] — 5 is compared as the text "5" */
+User::find()->arrayContains('role_ids', 5)->get();
 ```
 
 ### Or Variants
