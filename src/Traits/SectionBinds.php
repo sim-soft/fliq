@@ -114,7 +114,7 @@ trait SectionBinds
         $this->appendSectionBinds($this->selectBinds, $source->selectBinds);
         $this->appendSectionBinds($this->fromBinds, $source->fromBinds);
         $this->appendSectionBinds($this->joinBinds, $source->joinBinds);
-        $this->appendBinds($source->whereSectionBinds() ?? []);
+        $this->absorbBinds($source->whereSectionBinds());
         $this->appendSectionBinds($this->groupBinds, $source->groupBinds);
         $this->appendSectionBinds($this->havingBinds, $source->havingBinds);
         $this->appendSectionBinds($this->unionBinds, $source->unionBinds);

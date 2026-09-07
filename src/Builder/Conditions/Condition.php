@@ -71,7 +71,7 @@ class Condition extends Clause
     private function buildRawCondition(Raw $expression): string
     {
         $sql = (string)$expression;
-        $this->appendBinds($expression->getBinds() ?? []);
+        $this->absorbBinds($expression->getBinds());
 
         // The operator and value were dropped whenever the attribute was Raw,
         // so where(new Raw('score'), '>', 90) built a bare `WHERE score` — a

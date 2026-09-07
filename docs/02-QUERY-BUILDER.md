@@ -391,6 +391,44 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
+The right-hand side can also be a subquery or a `Raw` expression:
+
+```php
+/* WHERE `user`.`id` IN (SELECT `post`.`user_id` FROM `post`) */
+$authors = (new ActiveQuery())
+    ->from('user')
+    ->in('id', (new ActiveQuery())->from('post')->select('user_id'))
+    ->on('mysql')
+    ->get();
+```
+
+### Empty lists
+
+An empty list is a set with nothing in it, not an absent condition:
+
+```php
+/* WHERE 1 = 0 — matches no rows */
+$users = (new ActiveQuery())->from('user')->in('id', [])->on('mysql')->get();
+
+/* WHERE 1 = 1 — matches every row */
+$users = (new ActiveQuery())->from('user')->notIn('id', [])->on('mysql')->get();
+```
+
+This matters when the list is computed. An allow-list that filters down to
+nothing narrows the query to nothing, rather than dropping the restriction and
+returning the whole table:
+
+```php
+$visibleIds = $this->idsTheUserMaySee(); // may legitimately be []
+
+// Returns nothing when the user may see nothing.
+$posts = Post::find()->whereIn('id', $visibleIds)->get();
+```
+
+Note this differs from `like()`, where an empty array of patterns *is* skipped —
+a search with no terms is an absent filter, whereas membership of an empty set
+has a defined answer.
+
 ## Between Clauses
 
 Methods: `between()`, `notBetween()`, `orBetween()`, `orNotBetween()`

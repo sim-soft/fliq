@@ -140,19 +140,14 @@ abstract class Aggregate extends Builder
             // over the source query's SELECT and UNION values, whose
             // placeholders are not in this statement — the driver was given
             // more values than it had positions for and refused to run it.
-            $binds = $this->condition->getConditionBinds();
-            if ($binds !== null) {
-                $this->appendBinds($binds);
-            }
+            $this->absorbBinds($this->condition->getConditionBinds());
 
             return $this->normalizeConditionClause($condition);
         }
 
         if ($this->condition instanceof Raw) {
             $condition = $this->condition->getSQL();
-            if ($this->condition->getBinds()) {
-                $this->appendBinds($this->condition->getBinds());
-            }
+            $this->absorbBinds($this->condition->getBinds());
             return $this->normalizeConditionClause($condition);
         }
 

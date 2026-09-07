@@ -57,13 +57,13 @@ class Select extends Builder
                 $query->getOrderSQL(),
                 $query->getLimitSQL(),
             ]));
-            $this->appendBinds($query->getBinds());
+            $this->absorbBinds($query->getBinds());
             return $this;
         }
 
         if ($query instanceof Raw) {
             $this->condition = "WHERE $query";
-            $this->appendBinds($query->getBinds());
+            $this->absorbBinds($query->getBinds());
             return $this;
         }
 

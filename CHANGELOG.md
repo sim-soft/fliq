@@ -6,6 +6,53 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Set membership (IN / NOT IN)**
+
+- **An empty list matched every row instead of none** — `in()` returned early
+  when given `[]`, dropping the condition entirely, so
+  `->in('id', $allowedIds)` with an allow-list that filtered down to nothing
+  handed back the whole table rather than nothing. No error was raised: the
+  query simply answered a different question. Membership of a set with nothing
+  in it is false for every row and non-membership is true for every row —
+  confirmed against MySQL, PostgreSQL and SQLite, including for a NULL column —
+  so an empty list now builds `1 = 0` for `in()` and `1 = 1` for `notIn()`.
+  Skipping was also wrong in the other direction beside an `OR`, where
+  `orNotIn('col', [])` is constant-true and must widen the clause to every row;
+  dropped, it left the preceding condition to answer alone.
+  **Breaking:** code relying on an empty list meaning "no filter" must now
+  guard the call itself. Note `like()` keeps skipping an empty pattern array —
+  a search with no terms is an absent filter, whereas an empty set has a
+  defined answer.
+- **`IN` with a subquery or `Raw` expression that had nothing to bind could not
+  execute** — `getBinds()` reports "no binds" as `null`, and `appendBinds()`
+  reads a `null` as a value and bound one SQL NULL for it. The statement then
+  carried one bind with no placeholder to put it in, and the driver refused it
+  with `SQLSTATE[HY093]: Invalid parameter number` before reaching the server.
+  `WHERE id IN (SELECT user_id FROM post)` — a subquery with no `WHERE` of its
+  own — therefore never ran. The two meanings now have separate names:
+  `appendBinds()` still binds a value (including a deliberate NULL, as
+  `update(['token' => null])` needs), and a new `absorbBinds()` takes a nested
+  expression's binds and treats `null` as none. `Select` had the same defect
+  from the same cause and is fixed with it. `ExistsCondition`, `Aggregate`,
+  `Condition` and `SectionBinds` had each guarded by hand, three of them
+  spelling the guard differently; all now call `absorbBinds()`, so the one
+  place that can get this wrong is the one place it is written.
+- **A value that could not form a set built `IN ()`** — `InCondition`'s three
+  branches were consecutive `if`s with no `else` and no final `throw`, so a
+  scalar, a string or a `null` fell through all three and left an empty
+  parenthesis, which every engine rejects as a syntax error reported from the
+  server with nothing pointing back at the call that built it. It is now
+  refused when the condition is built, with the same message the `where()`
+  route already gave: `IN on "id" needs an array, subquery or Raw expression;
+  got int.`
+- **`in()` and `notIn()` built the list form twice** — `ActiveQuery` inlined a
+  "fast path" that assembled the placeholders itself and only delegated to
+  `InCondition` for subqueries and `Raw`, so one statement had two
+  implementations free to drift and `InCondition`'s list branch was unreachable
+  from the public API. Both now go through `InCondition`, which is where the
+  empty-list and bind defects above could be fixed once rather than in each
+  copy. Generated SQL for a non-empty list is unchanged.
+
 **Ordering**
 
 - **A list of column names was sorted by position, not by name** —

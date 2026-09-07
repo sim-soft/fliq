@@ -159,12 +159,23 @@ class ConditionShapeTest extends TestCase
     }
 
     #[Test]
-    public function anEmptySetSkipsTheConditionAsInDoes(): void
+    public function anEmptySetMatchesNothingAsInDoes(): void
     {
-        // Routed to in(), which already returns early for an empty list.
+        // Routed to in(), where an empty list is a set with nothing in it
+        // rather than a missing condition. This used to assert that the
+        // condition was skipped entirely, which is what made an empty
+        // allow-list return every row instead of none.
         $query = $this->query()->where('id', 'IN', []);
 
-        $this->assertSame('SELECT `u`.* FROM `user` `u`', (string)$query);
+        $this->assertSame('SELECT `u`.* FROM `user` `u` WHERE 1 = 0', (string)$query);
+    }
+
+    #[Test]
+    public function anEmptyNegatedSetMatchesEverything(): void
+    {
+        $query = $this->query()->where('id', 'NOT IN', []);
+
+        $this->assertSame('SELECT `u`.* FROM `user` `u` WHERE 1 = 1', (string)$query);
     }
 
     #[Test]

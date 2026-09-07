@@ -1144,6 +1144,11 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * In condition.
      *
+     * An empty list matches no rows, the answer SQL gives for membership of a
+     * set with nothing in it. It is not treated as an absent condition, so an
+     * empty allow-list narrows the query to nothing rather than widening it to
+     * everything.
+     *
      * @param string $attribute the attribute name
      * @param array<int, mixed>|ActiveQuery|Raw $values the array of values for the query
      * @param string $logicalOperator The logical operator. Either 'AND' or 'OR'.
@@ -1151,18 +1156,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function in(string $attribute, array|ActiveQuery|Raw $values, string $logicalOperator = 'AND'): static
     {
-        if (!$values) {
-            return $this;
-        }
-
-        // Fast path for array values (most common)
-        if (is_array($values)) {
-            $placeholders = implode(',', array_fill(0, count($values), '?'));
-            $sql = "{$this->queryAttribute($attribute)} IN ($placeholders)";
-            $this->addConditionSQL($sql, $values, $logicalOperator);
-            return $this;
-        }
-
         return $this->onCondition(new InCondition($attribute, $values), $logicalOperator);
     }
 
@@ -1181,6 +1174,9 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Not in condition.
      *
+     * An empty list matches every row: nothing is excluded when the exclusion
+     * list is empty.
+     *
      * @param string $attribute the attribute name
      * @param array<int, mixed>|ActiveQuery|Raw $values the array of values for the query
      * @param string $logicalOperator The logical operator. Either 'AND' or 'OR'.
@@ -1188,18 +1184,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function notIn(string $attribute, array|ActiveQuery|Raw $values, string $logicalOperator = 'AND'): static
     {
-        if (!$values) {
-            return $this;
-        }
-
-        // Fast path for array values
-        if (is_array($values)) {
-            $placeholders = implode(',', array_fill(0, count($values), '?'));
-            $sql = "{$this->queryAttribute($attribute)} NOT IN ($placeholders)";
-            $this->addConditionSQL($sql, $values, $logicalOperator);
-            return $this;
-        }
-
         return $this->onCondition(new InCondition($attribute, $values, false), $logicalOperator);
     }
 

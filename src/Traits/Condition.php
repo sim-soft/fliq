@@ -41,9 +41,7 @@ trait Condition
                 $this->condition->getOrderSQL(),
                 $this->condition->getLimitSQL(),
             ]));
-            if ($this->condition->getBinds()) {
-                $this->appendBinds($this->condition->getBinds());
-            }
+            $this->absorbBinds($this->condition->getBinds());
 
             // An ActiveQuery's sections arrive with their own keywords, so this
             // only has emptiness left to decide.
@@ -52,9 +50,7 @@ trait Condition
 
         if ($this->condition instanceof Raw) {
             $condition = $this->condition->getSQL();
-            if ($this->condition->getBinds()) {
-                $this->appendBinds($this->condition->getBinds());
-            }
+            $this->absorbBinds($this->condition->getBinds());
             return $this->normalizeConditionClause($condition);
         }
 
