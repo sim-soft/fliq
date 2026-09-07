@@ -1330,12 +1330,46 @@ abstract class Model implements ArrayAccess
      *
      * @param string|ActiveQuery|Raw $condition The delete condition.
      * @return bool
+     * @throws QueryException If the condition would not narrow the delete.
      */
     public function deleteAll(string|ActiveQuery|Raw $condition): bool
     {
+        // The type declaration was the whole guard, and it only rules out
+        // null. An empty string, a Raw holding '', or an ActiveQuery with no
+        // conditions all built a bare `DELETE FROM table` and emptied it —
+        // which is precisely the accident this method exists to prevent, and
+        // it arrives through the most ordinary route there is: a filter that
+        // came back empty, so the condition assembled to nothing.
+        $this->requireNarrowingCondition($condition);
+
         return (new Delete($this->getTable(), $condition))
             ->withConnection($this->getConnectionName())
             ->execute();
+    }
+
+    /**
+     * Refuse a condition that would delete every row.
+     *
+     * @param string|ActiveQuery|Raw $condition The condition handed to deleteAll().
+     * @return void
+     * @throws QueryException If the condition contributes no WHERE clause.
+     */
+    private function requireNarrowingCondition(string|ActiveQuery|Raw $condition): void
+    {
+        $narrows = match (true) {
+            $condition instanceof ActiveQuery => $condition->getWhereSQL() !== null,
+            $condition instanceof Raw => $condition->getSQL() !== '',
+            default => trim($condition) !== '',
+        };
+
+        if ($narrows) {
+            return;
+        }
+
+        throw new QueryException(
+            'deleteAll() requires a condition that narrows the delete; the one given was empty. '
+            . 'Call deleteAllUnchecked() to delete every row on purpose.'
+        );
     }
 
     /**
@@ -1481,7 +1515,14 @@ abstract class Model implements ArrayAccess
      */
     protected function isRelationKey(string $key, mixed $value): bool
     {
-        if (!method_exists($this, $key)) {
+        // method_exists() alone let this CALL any method whose name happened to
+        // appear as a key: `saveTogether(['delete' => [...]])` ran delete() and
+        // removed the row, then carried on saving. Payload keys routinely come
+        // from a request body, so the caller does not choose these names.
+        // This is the same hole ResolvesRelations closed for property reads,
+        // and it is closed the same way — only methods that declare they return
+        // a Relation and take no required arguments are eligible.
+        if (!$this->isRelationMethod($key)) {
             return false;
         }
 
@@ -1493,9 +1534,7 @@ abstract class Model implements ArrayAccess
             return false;
         }
 
-        $result = $this->{$key}();
-
-        return $result instanceof Relation;
+        return $this->{$key}() instanceof Relation;
     }
 
     /**
@@ -1526,6 +1565,7 @@ abstract class Model implements ArrayAccess
      * @param string $relationName The relation method name.
      * @param mixed $data The relation data.
      * @return bool
+     * @throws QueryException If a related record refused to save.
      */
     protected function saveRelationData(string $relationName, mixed $data): bool
     {
@@ -1536,44 +1576,10 @@ abstract class Model implements ArrayAccess
         }
 
         if (!$relation->isMultiple()) {
-            return $this->saveHasOneRelation($relation, $data);
+            return $this->saveRelatedItem($relation, $data);
         }
 
         return $this->saveHasManyRelation($relation, $data);
-    }
-
-    /**
-     * Save a hasOne relation with nested support.
-     *
-     * @param Relation $relation The relation instance.
-     * @param mixed $data Array or Model.
-     * @return bool
-     */
-    private function saveHasOneRelation(Relation $relation, mixed $data): bool
-    {
-        if ($data instanceof self) {
-            $relation->save($data);
-            return true;
-        }
-
-        if (!is_array($data)) {
-            return true;
-        }
-
-        $relatedClass = $relation->getRelatedClass();
-        /** @var Model $tempModel */
-        $tempModel = new $relatedClass();
-        [$attributes, $nestedRelations] = $tempModel->separateRelations($data);
-
-        $savedModel = $relation->save($attributes);
-
-        foreach ($nestedRelations as $nestedName => $nestedData) {
-            if (!$savedModel->saveRelationData($nestedName, $nestedData)) {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     /**
@@ -1590,7 +1596,7 @@ abstract class Model implements ArrayAccess
         }
 
         foreach ($data as $item) {
-            if (!$this->saveHasManyItem($relation, $item)) {
+            if (!$this->saveRelatedItem($relation, $item)) {
                 return false;
             }
         }
@@ -1599,13 +1605,17 @@ abstract class Model implements ArrayAccess
     }
 
     /**
-     * Save a single hasMany item with nested support.
+     * Save one related record and then its own nested relations.
+     *
+     * Serves both hasOne and one element of a hasMany. These were two
+     * near-identical private methods; keeping one meaning in one place is the
+     * only way a fix to it cannot reach one arm and miss the other.
      *
      * @param Relation $relation The relation instance.
      * @param mixed $item A Model instance or attributes array.
      * @return bool
      */
-    private function saveHasManyItem(Relation $relation, mixed $item): bool
+    private function saveRelatedItem(Relation $relation, mixed $item): bool
     {
         if ($item instanceof self) {
             $relation->save($item);

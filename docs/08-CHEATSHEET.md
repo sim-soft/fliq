@@ -248,14 +248,15 @@ User::transaction(function () {
 | `$model->increment('views')`           | Atomic increment                             |
 | `$model->decrement('stock', 5)`        | Atomic decrement                             |
 | `$model->delete()`                     | Delete record                                |
-| `$model->deleteAll($condition)`        | Delete all matching condition                |
+| `$model->deleteAll($condition)`        | Delete all matching condition (throws on an empty one) |
+| `$model->deleteAllUnchecked()`         | Delete every row, deliberately               |
 | `$model->refresh()`                    | Reload from database                         |
 | `$model->replicate()`                  | Clone as new unsaved instance                |
 | `$model->hasOne(Model::class, [...])`  | Define has-one relation                      |
 | `$model->hasMany(Model::class, [...])` | Define has-many relation                     |
 | `$model->setRelation('name', $val)`    | Inject preloaded relation                    |
 | `$model->relationLoaded('name')`       | Check if relation is loaded (no query)       |
-| `$model->saveTogether([...])`          | Save model + nested relations in transaction |
+| `$model->saveTogether([...])`          | Save model + nested relations in transaction (throws + rolls back on any failure) |
 
 ### Property Access
 

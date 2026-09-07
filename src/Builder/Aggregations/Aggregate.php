@@ -5,12 +5,15 @@ namespace Simsoft\DB\Builder\Aggregations;
 use Simsoft\DB\Builder\ActiveQuery;
 use Simsoft\DB\Builder\Builder;
 use Simsoft\DB\Builder\Raw;
+use Simsoft\DB\Traits\ConditionClause;
 
 /**
  * Aggregate Query Builder class.
  */
 abstract class Aggregate extends Builder
 {
+    use ConditionClause;
+
     /** @var string Aggregate function name */
     protected string $functionName = 'COUNT';
 
@@ -142,7 +145,7 @@ abstract class Aggregate extends Builder
                 $this->appendBinds($binds);
             }
 
-            return $condition;
+            return $this->normalizeConditionClause($condition);
         }
 
         if ($this->condition instanceof Raw) {
@@ -150,14 +153,10 @@ abstract class Aggregate extends Builder
             if ($this->condition->getBinds()) {
                 $this->appendBinds($this->condition->getBinds());
             }
-            return $condition;
+            return $this->normalizeConditionClause($condition);
         }
 
-        if ($this->condition !== '') {
-            return 'WHERE ' . trim($this->condition);
-        }
-
-        return null;
+        return $this->normalizeConditionClause($this->condition);
     }
 
     /**

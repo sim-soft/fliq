@@ -192,6 +192,63 @@ All notable changes to `simsoft/fliq` are documented here.
   answers on MySQL and errors on PostgreSQL — that divergence is not specific to
   the root and is now documented.
 
+**Destructive operations and nested saves**
+
+- **`deleteAll()` emptied the table when its condition came back empty** — the
+  method's own docblock says it "requires an explicit condition to prevent
+  accidental full-table deletes", but the only thing enforcing that was the
+  parameter type, which rules out `null` and nothing else. `deleteAll('')`,
+  `deleteAll(new Raw(''))` and `deleteAll($queryWithNoWhere)` each built a bare
+  `DELETE FROM table`, removed every row, and returned `true`. This arrives
+  through the most ordinary route there is — a filter that assembled to nothing
+  — and cascading foreign keys carry it into the child tables. Every shape that
+  contributes no `WHERE` is now refused with a `QueryException` naming
+  `deleteAllUnchecked()` as the deliberate alternative; a condition that
+  narrows, including a purposeful `1 = 1`, is unaffected.
+- **A key in a `saveTogether()` payload could invoke any zero-argument method**
+  — deciding whether an array-valued key named a relation was done by *calling*
+  the method, guarded only by `method_exists()`. So
+  `saveTogether(['delete' => [...]])` ran `delete()`, removed the row, then
+  carried on saving it, because the call returned a `bool` and the key was
+  reclassified as a column. Payload keys typically come from a request body, so
+  the caller does not choose these names: 33 methods were reachable this way on
+  a plain model. This is the same hole `ResolvesRelations` closed for
+  `$model->foo` reads, and it is now closed the same way — only methods
+  declaring a `Relation` return type and no required arguments are eligible.
+- **A related model that refused to save reported success** —
+  `Relation::save()` discarded the result of `$model->save()` and returned the
+  model regardless, so a refusal from `validate()` or a `beforeSave()` hook was
+  indistinguishable from a write: same return type, no exception, and for an
+  update `exists()` was still true. It now raises a `QueryException` carrying
+  the model's own error messages.
+- **`saveTogether()` committed the parent and none of its children, and
+  returned `true`** — it sits directly on top of the above, and its own
+  documentation promises that if any part fails the whole thing rolls back. The
+  transaction machinery was correct; it was simply never told anything had gone
+  wrong. Worse at depth: the parent record silently failed, so its child was
+  written with a foreign key of `NULL`, which surfaced only because that column
+  happened to be `NOT NULL`. A nullable one would have stored the orphan
+  silently. Failures now propagate and the transaction rolls back, for hasOne
+  and hasMany alike — the two near-identical private methods that handled them
+  are also now one, so a fix to either can no longer miss the other.
+
+**Query Builder — conditions**
+
+- **A `Raw` condition on `DELETE`, `UPDATE` or an aggregate was emitted without
+  `WHERE`** — the keyword was prefixed for string conditions only. An
+  `ActiveQuery` is right to be emitted verbatim, since its sections carry their
+  own keywords, but a `Raw` is written the way every documented `Raw` fragment
+  is written, and `deleteAll(new Raw('`n` > ?', [2]))` produced
+  ``DELETE FROM `t` `n` > ?``. The mirror case — a string that did include the
+  keyword — came out as `WHERE WHERE ...`, and a whitespace-only condition left
+  a dangling `WHERE`. All three were syntax errors rather than silent damage, so
+  the server rejected them, but the condition itself was well-formed and nothing
+  told the caller which of the three shapes wanted the keyword. Every shape now
+  produces the same clause. A fragment that legitimately opens with `WHERE`,
+  `ORDER BY`, `GROUP BY`, `HAVING`, `LIMIT`, `OFFSET` or a `JOIN` is left as
+  written, while `LEFT(...)` and `RIGHT(...)` are read as the string functions
+  they are rather than as joins.
+
 **Data Integrity**
 
 - **A cast attribute could not hold or be cleared to NULL** — casts were applied

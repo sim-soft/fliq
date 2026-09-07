@@ -189,6 +189,28 @@ $user->updateAll(['status' => 0], User::find()->where('last_login', '<', '2024-0
 
 /* Delete all matching records */
 $user->deleteAll(User::find()->where('status', 0));
+
+/* The condition may also be a string or a Raw — all three build the same statement */
+$user->deleteAll('`status` = 0');
+$user->deleteAll(new Raw('`status` = ?', [0]));
+```
+
+**`deleteAll()` refuses an empty condition.** A filter that came back empty is the
+ordinary way a bulk delete turns into a full-table delete, so a condition that
+contributes no `WHERE` — `''`, whitespace, an empty `Raw`, or an `ActiveQuery` with no
+filters — raises `QueryException` rather than emptying the table:
+
+```php
+$user->deleteAll('');                        /* QueryException */
+$user->deleteAll(new Raw(''));               /* QueryException */
+$user->deleteAll(User::find());              /* QueryException — no where() */
+$user->deleteAll(User::find()->limit(10));   /* QueryException — limit does not narrow */
+```
+
+To delete every row on purpose, say so:
+
+```php
+$user->deleteAllUnchecked();                 /* DELETE FROM `user` */
 ```
 
 ### Refresh from Database
@@ -613,7 +635,8 @@ Use hooks for model internals. Use events for app-level concerns.
 | `updateAttributes([...])`  | Direct UPDATE on a single record | Events, hooks, dirty tracking, validation, **mass assignment protection** |
 | `updateAll([...], $query)` | Bulk UPDATE on multiple records  | Events, hooks, dirty tracking, validation, **mass assignment protection** |
 | `updateCounter('col', 1)`  | Atomic increment/decrement       | Events, hooks, dirty tracking, validation                                 |
-| `deleteAll($condition)`    | Bulk DELETE                      | Events, hooks                                                             |
+| `deleteAll($condition)`    | Bulk DELETE (rejects an empty condition) | Events, hooks                                                     |
+| `deleteAllUnchecked()`     | Bulk DELETE of every row         | Events, hooks                                                             |
 | `insertBatch([...])`       | Bulk INSERT                      | Events, hooks, dirty tracking, validation, **mass assignment protection** |
 | `updateBatch([...])`       | Bulk CASE WHEN UPDATE            | Events, hooks, dirty tracking, validation, **mass assignment protection** |
 

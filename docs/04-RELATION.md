@@ -608,7 +608,33 @@ $user->saveTogether([
 | Model from `findByPk()` | Yes (`exists()` = true) | UPDATE |
 | `new Model([...])` | No (`isNew()` = true) | INSERT |
 
-**Transaction safety:** If any save fails (FK violation, unique constraint, etc.), the entire operation rolls back — no partial saves.
+**Transaction safety:** If any save fails, the entire operation rolls back — no partial
+saves. This covers both kinds of failure:
+
+- A **driver error** (FK violation, unique constraint, and so on) raises `QueryException`
+  from the driver.
+- A **refusal** — `validate()` returning false, or a `beforeSave()` hook returning false —
+  raises `QueryException` from `Relation::save()`, carrying the model's own error messages.
+
+Either way the transaction is rolled back and the exception reaches the caller, so the
+parent is never committed without its children.
+
+```php
+try {
+    $user->saveTogether([
+        'username' => 'john',
+        'email'    => 'john@test.com',
+        'posts'    => [['title' => 'First', 'slug' => 'first', 'body' => 'x', 'category_id' => 1, 'status_code' => 1]],
+    ]);
+} catch (QueryException $e) {
+    /* Nothing was written — not the user, not the post. */
+    echo $e->getMessage();
+}
+```
+
+> **Note:** a related model that refuses to save used to be skipped silently, and
+> `saveTogether()` returned `true` having committed the parent alone. It now throws.
+> If you were relying on the old behaviour, validate before calling rather than after.
 
 ### Using Manual Transactions
 
@@ -632,9 +658,9 @@ User::transaction(function () {
 
 | Method | Relation type | What it does |
 |--------|--------------|--------------|
-| `saveTogether(array)` | Any | Saves model + all nested relations in one transaction |
-| `save(Model\|array)` | hasOne / hasMany | Sets FK, saves one model |
-| `saveMany(array)` | hasMany | Sets FK, saves multiple models |
+| `saveTogether(array)` | Any | Saves model + all nested relations in one transaction. Throws `QueryException` and rolls back if any part fails |
+| `save(Model\|array)` | hasOne / hasMany | Sets FK, saves one model. Throws `QueryException` if the model refuses to save |
+| `saveMany(array)` | hasMany | Sets FK, saves multiple models. Throws `QueryException` on the first refusal |
 | `attach(array $ids)` | M:N (viaTable) | INSERT into pivot |
 | `detach(array\|null)` | M:N (viaTable) | DELETE from pivot |
 | `sync(array $ids)` | M:N (viaTable) | Add missing + remove extra from pivot |

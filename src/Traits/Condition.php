@@ -11,6 +11,7 @@ use Simsoft\DB\Builder\Raw;
 trait Condition
 {
     use Binds;
+    use ConditionClause;
 
     /** @var string|ActiveQuery|Raw|null Query condition. */
     protected string|ActiveQuery|Raw|null $condition = null;
@@ -43,7 +44,10 @@ trait Condition
             if ($this->condition->getBinds()) {
                 $this->appendBinds($this->condition->getBinds());
             }
-            return $condition;
+
+            // An ActiveQuery's sections arrive with their own keywords, so this
+            // only has emptiness left to decide.
+            return $this->normalizeConditionClause($condition);
         }
 
         if ($this->condition instanceof Raw) {
@@ -51,11 +55,11 @@ trait Condition
             if ($this->condition->getBinds()) {
                 $this->appendBinds($this->condition->getBinds());
             }
-            return $condition;
+            return $this->normalizeConditionClause($condition);
         }
 
-        if (is_string($this->condition) && $this->condition !== '') {
-            return 'WHERE ' . trim($this->condition);
+        if (is_string($this->condition)) {
+            return $this->normalizeConditionClause($this->condition);
         }
 
         return null;

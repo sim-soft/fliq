@@ -3,6 +3,7 @@
 namespace Simsoft\DB;
 
 use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Exceptions\QueryException;
 
 /**
  * Relation class.
@@ -232,6 +233,7 @@ class Relation
      *
      * @param Model|array<string, mixed> $model The related model or attributes array.
      * @return Model The saved model.
+     * @throws QueryException If the model refused to save.
      */
     public function save(Model|array $model): Model
     {
@@ -240,7 +242,20 @@ class Relation
         }
 
         $model->{$this->foreignKey} = $this->localValue;
-        $model->save();
+
+        // The result was discarded and the model handed back regardless, so a
+        // save refused by validation or by a beforeSave hook was indistinguish-
+        // able from one that wrote a row: same return type, no exception, and
+        // exists() still true when updating an existing record. A save that
+        // did not save is a failure, and it is reported like the failures the
+        // driver already raises here.
+        if (!$model->save()) {
+            throw new QueryException(sprintf(
+                'Failed to save related %s.%s',
+                $model::class,
+                $model->getErrors() === [] ? '' : ' ' . implode(' ', $model->getErrors())
+            ));
+        }
 
         return $model;
     }
@@ -282,6 +297,7 @@ class Relation
      *
      * @param array<int, Model|array<string, mixed>> $models The models or attribute arrays.
      * @return array<int, Model> The saved models.
+     * @throws QueryException If any model refused to save.
      */
     public function saveMany(array $models): array
     {
