@@ -1106,6 +1106,18 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
 
 ### Changed
 
+- `Traits\Debug` removed. Nothing used it: no class in `src/` applied the trait
+  (checked by reflection across every type, following nested traits and parent
+  classes, not by name search), nothing read its `$debugMode` property, the
+  model generator never emitted it, and no documentation mentioned it. It had
+  been unreferenced since the initial commit, and its `enableDebug()` /
+  `disableDebug()` names collided with the real, live switch on
+  `QueryException`, which is what the docs describe. The debug helpers callers
+  actually use — `dump()`, `dd()` and `explain()` on `Traits\Execute`,
+  `getFullSQL()` and `tap()` on `ActiveQuery` — never consulted the flag and are
+  unaffected; they print when called, which is why a mode flag had nothing to
+  gate. **This is breaking** only for code applying `Simsoft\DB\Traits\Debug`
+  directly; it was undocumented, so no caller was told it existed.
 - `Grammar::upsertSQL()` removed. It built the whole statement, which is what
   forced the two-branch structure above: to honour an explicit update value it
   would have needed the values as well as the column names, and it took only the
