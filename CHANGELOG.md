@@ -6,6 +6,30 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Ordering**
+
+- **A list of column names was sorted by position, not by name** —
+  `orderBy()` reads an array as `column => direction`, but a plain list arrives
+  as `position => column`. The positions were taken as the column names and the
+  names as the directions, so `orderBy(['score', 'id'])` emitted
+  ``ORDER BY `user`.`0` ASC, `user`.`1` ASC`` and the server rejected it with
+  "Unknown column 'user.0' in 'order clause'". A list entry now takes its name
+  from the value and its direction from the `$direction` argument, and the two
+  shapes may be mixed in one array (`orderBy(['role', 'score' => 'DESC'])`).
+- **`orderByDesc()` sorted ascending whenever given an array** — it forwards to
+  `orderBy($attribute, 'DESC')`, but the array branch never consulted
+  `$direction`, so the `DESC` was dropped and the rows came back in exactly the
+  reverse of the requested order, without an error. `orderByDesc(['score'])`
+  now sorts descending, and the direction whitelist and the `RAND()` special
+  case apply to every shape rather than only to the single-column one.
+- **An empty attribute name raised a PHP warning and produced invalid SQL** —
+  `queryAttribute()` indexes the first character of the name in every branch, so
+  `''` emitted "Uninitialized string offset 0" and then a bare `{}` placeholder
+  that failed at the server as a syntax error. It is now rejected with an
+  `InvalidArgumentException` naming the problem, at the call that made it, for
+  every attribute entry point (`select`, `where`, `groupBy`, `orderBy`, `in`,
+  `isNull`, `between`, and the rest).
+
 **Collections and query reuse**
 
 - **The documented row-existence check always threw** — `ActiveQuery` declares

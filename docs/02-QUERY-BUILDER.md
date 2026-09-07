@@ -1276,6 +1276,22 @@ $users = (new ActiveQuery())
     ->on('mysql')
     ->get();
 
+/* SELECT `user`.* FROM `user` ORDER BY `user`.`last_name` DESC, `user`.`first_name` DESC */
+// A plain list takes the direction argument, so several columns can share one.
+$users = (new ActiveQuery())
+    ->from('user')
+    ->orderByDesc(['last_name', 'first_name'])
+    ->on('mysql')
+    ->get();
+
+/* SELECT `user`.* FROM `user` ORDER BY `user`.`role` ASC, `user`.`score` DESC */
+// The two shapes may be mixed: a keyed entry uses its own direction.
+$users = (new ActiveQuery())
+    ->from('user')
+    ->orderBy(['role', 'score' => 'DESC'])
+    ->on('mysql')
+    ->get();
+
 /* SELECT `user`.* FROM `user` ORDER BY `user`.`created_at` DESC */
 $users = (new ActiveQuery())
     ->from('user')
@@ -1381,9 +1397,10 @@ This makes a sort direction taken straight from a URL safe to pass through:
 User::find()->orderBy('created_at', $_GET['sort'] ?? 'ASC')->get();
 ```
 
-Both forms are guarded the same way, including the array form
-(`orderBy(['id' => 'DESC'])`). For a sort expression the keywords can't
-express, use `orderByRaw()`.
+Every form is guarded the same way: the keyed array (`orderBy(['id' => 'DESC'])`)
+and the list array, whose direction comes from the argument
+(`orderBy(['id', 'score'], $_GET['sort'] ?? 'ASC')`). For a sort expression the
+keywords can't express, use `orderByRaw()`.
 
 ### Limit and page numbers must make sense
 

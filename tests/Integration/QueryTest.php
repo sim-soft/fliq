@@ -469,6 +469,53 @@ class QueryTest extends DatabaseTestCase
         $this->assertCount(4, $results);
     }
 
+    /**
+     * A SELECT of one column from user, restricted by score.
+     *
+     * @param string $operator The comparison operator.
+     * @param int $score The score to compare against.
+     * @return ActiveQuery
+     */
+    private function scoredIds(string $operator, int $score): ActiveQuery
+    {
+        return (new ActiveQuery())
+            ->select('id')
+            ->from('user')
+            ->where('score', $operator, $score)
+            ->withConnection('mysql');
+    }
+
+    #[Test]
+    public function unionAllKeepsDuplicateRows(): void
+    {
+        // Both halves select the same 8 rows; UNION ALL must return all 16.
+        $query = $this->scoredIds('>', 40);
+        $results = $query->unionAll($this->scoredIds('>', 40))->query($query);
+
+        $this->assertCount(16, $results);
+    }
+
+    #[Test]
+    public function unionDistinctRemovesDuplicateRows(): void
+    {
+        $query = $this->scoredIds('>', 40);
+        $results = $query->unionDistinct($this->scoredIds('>', 40))->query($query);
+
+        $this->assertCount(8, $results);
+    }
+
+    #[Test]
+    public function unionHalvesKeepTheirOwnBinds(): void
+    {
+        // Asymmetric halves: 2 rows score above 90 and all 10 score above 30.
+        // The bound values cannot be swapped between the halves without the
+        // total changing, so the count alone pins the pairing.
+        $query = $this->scoredIds('>', 90);
+        $results = $query->unionAll($this->scoredIds('>', 30))->query($query);
+
+        $this->assertCount(12, $results);
+    }
+
     // ------------------------------------------------------------------
     // Complex / combined queries
     // ------------------------------------------------------------------

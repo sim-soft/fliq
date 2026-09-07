@@ -108,9 +108,19 @@ trait Qualifier
      *
      * @param string $attribute The attribute name.
      * @return string
+     * @throws InvalidArgumentException If the attribute name is empty.
      */
     protected function queryAttribute(string $attribute): string
     {
+        // Every branch below indexes the first character, so an empty name
+        // raised "Uninitialized string offset 0" and then emitted a bare `{}`
+        // placeholder that failed as a syntax error at the server. Rejecting it
+        // here names the real mistake, at the call that made it, for all of the
+        // attribute entry points at once.
+        if ($attribute === '') {
+            throw new InvalidArgumentException('Attribute name must not be empty.');
+        }
+
         // Legacy explicit prefix: !table.col
         if ($attribute[0] === '!') {
             $raw = ltrim($attribute, '!');

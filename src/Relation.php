@@ -18,7 +18,8 @@ use Simsoft\DB\Builder\ActiveQuery;
  * @method $this notNull(string $attribute)
  * @method $this in(string $attribute, array<int, mixed>|ActiveQuery $values)
  * @method $this notIn(string $attribute, array<int, mixed>|ActiveQuery $values)
- * @method $this orderBy(string|array<string, string> $attribute, string $direction = 'ASC')
+ * @method $this orderBy(string|array<int|string, string> $attribute, string $direction = 'ASC')
+ * @method $this orderByDesc(string|array<int|string, string> $attribute)
  * @method $this limit(int $max, ?int $offset = null)
  */
 class Relation

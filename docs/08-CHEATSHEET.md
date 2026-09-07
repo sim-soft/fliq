@@ -59,6 +59,8 @@ User::find()->active()->admins()->get();
 | Select raw      | `->selectRaw('COUNT(*) AS total')`                  |
 | Order by raw    | `->orderByRaw('FIELD(status, 3, 1, 2)')`            |
 | Order by desc   | `->orderByDesc('created_at')`                       |
+| Order by many   | `->orderByDesc(['last_name', 'first_name'])`        |
+| Order per column| `->orderBy(['role', 'score' => 'DESC'])`            |
 | Group by raw    | `->groupByRaw('YEAR(created_at)')`                  |
 | Having raw      | `->havingRaw('COUNT(*) > ?', [5])`                  |
 | Where raw       | `->whereRaw('{salary} * 12 > ?', [100000])`         |

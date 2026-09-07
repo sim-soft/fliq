@@ -1553,8 +1553,12 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *  'attribute1' => 'ASC',
      *  'attribute2' => 'DESC',
      * ]);
+     * $this->orderBy(['attribute1', 'attribute2'], 'DESC'); // both DESC
      *
-     * @param string|array<string, string> $attribute the attribute
+     * A list entry takes the $direction argument; a keyed entry takes its own
+     * value. The two may be mixed in one array.
+     *
+     * @param string|array<int|string, string> $attribute the attribute
      * @param string $direction the order direction for the attribute
      * @return static
      */
@@ -1562,18 +1566,42 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         if (is_array($attribute)) {
             foreach ($attribute as $col => $dir) {
-                $this->orderBys[] = $this->queryAttribute($col) . ' ' . $this->normaliseDirection($dir);
+                // A list entry arrives as position => name, so the name is the
+                // value and the direction is the argument. Reading the key as
+                // the name put the position into the SQL — ['a','b'] ordered by
+                // columns "0" and "1", which the server rejects as unknown —
+                // and reading the value as the direction meant orderByDesc()
+                // silently sorted ASC.
+                $this->addOrderBy(
+                    is_int($col) ? $dir : $col,
+                    is_int($col) ? $direction : $dir
+                );
             }
             return $this;
         }
 
+        $this->addOrderBy($attribute, $direction);
+        return $this;
+    }
+
+    /**
+     * Append a single ORDER BY term.
+     *
+     * Shared by both shapes of orderBy() so the RAND() special case and the
+     * direction whitelist cannot apply to one and not the other.
+     *
+     * @param string $attribute The attribute name.
+     * @param string $direction The requested sort direction.
+     * @return void
+     */
+    private function addOrderBy(string $attribute, string $direction): void
+    {
         if (strtoupper($attribute) === 'RAND()') {
             $this->orderBys[] = 'RAND()';
-            return $this;
+            return;
         }
 
         $this->orderBys[] = $this->queryAttribute($attribute) . ' ' . $this->normaliseDirection($direction);
-        return $this;
     }
 
     /**
@@ -1594,7 +1622,10 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Order by desc.
      *
-     * @param string|array<string, string> $attribute The attribute name.
+     * Accepts the same shapes as orderBy(): a name, a list of names, or a map
+     * of name => direction. A list takes DESC; a keyed entry keeps its own.
+     *
+     * @param string|array<int|string, string> $attribute The attribute name.
      * @return static
      */
     public function orderByDesc(string|array $attribute): static
