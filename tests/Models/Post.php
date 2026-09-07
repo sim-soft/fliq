@@ -18,6 +18,10 @@ use Simsoft\DB\Relation;
  * @property int $status_code
  * @property string|null $published_at
  * @property string|null $deleted_at
+ * @property User|null $user
+ * @property Category|null $category
+ * @property array<Comment>|null $comments
+ * @property array<Tag>|null $getTags
  */
 class Post extends Model
 {

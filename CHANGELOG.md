@@ -971,6 +971,56 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   find — while the same model loaded with `with('posts')` produced the full
   list. Both shapes now serialize identically.
 
+**Eager loading**
+
+- **`with()` on a many-to-many relation returned nothing, for every parent** —
+  the batch selects `tag.*` and groups the rows by the relation's foreign key,
+  but through a junction the parent's id is on `post_tag` and not on `tag`. The
+  grouping key was read from rows that never carried it, so every row grouped
+  under `''`, every parent was assigned the empty list, and no error was raised
+  anywhere. Reading the same relation lazily returned the correct rows the whole
+  time, which is what made it look like a fixture problem rather than a defect.
+  The batch now selects the junction's parent-side key under a reserved alias,
+  groups by that, and strips the alias from the models before handing them back
+  — so `toArray()` and `toJson()` still show only the related table's own
+  columns.
+- **`with('delete')` deleted every row it had just selected** — the guard was
+  `method_exists()`, and then the name was called. This is the same hazard
+  `Traits\ResolvesRelations` was written to close in `__get()`, left open one
+  call site away: the fix's own regression test passed while the identical bug
+  stayed live in `EagerLoader`. `isRelationMethod()` is now public and is the
+  single answer to "may a read resolve this name?", used by property access,
+  eager loading and relation filters alike. `save`, `refresh` and any other
+  non-relation method are likewise no longer invoked.
+- **`has()`, `whereHas()` and `doesntHave()` ran the method they were deciding
+  about** — `ActiveQuery::resolveRelation()` was the third place answering the
+  same question, and it too called the name before checking what came back. A
+  name declaring a required argument escaped as a bare `ArgumentCountError`
+  naming neither the filter nor the relation. All three now reject an ineligible
+  name with an `InvalidArgumentException` that says which name was passed and
+  what a relation has to be, without calling anything.
+- **`with()` combined with `indexBy()` was fatal** — the loader read
+  `$models[0]`, and a keyed set has no key `0`. Every combination of two
+  documented features raised "Undefined array key 0" followed by a `TypeError`.
+  The first model is now taken by position rather than by key, and an empty set
+  returns without work.
+- **A constrained `select()` that omitted the foreign key silently returned zero
+  rows** — the fetched rows had no column to group by, so they were all
+  discarded and the parents reported having no related records at all. The
+  documented example includes the foreign key in its projection, which is
+  exactly what kept it working and made the omission look like the caller's
+  mistake. The grouping key is now appended after the constraint runs, and
+  removed again before the models are returned: a projection says what the
+  caller gets back, not how many records exist. On a junction batch the
+  caller's projection was ignored outright; it is now respected.
+- **`find()->with(...)->findByPk(1)` was a `TypeError`** — the model-level
+  `findByPk()` accepted a scalar and the query-level one did not, and every
+  route to eager loading goes through the query. The documented chain in
+  `docs/04-RELATION.md` could not run. `ActiveQuery::findByPk()` now takes the
+  same two shapes as `Model::findByPk()`, and a scalar given for a composite key
+  raises a `QueryException` naming the columns instead of returning `null` —
+  which was indistinguishable from "no such row".
+
 ### Changed
 
 - `whereFulltext()` and `orWhereFulltext()` now throw `InvalidArgumentException`
@@ -1493,6 +1543,15 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   `transaction()` makes before opening a block, why neither other route can
   cover that case, and that nested calls do not repeat it. Every claim in the
   section was run against a killed MySQL connection on both drivers.
+- The relation guide's constrained eager-loading example passed
+  `limit(5)`, which reads as five posts per user and is not what it does: eager
+  loading fetches every parent's rows in one query, so the limit caps that one
+  result set and the parents past the cap get an empty list — indistinguishable
+  from having no related rows. The section now states this for `limit()` and
+  `offset()`, shows the per-parent alternative, and says that `orderBy()` inside
+  a constraint is safe. The same example selected `avatar` from a projection
+  purely to keep the foreign key in it; that is no longer necessary and the
+  section says so.
 
 ---
 

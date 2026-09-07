@@ -21,16 +21,21 @@ use Simsoft\DB\Relation;
  * Reading a property must never write to the database, so eligibility is
  * narrowed to methods that declare they return a Relation and can actually be
  * called with no arguments. Everything else reads as the absent attribute it is.
+ *
+ * The check is public because eager loading asks the same question of the same
+ * names. EagerLoader had its own answer — method_exists() alone, the very guard
+ * this replaced — so `with('delete')` deleted every row it had just selected.
+ * One question, one answer.
  */
 trait ResolvesRelations
 {
     /**
-     * Determine whether a name is a lazy-loadable relation method.
+     * Determine whether a name may be resolved as a relation.
      *
-     * @param string $name The property name being read.
+     * @param string $name The property or relation name.
      * @return bool
      */
-    private function isRelationMethod(string $name): bool
+    public function isRelationMethod(string $name): bool
     {
         if ($name === '' || !method_exists($this, $name)) {
             return false;

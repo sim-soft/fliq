@@ -52,18 +52,57 @@ trait Fetchable
     }
 
     /**
-     * Find by primary key attributes.
+     * Find by primary key.
      *
-     * @param array<string, mixed> $pk Array of attribute => value pairs.
+     * Takes a scalar for a single-column key, or attribute => value pairs for a
+     * composite one — the same two shapes Model::findByPk() takes, because the
+     * documented way to combine a primary-key lookup with eager loading is to
+     * start from the query: `User::find()->with('posts')->findByPk(1)`. That
+     * chain was a TypeError, since only the model-level method accepted the
+     * scalar, and every route to eager loading has to go through the query.
+     *
+     * @param string|int|array<string, mixed> $pk The primary key value, or attribute => value pairs.
      * @return mixed
+     * @throws QueryException If a scalar is given for a composite primary key.
      */
-    public function findByPk(array $pk): mixed
+    public function findByPk(string|int|array $pk): mixed
     {
+        $pk = is_array($pk) ? $pk : [$this->singlePrimaryKeyField() => $pk];
+
         $keys = [];
         foreach ($pk as $attribute => $key) {
             $keys[] = [$attribute, '=', $key];
         }
         return $this->where($keys)->first();
+    }
+
+    /**
+     * The name of the model's primary key column, when it has exactly one.
+     *
+     * @return string
+     * @throws QueryException If there is no model, or its key spans several columns.
+     */
+    private function singlePrimaryKeyField(): string
+    {
+        if (!$this->modelClass) {
+            throw new QueryException('findByPk() needs a model to know which column is the primary key.');
+        }
+
+        /** @var Model $model */
+        $model = is_string($this->modelClass) ? new $this->modelClass() : $this->modelClass;
+        $field = $model->getPrimaryKeyFields();
+
+        // Naming the columns rather than just refusing: a composite key is
+        // exactly the case where the caller cannot guess what shape to pass.
+        if (!is_string($field)) {
+            throw new QueryException(sprintf(
+                '%s has a composite primary key (%s), so findByPk() needs an array of attribute => value pairs.',
+                $model::class,
+                implode(', ', $field)
+            ));
+        }
+
+        return $field;
     }
 
     /**

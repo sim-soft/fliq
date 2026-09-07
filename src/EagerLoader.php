@@ -3,6 +3,7 @@
 namespace Simsoft\DB;
 
 use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Builder\Raw;
 
 /**
  * EagerLoader class.
@@ -12,6 +13,18 @@ use Simsoft\DB\Builder\ActiveQuery;
  */
 class EagerLoader
 {
+    /**
+     * Column alias the junction's parent-side key is fetched under.
+     *
+     * Grouping a many-to-many batch needs the parent id, which lives on the
+     * junction and not on the related table, so it is selected under a name of
+     * our own. The name has to be one no real column will have: aliasing onto
+     * an existing column would overwrite it — a junction key selected as `id`
+     * replaces the related model's own id — and the grouping would then be
+     * right about the wrong rows.
+     */
+    private const string VIA_KEY = '__fliq_via_key';
+
     /**
      * Load relations for a set of models.
      *
@@ -142,13 +155,27 @@ class EagerLoader
      */
     private static function loadRelation(array $models, string $relationName, ?callable $constraint = null): void
     {
-        $firstModel = $models[0];
+        // Not $models[0]: an indexBy()-keyed set has no key 0, and reading one
+        // gave "Undefined array key 0" followed by a TypeError out of
+        // method_exists(). `with('posts')->indexBy('username')` is a documented
+        // pair of features and every combination of them was fatal.
+        $firstModel = reset($models);
 
-        if (!method_exists($firstModel, $relationName)) {
+        if ($firstModel === false) {
             return;
         }
 
-        // Get relation metadata from the first model
+        // method_exists() was the whole guard, and then the name was called.
+        // That is the hazard ResolvesRelations was written to close in __get(),
+        // where reading `$user->delete` as a property ran the delete; the same
+        // hole was left open here, so `with('delete')` deleted every row it had
+        // just selected. A name is eligible only if it declares that it returns
+        // a Relation and can be called with no arguments — reading must never
+        // write.
+        if (!$firstModel->isRelationMethod($relationName)) {
+            return;
+        }
+
         $relation = $firstModel->{$relationName}();
         if (!$relation instanceof Relation) {
             return;
@@ -172,11 +199,41 @@ class EagerLoader
         $batchQuery = self::buildBatchQuery($relatedClass, $relation, $foreignKey, $uniqueValues, $constraint);
         $relatedRecords = iterator_to_array($batchQuery->all());
 
-        // Group related records by foreign key value
-        $grouped = self::groupByForeignKey($relatedRecords, $foreignKey);
+        // Which column on the fetched rows says which parent each belongs to.
+        //
+        // For a direct relation that is the foreign key, which is a real column
+        // on the related table. Through a junction it is not: the batch selects
+        // `tag.*`, and the parent's id lives on `post_tag`, so grouping by
+        // `tag_id` read an attribute no fetched row had. Every row grouped under
+        // '' and every parent was assigned the empty list — eager loading a
+        // many-to-many relation returned nothing at all, for every model, while
+        // the lazy path returned the right rows. buildBatchQuery() selects the
+        // junction column under a reserved alias for exactly this.
+        $groupKey = $relation->getViaTable() === null ? $foreignKey : self::VIA_KEY;
+
+        $grouped = self::groupByForeignKey($relatedRecords, $groupKey);
 
         // Assign to each parent model
         self::assignRelatedModels($models, $grouped, $localKey, $relationName, $isMultiple);
+
+        // The alias is machinery, not data. Left in place it would show up in
+        // toArray() and toJson() as a column the related table does not have.
+        if ($groupKey === self::VIA_KEY) {
+            self::discardViaKeys($relatedRecords);
+        }
+    }
+
+    /**
+     * Drop the junction-key carrier from records that were grouped by it.
+     *
+     * @param array<Model> $records The fetched related records.
+     * @return void
+     */
+    private static function discardViaKeys(array $records): void
+    {
+        foreach ($records as $record) {
+            unset($record->{self::VIA_KEY});
+        }
     }
 
     /**
@@ -271,6 +328,8 @@ class EagerLoader
                 $constraint($query);
             }
 
+            self::selectGroupingKey($query, $viaTable, $junctionFk);
+
             return $query;
         }
 
@@ -282,7 +341,65 @@ class EagerLoader
             $constraint($query);
         }
 
+        self::selectGroupingKey($query, null, $foreignKey);
+
         return $query;
+    }
+
+    /**
+     * Make sure the batch fetches the column the rows will be grouped by.
+     *
+     * One batch fetches the related rows for every parent at once, so each row
+     * has to say which parent it came back for. Nothing guaranteed it did.
+     *
+     * Through a junction the answer is not on the related table at all: the
+     * batch selected `tag.*` while the parent's id sat on `post_tag`, so every
+     * row grouped under '' and every parent got the empty list — eager loading
+     * a many-to-many relation returned nothing, for every model, while the lazy
+     * path returned the right rows.
+     *
+     * For a direct relation the column exists but a constraint could drop it.
+     * `with(['posts' => fn($q) => $q->select('title')])` fetched the right rows
+     * and then discarded all of them, reporting zero posts for users who have
+     * them. The documented example includes the foreign key in its select,
+     * which is what kept it working and what made the omission look like the
+     * caller's mistake — but a projection is a statement about what the caller
+     * wants back, not a licence to lose the rows.
+     *
+     * Appending after the constraint is what makes it not the caller's problem.
+     * The column may end up named twice; every engine collapses duplicates in
+     * an associative fetch, verified on MySQL, PostgreSQL and SQLite.
+     *
+     * @param ActiveQuery $query The batch query, already constrained.
+     * @param string|null $viaTable The junction table, or null for a direct relation.
+     * @param string $column The column the rows will be grouped by.
+     * @return void
+     */
+    private static function selectGroupingKey(ActiveQuery $query, ?string $viaTable, string $column): void
+    {
+        // An untouched query still means SELECT *, which already includes the
+        // grouping column for a direct relation. Naming it would turn the
+        // wildcard off and narrow the result to that one column.
+        if ($viaTable === null && $query->getSelects() === []) {
+            return;
+        }
+
+        $grammar = Connection::grammar($query->getConnectionName());
+        $table = $viaTable ?? (string)$query->getTable();
+
+        // Whatever the caller asked for stays; the wildcard is added only when
+        // they asked for nothing, so that a junction batch does not hydrate
+        // models holding the carrier and no columns of their own.
+        if ($query->getSelects() === []) {
+            $query->select(new Raw($grammar->quoteIdentifier((string)$query->getTable()) . '.*'));
+        }
+
+        $query->select(new Raw(sprintf(
+            '%s.%s AS %s',
+            $grammar->quoteIdentifier($table),
+            $grammar->quoteIdentifier($column),
+            $grammar->quoteIdentifier($viaTable === null ? $column : self::VIA_KEY)
+        )));
     }
 
     /**

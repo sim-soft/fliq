@@ -3055,13 +3055,26 @@ class ActiveQuery implements Executable, Updatable, Deletable
 
         /** @var Model $model */
         $model = new $this->modelClass();
-        $relation = $model->{$relationName}();
 
-        if (!$relation instanceof Relation) {
-            throw new InvalidArgumentException("$class::$relationName() does not return a relation.");
+        // The same question __get() and EagerLoader ask, asked the same way.
+        // method_exists() was the whole guard here too, and then the name was
+        // called: has('getTable') ran getTable() before deciding it was not a
+        // relation — harmless there, but has('delete') is the same code path —
+        // and a method declaring a required argument escaped as a bare
+        // ArgumentCountError naming neither the filter nor the relation. A
+        // filter must not run the thing it is deciding about.
+        if (!$model->isRelationMethod($relationName)) {
+            throw new InvalidArgumentException(
+                "$class::$relationName() does not return a relation: a relation is a public method that takes"
+                . ' no arguments and declares Relation as its return type.'
+            );
         }
 
-        return $relation;
+        // No instanceof check after the call: eligibility already required a
+        // declared Relation return type, which PHP enforces itself. The old
+        // check was the only thing standing between the caller and whatever the
+        // method did, and it ran after the damage.
+        return $model->{$relationName}();
     }
 
     /**

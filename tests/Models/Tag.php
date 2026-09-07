@@ -11,6 +11,7 @@ use Simsoft\DB\Relation;
  * @property int $id
  * @property string $name
  * @property string $slug
+ * @property array<Post>|null $getPosts
  */
 class Tag extends Model
 {

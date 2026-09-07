@@ -274,8 +274,8 @@ $users = User::find()
 // Multiple constrained relations
 $users = User::find()
     ->with([
-        'posts' => fn($query) => $query->where('published', true)->limit(5),
-        'profile' => fn($query) => $query->select('user_id', 'avatar', 'bio'),
+        'posts' => fn($query) => $query->where('published', true),
+        'profile' => fn($query) => $query->select('avatar', 'bio'),
     ])
     ->get();
 
@@ -286,6 +286,29 @@ $users = User::find()
 ```
 
 The callback receives the `ActiveQuery` for the related model — use any query builder method.
+
+You do not need to select the foreign key. It is added to the batch after your
+callback runs, and removed again from the models handed back, so `select('title')`
+gives you models holding exactly `title` and every parent still gets its rows.
+
+**`limit()` applies to the batch, not to each parent.** Eager loading fetches the
+related rows for every parent in one query, so a limit caps that one result set:
+`limit(5)` returns five rows in total, and the parents whose rows fall past the
+cap get an empty list — which is indistinguishable from having none. The same is
+true of `offset()`. For "the newest three posts per user", query the posts
+directly and group them yourself, or load them per user:
+
+```php
+/* Not this — 5 posts in total, shared out first-come-first-served */
+User::find()->with(['posts' => fn($query) => $query->limit(5)])->get();
+
+/* This — 5 posts for this user */
+$user = User::findByPk(1);
+$posts = $user->posts()->orderBy('published_at', 'DESC')->limit(5)->fetch();
+```
+
+`orderBy()` inside a constraint is safe, and orders the rows within each parent's
+group as you would expect.
 
 ## Filtering by Relations
 

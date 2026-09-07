@@ -535,18 +535,14 @@ abstract class Model implements ArrayAccess
      */
     public static function findByPk(string|int|array $pk): ?static
     {
-        $model = new static();
-        $primaryKeyField = $model->getPrimaryKeyFields();
+        // Both shapes are resolved by the query, so that the same call reaching
+        // the same lookup by a different route behaves the same way. Returning
+        // null for a composite key given a scalar was indistinguishable from
+        // "no such row", which is the one thing a lookup must not be vague
+        // about; the query says which columns it wanted instead.
+        $model = static::find()->findByPk($pk);
 
-        if (is_array($pk)) {
-            return static::find()->findByPk($pk);
-        }
-
-        if (is_string($primaryKeyField)) {
-            return static::find()->findByPk([$primaryKeyField => $pk]);
-        }
-
-        return null;
+        return $model instanceof static ? $model : null;
     }
 
     /**
