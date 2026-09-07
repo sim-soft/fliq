@@ -558,6 +558,71 @@ All notable changes to `simsoft/fliq` are documented here.
   from inside the rollback, replacing the `ConnectionException` that explains
   what happened. The rollback now swallows connection-loss errors only; any
   other rollback failure still propagates.
+- **`transaction()` could not recover a dropped connection, while `execute()`
+  and `query()` both could** — a statement got two recovery routes, the idle
+  ping and the statement-level retry, and opening a transaction got neither. A
+  worker whose connection had been closed by `wait_timeout` therefore recovered
+  when its next statement happened to be a query and failed when it happened to
+  be a transaction, which is the case where losing the write matters most, and
+  it failed with the `ConnectionException` documented as meaning "nothing was
+  written" — true, but the block had never started. Neither existing route
+  could have covered it: `mysqli::begin_transaction()` does not round trip, so
+  there is no failure for a retry to catch and the drop surfaces on the first
+  statement *inside* the block, by which point reconnecting is correctly
+  refused. `transaction()` now checks liveness before opening the outermost
+  block, regardless of `ping_idle_seconds`. Nested calls, which become
+  savepoints, do not re-check. The mid-transaction guard is unchanged: a
+  connection lost after the block opens still throws and still writes nothing.
+- **`reconnectIfNeeded()` did not exist on `SQLiteDriver`** — three drivers
+  carried a byte-identical copy and the fourth had none, so calling the
+  documented name on a SQLite connection was a fatal error. It is also *why*
+  the defect above existed: a method defined only on subclasses cannot be
+  called from the base class that needs it. Both it and `ping()` now live on
+  `Driver`, with the part that genuinely differs per driver — the liveness
+  probe, and whether a handle is held — named as `probeLiveness()` and
+  `isConnected()`.
+- **`PDODriver::ping()` broke the connection it had just vouched for** — the
+  probe ran `SELECT 1` and never read the result. MySQL does not buffer by
+  default, so the unread rows kept the connection busy and the next prepared
+  statement failed with "2014 Cannot execute queries while other unbuffered
+  queries are active" — the liveness check being the thing that killed the
+  connection. The probe now reads its result set to completion, and that
+  requirement is written into the abstract method rather than left to each
+  driver to remember.
+- **`PDODriver::execute()` left an open cursor on any row-returning
+  statement** — the unbound branch used `PDO::exec()`, which hands back no
+  statement to close, so `execute(new Raw('SELECT 1'))` left rows unread and
+  the failure surfaced on whichever innocent statement came next rather than on
+  the one that caused it. It now prepares in both branches and closes the
+  cursor, as the three other drivers already did.
+- **`SQLiteDriver::ping()` never recorded the activity it had just proved** —
+  every other driver calls `markActivity()` on a successful ping. Without it
+  the connection looked permanently idle, so the idle window never applied and
+  a full round trip was paid before every statement no matter how
+  `ping_idle_seconds` was set. Fixed by hoisting; `connect()` also clears the
+  timestamp now, so a fresh connection is not vouched for by its predecessor's.
+
+**Statement cache**
+
+- **`SQLiteDriver` accepted `statement_cache` and `statement_cache_size` and
+  obeyed neither** — it declared neither key and read neither, while keeping
+  exactly the same cache and the same eviction as the other two PDO drivers. A
+  config disabling the cache for a bulk import was accepted in full and applied
+  in none of it: it cached three statements while being told to cache none, and
+  held eight against a ceiling of three. Both keys are now read at connect.
+- **Four of the five documented cache controls did not exist on
+  `SQLiteDriver`** — it offered `clearStatementCache()` and none of the others,
+  so the runtime control block in the getting-started guide was a fatal error
+  on a SQLite connection. All five are now declared by the new
+  `Simsoft\DB\Interfaces\CachesStatements`, which `PDODriver`,
+  `PostgresDriver` and `SQLiteDriver` implement. `Connection::get()` returns a
+  `Driver`, on which the methods were previously named by nothing, so calling
+  one was checked by nothing until it ran; `instanceof CachesStatements` now
+  answers the question statically, and `MySQLiDriver` — which prepares nothing
+  — correctly does not implement it.
+- **A reconnecting SQLite driver kept statements prepared on the old
+  connection** — `forceReconnect()` replaced the handle and left the cache
+  intact. It now clears it, as the other drivers do.
 
 **Performance**
 
@@ -1416,6 +1481,18 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   apply, that the size is how many rows are fetched per query rather than how
   many come back, and that a fully filtered-out page is skipped. Every example
   in the guide was run against the fixture before being written down.
+- The getting-started guide carried the statement-cache section twice, verbatim,
+  and both copies said "PDO only" and "the PDO driver". Three drivers cache, and
+  SQLite is one of them. There is now one section, it names all three and says
+  that `mysqli` caches nothing, it documents the `CachesStatements` check for
+  code whose driver comes from configuration, and it states that eviction is by
+  insertion order rather than least-recently-used. The PostgreSQL and SQLite
+  config examples list both cache keys, which they support and did not mention.
+- The getting-started guide's "Dropped Connections" section said recovery
+  happens in two ways. There are three: it now documents the check that
+  `transaction()` makes before opening a block, why neither other route can
+  cover that case, and that nested calls do not repeat it. Every claim in the
+  section was run against a killed MySQL connection on both drivers.
 
 ---
 

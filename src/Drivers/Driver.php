@@ -118,6 +118,92 @@ abstract class Driver
     abstract protected function executeRawStatement(string $sql): void;
 
     /**
+     * Check if the connection is still alive.
+     *
+     * Four copies of this had drifted apart in three different ways: one forgot
+     * to record the activity and so re-pinged forever, and one left the probe's
+     * result set unread, which on MySQL keeps the connection busy and makes the
+     * next prepared statement fail — the liveness check breaking the connection
+     * it had just vouched for. Only the probe itself differs per driver.
+     *
+     * @return bool
+     */
+    public function ping(): bool
+    {
+        if (!$this->isConnected()) {
+            return false;
+        }
+
+        try {
+            if (!$this->probeLiveness()) {
+                return false;
+            }
+
+            $this->markActivity();
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Send a trivial statement and consume its result.
+     *
+     * Implementations must read the result set to completion: an unread one
+     * leaves the connection unusable for the statement that follows.
+     *
+     * @return bool False if the probe reported failure without throwing.
+     */
+    abstract protected function probeLiveness(): bool;
+
+    /**
+     * Re-establish the connection if it has been lost.
+     *
+     * Checks liveness only once the connection has sat idle long enough for
+     * needsLivenessCheck() to say so, then reconnects if the ping fails.
+     *
+     * Three drivers carried a byte-identical copy of this and the fourth had
+     * none, which is why it lived below transaction() rather than above it: a
+     * method defined on the subclasses cannot be called from the base class
+     * that needs it. Hoisting it is what lets enterTransaction() ask.
+     *
+     * @return void
+     * @throws ConnectionException If the connection died inside a transaction.
+     */
+    public function reconnectIfNeeded(): void
+    {
+        if ($this->isConnected() && !$this->needsLivenessCheck()) {
+            return;
+        }
+
+        $this->reconnectIfDead();
+    }
+
+    /**
+     * Check liveness now, whatever the idle window says, and reconnect if gone.
+     *
+     * @return void
+     * @throws ConnectionException If the connection died inside a transaction.
+     */
+    private function reconnectIfDead(): void
+    {
+        if (!$this->isConnected() || !$this->ping()) {
+            $this->guardReconnectDuringTransaction();
+            $this->forceReconnect();
+        }
+    }
+
+    /**
+     * Whether a connection handle is currently held.
+     *
+     * The handle itself is typed per driver — mysqli for one, PDO for three —
+     * so the base class asks rather than reads.
+     *
+     * @return bool
+     */
+    abstract protected function isConnected(): bool;
+
+    /**
      * Perform query transaction.
      *
      * The callback MUST return a bool value. Returning TRUE commits the
@@ -323,7 +409,32 @@ abstract class Driver
             return;
         }
 
-        $this->beginTransaction();
+        // execute() and query() get both recovery routes — the idle ping and
+        // the statement-level retry — and opening a transaction got neither, so
+        // a worker whose connection had dropped recovered when its next
+        // statement was a query and failed when it was a transaction, which is
+        // the case where losing the write matters most.
+        //
+        // The ping is unconditional here rather than subject to the idle
+        // window, because neither route works on its own for this statement.
+        // mysqli::begin_transaction() does not round trip, so it cannot fail
+        // and there is nothing for a retry to catch: the drop is discovered by
+        // the first statement inside the block, by which time the level is 1
+        // and guardReconnectDuringTransaction() is obliged to refuse. Only
+        // asking before opening finds it while reconnecting is still allowed.
+        //
+        // A wasted round trip per transaction is the cost, against a block
+        // whose statements will each pay one anyway.
+        $this->reconnectIfDead();
+
+        // PDO's begin_transaction does round trip, and can therefore still fail
+        // on a connection that died between the ping and this line. Retrying is
+        // safe while the level is 0 — that is reconnecting to open a
+        // transaction rather than inside one.
+        $this->runWithReconnect(function (): void {
+            $this->beginTransaction();
+        });
+
         $this->transactionLevel = 1;
     }
 

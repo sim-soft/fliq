@@ -110,6 +110,8 @@ Connection::add('pgsql', [
     'schema' => 'public',       // default: public
     'persistent' => false,      // default: false
     'timeout' => 5,             // default: 5
+    'statement_cache' => true,      // default: true
+    'statement_cache_size' => 100,  // default: 100
 ]);
 ```
 
@@ -135,6 +137,8 @@ Connection::add('pgsql', [
 Connection::add('sqlite', [
     'driver' => 'sqlite',
     'database' => __DIR__ . '/database.db',
+    'statement_cache' => true,      // default: true
+    'statement_cache_size' => 100,  // default: 100
 ]);
 
 // In-memory (useful for testing)
@@ -158,7 +162,8 @@ Connection::add('sqlite', [
 
 ### MySQL via PDO
 
-Only use this if you need PDO-specific features (e.g., statement caching):
+Only use this if you need PDO-specific features (e.g. statement caching, which
+`mysqli` does not do — see [Statement Cache](#statement-cache) below):
 
 ```php
 Connection::add('mysql', [
@@ -206,16 +211,17 @@ PDO defaults (applied automatically, user options override):
 | `PDO::ATTR_TIMEOUT`            | `5`                      | Connection timeout (seconds)   |
 | `PDO::ATTR_PERSISTENT`         | `false`                  | Set via `'persistent' => true` |
 
-**Statement Cache (PDO only):**
+### Statement Cache
 
-The PDO driver caches prepared statements to avoid repeated `prepare()` calls.
-Enabled by default via `statement_cache` and `statement_cache_size` in the
-config above.
+The PDO-backed drivers — `pdo_mysql`, `pgsql` and `sqlite` — cache prepared
+statements to avoid repeated `prepare()` calls. Enabled by default, and
+configured with `statement_cache` and `statement_cache_size` in the config
+above. `mysqli` prepares nothing and so caches nothing.
 
-Runtime control:
+Runtime control, on a connection you know is one of those three:
 
 ```php
-$driver = Connection::get('mysql');
+$driver = Connection::get('pgsql');
 
 $driver->disableStatementCache();      // disable + clear cache
 $driver->enableStatementCache();       // re-enable
@@ -224,31 +230,33 @@ $driver->setStatementCacheSize(50);    // change max size
 $driver->isStatementCacheEnabled();    // check status
 ```
 
-Disable when running many unique one-off queries (migrations, bulk imports) to
-avoid filling memory.
-
-**Statement Cache** — the PDO driver caches prepared statements to avoid
-repeated `prepare()` calls. Enabled by default.
+All five are declared by `Simsoft\DB\Interfaces\CachesStatements`, so a driver
+offers the whole set or is not a caching driver at all. Where the driver comes
+from configuration and might be `mysqli`, ask before calling — the methods do
+not exist on it:
 
 ```php
+use Simsoft\DB\Interfaces\CachesStatements;
+
 $driver = Connection::get('mysql');
 
-$driver->disableStatementCache();      // disable + clear cache
-$driver->enableStatementCache();       // re-enable
-$driver->clearStatementCache();        // flush without disabling
-$driver->setStatementCacheSize(50);    // change max size
-$driver->isStatementCacheEnabled();    // check status
+if ($driver instanceof CachesStatements) {
+    $driver->disableStatementCache();
+}
 ```
 
 Disable caching when running many unique one-off queries (e.g., migrations, bulk
 imports) to avoid filling memory.
+
+Eviction is by insertion order: at `statement_cache_size` the oldest entry is
+dropped, not the least recently used.
 
 ## Dropped Connections
 
 Database servers close idle connections — MySQL's `wait_timeout` defaults to
 eight hours, and load balancers are usually far less patient. A long-running
 worker or daemon will therefore find its connection gone at some point. All four
-drivers recover from this automatically, in two ways:
+drivers recover from this automatically, in three ways:
 
 **When a statement fails.** If a query fails with an error that names a lost
 connection, the driver reconnects and runs it once more. Errors that are not
@@ -272,6 +280,14 @@ Connection::add('mysql', [
 Lower the window if your network drops connections aggressively. Raise it if
 your queries are small and frequent. Recovery does not depend on it — the
 statement-level retry covers a connection that dies inside the window.
+
+**When a transaction opens.** `transaction()` checks the connection before
+opening the block, regardless of `ping_idle_seconds`. Neither of the other two
+routes can help here: reconnecting is only allowed while no transaction is open,
+so a drop discovered by the first statement *inside* the block is discovered too
+late to recover from. The check costs one round trip per outermost transaction,
+against a block whose statements each pay one anyway. Nested calls, which become
+savepoints, do not re-check.
 
 ### Inside a transaction
 

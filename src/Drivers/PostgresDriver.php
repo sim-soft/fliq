@@ -9,6 +9,7 @@ use PDOStatement;
 use Simsoft\DB\Builder\Delete;
 use Simsoft\DB\Builder\Insert;
 use Simsoft\DB\Builder\Update;
+use Simsoft\DB\Interfaces\CachesStatements;
 use Simsoft\DB\Interfaces\Executable;
 
 /**
@@ -16,7 +17,7 @@ use Simsoft\DB\Interfaces\Executable;
  *
  * Connection implementation using PHP PDO with pgsql driver.
  */
-class PostgresDriver extends Driver
+class PostgresDriver extends Driver implements CachesStatements
 {
     /** @var int Longest usable channel name, from the server's NAMEDATALEN - 1. */
     private const MAX_CHANNEL_BYTES = 63;
@@ -240,44 +241,27 @@ class PostgresDriver extends Driver
     }
 
     /**
-     * Check if the connection is still alive.
-     *
-     * @return bool
+     * {@inheritdoc}
      */
-    public function ping(): bool
+    protected function probeLiveness(): bool
     {
-        if ($this->connection === null) {
+        $stmt = $this->requireConnection()->query('SELECT 1');
+        if ($stmt === false) {
             return false;
         }
 
-        try {
-            $stmt = $this->connection->query('SELECT 1');
-            if ($stmt === false) {
-                return false;
-            }
+        $stmt->fetchAll();
+        $stmt->closeCursor();
 
-            $this->markActivity();
-            return true;
-        } catch (\Throwable) {
-            return false;
-        }
+        return true;
     }
 
     /**
-     * Reconnect if the connection has been lost.
-     *
-     * @return void
+     * {@inheritdoc}
      */
-    public function reconnectIfNeeded(): void
+    protected function isConnected(): bool
     {
-        if ($this->connection !== null && !$this->needsLivenessCheck()) {
-            return;
-        }
-
-        if ($this->connection === null || !$this->ping()) {
-            $this->guardReconnectDuringTransaction();
-            $this->forceReconnect();
-        }
+        return $this->connection !== null;
     }
 
     /**

@@ -220,45 +220,30 @@ class MySQLiDriver extends Driver
     }
 
     /**
-     * Check if the connection is still alive.
-     *
-     * @return bool
+     * {@inheritdoc}
      */
-    public function ping(): bool
+    protected function probeLiveness(): bool
     {
-        if ($this->connection === null) {
+        // mysqli::ping() is deprecated as of PHP 8.4 — a trivial query checks
+        // liveness the same way, matching the other drivers.
+        $result = $this->getConnection()->query('SELECT 1');
+        if ($result === false) {
             return false;
         }
 
-        try {
-            // mysqli::ping() is deprecated as of PHP 8.4 — a trivial query
-            // checks liveness the same way, matching the other drivers.
-            if ($this->connection->query('SELECT 1') === false) {
-                return false;
-            }
-
-            $this->markActivity();
-            return true;
-        } catch (\Throwable) {
-            return false;
+        if ($result instanceof \mysqli_result) {
+            $result->free();
         }
+
+        return true;
     }
 
     /**
-     * Reconnect if the connection has been lost.
-     *
-     * @return void
+     * {@inheritdoc}
      */
-    public function reconnectIfNeeded(): void
+    protected function isConnected(): bool
     {
-        if ($this->connection !== null && !$this->needsLivenessCheck()) {
-            return;
-        }
-
-        if ($this->connection === null || !$this->ping()) {
-            $this->guardReconnectDuringTransaction();
-            $this->forceReconnect();
-        }
+        return $this->connection !== null;
     }
 
     /**

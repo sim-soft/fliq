@@ -5,6 +5,7 @@ namespace Simsoft\DB\Drivers;
 use PDO;
 use PDOException;
 use PDOStatement;
+use Simsoft\DB\Interfaces\CachesStatements;
 use Simsoft\DB\Interfaces\Executable;
 
 /**
@@ -13,7 +14,7 @@ use Simsoft\DB\Interfaces\Executable;
  * MySQL connection implementation using PHP PDO extension.
  * Features: prepared statement caching, persistent connections.
  */
-class PDODriver extends Driver
+class PDODriver extends Driver implements CachesStatements
 {
     /** @var array<int, string> Required configuration keys */
     protected array $required = ['host', 'database', 'username', 'password'];
@@ -97,44 +98,30 @@ class PDODriver extends Driver
     }
 
     /**
-     * Check if the connection is still alive.
-     *
-     * @return bool
+     * {@inheritdoc}
      */
-    public function ping(): bool
+    protected function probeLiveness(): bool
     {
-        if ($this->connection === null) {
+        $stmt = $this->requireConnection()->query('SELECT 1');
+        if ($stmt === false) {
             return false;
         }
 
-        try {
-            $stmt = $this->connection->query('SELECT 1');
-            if ($stmt === false) {
-                return false;
-            }
+        // MySQL does not buffer by default, so a result set left unread keeps
+        // the connection busy and the next prepared statement fails with "2014
+        // Cannot execute queries while other unbuffered queries are active".
+        $stmt->fetchAll();
+        $stmt->closeCursor();
 
-            $this->markActivity();
-            return true;
-        } catch (\Throwable) {
-            return false;
-        }
+        return true;
     }
 
     /**
-     * Reconnect if the connection has been lost.
-     *
-     * @return void
+     * {@inheritdoc}
      */
-    public function reconnectIfNeeded(): void
+    protected function isConnected(): bool
     {
-        if ($this->connection !== null && !$this->needsLivenessCheck()) {
-            return;
-        }
-
-        if ($this->connection === null || !$this->ping()) {
-            $this->guardReconnectDuringTransaction();
-            $this->forceReconnect();
-        }
+        return $this->connection !== null;
     }
 
     /**
@@ -173,15 +160,16 @@ class PDODriver extends Driver
         $binds = $query->getBinds();
 
         return $this->runWithReconnect(function () use ($sql, $binds): bool {
-            if ($binds === null) {
-                $result = $this->requireConnection()->exec($sql) !== false;
-                $this->markActivity();
-
-                return $result;
-            }
-
             $stmt = $this->prepareStatement($sql);
-            $result = $stmt->execute($binds);
+            $result = $stmt->execute($binds ?? []);
+
+            // A statement that returned rows holds them until they are read or
+            // the cursor is closed, and MySQL refuses the next one meanwhile.
+            // The unbound branch used PDO::exec(), which gives back no handle
+            // to close, so `execute(new Raw('SELECT 1'))` left the connection
+            // unusable and the failure surfaced on whichever innocent statement
+            // came next. The three other drivers all free their result here.
+            $stmt->closeCursor();
             $this->markActivity();
 
             return $result;
