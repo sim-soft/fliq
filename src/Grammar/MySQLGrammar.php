@@ -60,25 +60,31 @@ class MySQLGrammar implements Grammar
     /**
      * {@inheritdoc}
      *
-     * @param array<int, string> $columns
-     * @param array<int, string> $updateColumns
+     * MySQL reacts to a conflict on any unique key and takes no target, so the
+     * columns are accepted and ignored.
+     *
+     * @param array<int, string> $assignments
      * @param array<int, string> $conflictColumns
      */
-    public function upsertSQL(string $table, array $columns, array $updateColumns, string $placeholders, array $conflictColumns = []): string
+    public function onConflictSQL(array $assignments, array $conflictColumns): string
     {
-        $quotedColumns = array_map(fn($col) => $this->quoteIdentifier($col), $columns);
+        return ' ON DUPLICATE KEY UPDATE ' . implode(', ', $assignments);
+    }
 
-        $sql = "INSERT INTO $table ("
-            . implode(', ', $quotedColumns)
-            . ") VALUES ($placeholders)";
+    /**
+     * {@inheritdoc}
+     */
+    public function excludedColumnSQL(string $column): string
+    {
+        return 'VALUES(' . $this->quoteIdentifier($column) . ')';
+    }
 
-        $updates = [];
-        foreach ($updateColumns as $col) {
-            $quoted = $this->quoteIdentifier($col);
-            $updates[] = "$quoted = VALUES($quoted)";
-        }
-
-        return $sql . ' ON DUPLICATE KEY UPDATE ' . implode(', ', $updates);
+    /**
+     * {@inheritdoc}
+     */
+    public function requiresConflictTarget(): bool
+    {
+        return false;
     }
 
     /**

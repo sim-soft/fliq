@@ -49,29 +49,30 @@ class PostgresGrammar implements Grammar
     /**
      * {@inheritdoc}
      *
-     * @param array<int, string> $columns
-     * @param array<int, string> $updateColumns
+     * @param array<int, string> $assignments
      * @param array<int, string> $conflictColumns
      */
-    public function upsertSQL(string $table, array $columns, array $updateColumns, string $placeholders, array $conflictColumns = []): string
+    public function onConflictSQL(array $assignments, array $conflictColumns): string
     {
-        $quotedColumns = array_map(fn($col) => $this->quoteIdentifier($col), $columns);
+        $target = implode(', ', array_map(fn($col) => $this->quoteIdentifier($col), $conflictColumns));
 
-        $sql = "INSERT INTO $table ("
-            . implode(', ', $quotedColumns)
-            . ") VALUES ($placeholders)";
+        return " ON CONFLICT ($target) DO UPDATE SET " . implode(', ', $assignments);
+    }
 
-        $updates = [];
-        foreach ($updateColumns as $col) {
-            $quoted = $this->quoteIdentifier($col);
-            $updates[] = "$quoted = EXCLUDED.$quoted";
-        }
+    /**
+     * {@inheritdoc}
+     */
+    public function excludedColumnSQL(string $column): string
+    {
+        return 'EXCLUDED.' . $this->quoteIdentifier($column);
+    }
 
-        // Use explicit conflict columns if provided, otherwise fall back to first column
-        $targets = !empty($conflictColumns) ? $conflictColumns : [$columns[0]];
-        $conflictTarget = implode(', ', array_map(fn($col) => $this->quoteIdentifier($col), $targets));
-
-        return $sql . " ON CONFLICT ($conflictTarget) DO UPDATE SET " . implode(', ', $updates);
+    /**
+     * {@inheritdoc}
+     */
+    public function requiresConflictTarget(): bool
+    {
+        return true;
     }
 
     /**

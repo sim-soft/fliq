@@ -11,9 +11,16 @@ class DBTest extends TestCase
     /** @return array<string, array<mixed>> */
     public static function dataProvider(): array
     {
+        // PHPUnit resolves every data provider before it runs any test, so a
+        // flag left set here is set for the whole suite, not just this class.
+        // It used to be, and DB::upsert() and friends then returned a builder
+        // instead of executing for every later test that called them — an
+        // integration test could write nothing at all and still see its
+        // assertion fail on the unchanged row rather than on anything it did.
+        // Set for the builds below, cleared before returning.
         DB::sqlOnly();
 
-        return [
+        $cases = [
             'DB INSERT' => [
                 DB::insert('user', ['name' => 'John', 'status' => 1]),
                 'INSERT INTO `user` (`name`, `status`) VALUES (?,?)',
@@ -132,6 +139,10 @@ class DBTest extends TestCase
                 [0, 9, 'f', 'm']
             ],
         ];
+
+        DB::disableSqlOnly();
+
+        return $cases;
     }
 
     /**

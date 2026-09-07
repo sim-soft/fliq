@@ -7,6 +7,7 @@
 - [Global Scopes](#global-scopes)
 - [Batch Insert](#batch-insert)
 - [Batch Update](#batch-update)
+- [Upsert (Insert or Update on Conflict)](#upsert-insert-or-update-on-conflict)
 - [Cursor Pagination](#cursor-pagination)
 - [Cursor (Unbuffered Iteration)](#cursor-unbuffered-iteration)
 - [Chunk By ID](#chunk-by-id)
@@ -277,6 +278,73 @@ OrderItem::updateBatch([
     ['sku' => 'ABC-001', 'stock' => 50],
     ['sku' => 'ABC-002', 'stock' => 0],
 ], 'sku');
+```
+
+---
+
+## Upsert (Insert or Update on Conflict)
+
+Insert a row, or update it if one with the same key already exists — in one
+statement, without a read first.
+
+```php
+use Simsoft\DB\DB;
+
+DB::upsert(
+    'setting',
+    ['group' => 'app', 'key' => 'theme', 'value' => 'dark'],  /* the row */
+    ['value'],                                                 /* update on conflict */
+    null,                                                      /* connection */
+    ['group', 'key']                                           /* conflict target */
+);
+```
+
+The third argument names which columns an existing row takes from the row you
+were inserting. Omit it and every column is updated.
+
+### Updating to a value other than the one inserted
+
+A string key sets a column to a value of its own, bound rather than
+interpolated, instead of the one the INSERT carried:
+
+```php
+/* A new setting is inserted as given; an existing one takes the new value
+   and is marked as overridden, which is not a value the row carries */
+DB::upsert(
+    'setting',
+    ['group' => 'mail', 'key' => 'host', 'value' => 'smtp.example.com'],
+    ['value', 'metadata' => '{"source":"override"}'],
+    null,
+    ['group', 'key']
+);
+```
+
+Numeric and string keys can be mixed: `['value', 'metadata' => ...]` takes
+`value` from the inserted row and sets `metadata` to the value given here.
+
+### Naming the conflict target
+
+MySQL reacts to a conflict on any unique key and takes no target, so the fifth
+argument is ignored there. **PostgreSQL and SQLite require one**, and reject any
+target not backed by a unique constraint:
+
+```
+ERROR: there is no unique or exclusion constraint matching the ON CONFLICT specification
+```
+
+If it is omitted on those engines the first inserted column is used, which is
+usually not a key — so name the target whenever the constraint is not that
+column. Naming it is portable: MySQL accepts and ignores it, so the same call
+runs everywhere.
+
+`Upsert` can also be built directly, which is the same thing without the facade:
+
+```php
+use Simsoft\DB\Builder\Upsert;
+
+(new Upsert('setting', $attributes, ['value'], ['group', 'key']))
+    ->withConnection('pgsql')
+    ->execute();
 ```
 
 ---

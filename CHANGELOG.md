@@ -1061,8 +1061,59 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   `each()`. **Breaking** only for code that was already not getting the eager
   loading it asked for.
 
+**Upsert**
+
+- **An explicit update value was honoured on MySQL and silently dropped on
+  PostgreSQL and SQLite** — `Upsert` built MySQL's statement itself and handed
+  every other engine to the grammar, and only its own branch understood a string
+  key. `['value' => 'x']` therefore set the column to `'x'` on MySQL and to the
+  value the INSERT carried everywhere else, from the same call, with no error
+  and no bind for the value that was dropped. Verified against MySQL 8.0.30,
+  PostgreSQL 14.5 and SQLite 3.49.2: the same call now leaves the same row on
+  all three, and hand-written `DO UPDATE SET v = ?` confirmed both dialects
+  supported this all along. The two branches are gone — the assignments are
+  built once, and the grammar contributes only the wrapper its engine spells
+  differently (`Grammar::onConflictSQL()`, `excludedColumnSQL()`,
+  `requiresConflictTarget()`).
+- **`DB::upsert()` could not name the conflict target** — it took no such
+  argument, so the grammars fell back to the first inserted column. On MySQL,
+  which reacts to any unique key and takes no target, that worked; on PostgreSQL
+  and SQLite it produced `ON CONFLICT ("first_column")`, which those engines
+  reject outright unless that column happens to be a unique constraint
+  ("there is no unique or exclusion constraint matching the ON CONFLICT
+  specification"). An upsert against a composite key was unusable through the
+  facade on those engines. `DB::upsert()` now takes `$conflictColumns` as its
+  fifth argument; MySQL accepts and ignores it, so naming the target makes the
+  same call portable.
+- **An upsert with no columns crashed inside the grammar** — `INSERT INTO t ()
+  VALUES ()` is not a statement any engine accepts. It reached MySQL and was
+  rejected there; on the engines that need a conflict target, `$columns[0]` was
+  read off an empty array and raised "Undefined array key 0" followed by a
+  `TypeError` naming a line in `PostgresGrammar` rather than the argument at
+  fault. It is now refused with an `InvalidArgumentException`, as `Insert`
+  already refuses the same shape.
+
+**Test suite**
+
+- **`DBTest`'s data provider left `DB::sqlOnly()` enabled for the whole run** —
+  PHPUnit resolves every data provider before it runs any test, so a flag set
+  inside one is set globally from that point on, and nothing turned it off.
+  Every later test calling `DB::insert()`, `DB::update()`, `DB::delete()` or
+  `DB::upsert()` therefore got a builder back and wrote nothing, while the
+  facade's own tests passed because they set and cleared the flag themselves.
+  The provider now clears it before returning. This masked nothing that shipped,
+  but it made any new integration test of a `DB::` write silently inert.
+
 ### Changed
 
+- `Grammar::upsertSQL()` removed. It built the whole statement, which is what
+  forced the two-branch structure above: to honour an explicit update value it
+  would have needed the values as well as the column names, and it took only the
+  names. `Upsert` now assembles the statement and asks the grammar for the three
+  parts that actually differ by engine. **This is breaking** for a custom
+  `Grammar` implementation, which must replace `upsertSQL()` with
+  `onConflictSQL()`, `excludedColumnSQL()` and `requiresConflictTarget()`; no
+  caller outside the grammars used it.
 - `whereFulltext()` and `orWhereFulltext()` now throw `InvalidArgumentException`
   for a mode other than `plain`, `phrase` or `websearch`. **This is breaking**
   for code passing any other name — but that code was not getting the search it
@@ -1193,6 +1244,14 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
 - `ActiveQuery::getConditionBinds()` returns the binds for the filtering
   sections alone — `JOIN`, `WHERE`, `GROUP BY`, `HAVING` — for callers that
   re-emit a query's conditions under their own `SELECT`.
+- `DB::upsert()` takes `$conflictColumns` as a fifth argument, naming the
+  columns the conflict is detected on. Required by PostgreSQL and SQLite for
+  any key that is not the first inserted column; accepted and ignored by MySQL,
+  so passing it makes one call portable.
+- `Grammar::onConflictSQL()`, `Grammar::excludedColumnSQL()` and
+  `Grammar::requiresConflictTarget()` split an upsert into the assignments
+  (which do not vary by engine) and the wrapper around them (which does). A
+  custom grammar implementing `Grammar` must add these three.
 
 ### Tests
 
@@ -1602,6 +1661,16 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   two spelled out. The section's first example filtered on a `status` column the
   sample schema does not have; it is `status_code`. Every example, including the
   one showing what not to do, was run before being written down.
+- Upsert had no section of its own — one cheatsheet row, and a PostgreSQL-guide
+  example that showed the conflict target the facade had no way to pass. The
+  advanced features guide now has an "Upsert (Insert or Update on Conflict)"
+  section covering the update columns, the string-key form for setting a column
+  to a value other than the one inserted, mixing the two, and why the conflict
+  target must be named for PostgreSQL and SQLite (with the error those engines
+  give when it is wrong) while MySQL ignores it. The cheatsheet's row showed a
+  call that could not work on those engines and now names the target. Every
+  example was run against MySQL and PostgreSQL, on `setting`, whose composite
+  unique key is what the examples are about.
 
 ---
 

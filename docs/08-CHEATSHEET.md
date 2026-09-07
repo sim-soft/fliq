@@ -55,7 +55,7 @@ User::find()->active()->admins()->get();
 | Pluck column    | `User::find()->pluck('email')`                      |
 | Raw SELECT      | `DB::query('SELECT ...', [...])` — returns rows     |
 | Raw statement   | `DB::raw('UPDATE ...', [...])` — returns bool       |
-| Upsert          | `DB::upsert('users', [...], ['email'])`             |
+| Upsert          | `DB::upsert('users', [...], ['email'], null, ['id'])` |
 | Select raw      | `->selectRaw('COUNT(*) AS total')`                  |
 | Order by raw    | `->orderByRaw('FIELD(status, 3, 1, 2)')`            |
 | Order by desc   | `->orderByDesc('created_at')`                       |

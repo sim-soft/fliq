@@ -62,16 +62,42 @@ interface Grammar
     public function insertIgnoreSQL(): string;
 
     /**
-     * Build UPSERT (insert or update on conflict) SQL.
+     * Build the clause that turns an INSERT into an upsert.
      *
-     * @param string $table The quoted table name.
-     * @param array<int, string> $columns The column names.
-     * @param array<int, string> $updateColumns Columns to update on conflict.
-     * @param string $placeholders The VALUES placeholders.
-     * @param array<int, string> $conflictColumns Columns that form the unique constraint for conflict detection.
-     * @return string
+     * The assignments are built by the caller, which is the only place that
+     * knows whether each column takes the inserted value or one the caller
+     * supplied. All this adds is the engine's wrapper around them —
+     * `ON DUPLICATE KEY UPDATE` for MySQL, `ON CONFLICT (...) DO UPDATE SET`
+     * for the engines that need a conflict target named.
+     *
+     * @param array<int, string> $assignments Ready-built `col = expr` clauses.
+     * @param array<int, string> $conflictColumns Columns forming the unique constraint.
+     * @return string The clause, including its leading space.
      */
-    public function upsertSQL(string $table, array $columns, array $updateColumns, string $placeholders, array $conflictColumns = []): string;
+    public function onConflictSQL(array $assignments, array $conflictColumns): string;
+
+    /**
+     * How the engine refers to the row that was being inserted.
+     *
+     * MySQL spells it `VALUES(col)`, PostgreSQL `EXCLUDED.col`, SQLite
+     * `excluded.col`. Used to build the assignment for a column that takes the
+     * value the INSERT carried rather than one the caller named.
+     *
+     * @param string $column The unquoted column name.
+     * @return string The reference, quoted for this engine.
+     */
+    public function excludedColumnSQL(string $column): string;
+
+    /**
+     * Whether an upsert on this engine must name the conflicting columns.
+     *
+     * MySQL reacts to any unique key and takes no conflict target; PostgreSQL
+     * and SQLite require one, and reject a target that is not backed by a
+     * unique constraint.
+     *
+     * @return bool
+     */
+    public function requiresConflictTarget(): bool;
 
     /**
      * Get the driver name identifier.
