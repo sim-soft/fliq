@@ -336,7 +336,7 @@ Fetch one row at a time without buffering the full result set. Ideal for process
 
 ```php
 /* Iterates without loading all rows into memory */
-foreach (User::find()->where('status', 1)->cursor() as $user) {
+foreach (User::find()->where('status_code', 1)->cursor() as $user) {
     processUser($user);
 }
 
@@ -347,6 +347,44 @@ foreach (Order::find()->where('total', '>', 100)->orderBy('id')->cursor() as $or
 ```
 
 Works with PDO-based drivers (MySQL, PostgreSQL, SQLite). Falls back to buffered iteration for MySQLi.
+
+### You cannot query the same connection while a cursor is open
+
+This is what streaming *is*: the server is still sending rows, so on MySQL any
+other query on that connection fails with *"Cannot execute queries while other
+unbuffered queries are active"*. That includes a lazy relation read, an update,
+or a count — anything issued from inside the loop.
+
+```php
+/* Not this — the relation read is a second query on a busy connection */
+foreach (User::find()->cursor() as $user) {
+    foreach ($user->posts()->fetch() as $post) { /* ... */ }
+}
+
+/* This — collect while streaming, act afterwards */
+$ids = [];
+foreach (User::find()->cursor() as $user) {
+    $ids[] = $user->id;
+}
+foreach (Post::find()->whereIn('user_id', $ids)->all() as $post) { /* ... */ }
+```
+
+For the same reason `with()` cannot be combined with `cursor()`: eager loading
+batches the related rows in a second query once every parent is known, and a
+cursor never has them all at once. Asking for both raises a `QueryException`
+rather than handing back models whose relations are quietly unloaded.
+
+If you need to query as you iterate, use `each()`, which fetches a chunk at a
+time and has no such restriction:
+
+```php
+foreach (User::find()->with('posts')->each(500) as $user) {
+    /* free to query here — each() buffers 500 rows at a time */
+}
+```
+
+`each()` trades constant memory for a bounded chunk; `cursor()` trades the
+ability to query for constant memory. Both beat loading the whole table.
 
 ---
 

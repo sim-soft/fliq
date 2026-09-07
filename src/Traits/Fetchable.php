@@ -397,13 +397,42 @@ trait Fetchable
     /**
      * Get results as an unbuffered cursor for memory-efficient iteration.
      *
-     * Fetches one row at a time without buffering the full result set.
-     * Works with PDO-based drivers (MySQL, PostgreSQL, SQLite).
+     * Fetches one row at a time without buffering the full result set, so the
+     * memory cost stays flat however many rows match. Works with PDO-based
+     * drivers (MySQL, PostgreSQL, SQLite); on a driver without PDO underneath
+     * it falls back to {@see all()}, which buffers.
+     *
+     * **While a cursor is open, MySQL will not run another query on the same
+     * connection.** That is what streaming means: the server is still sending
+     * rows. A lazy relation read, a write, or any other query issued from
+     * inside the loop fails with "Cannot execute queries while other unbuffered
+     * queries are active". Collect what you need and act after the loop, use a
+     * separate connection, or use {@see each()}, which buffers a chunk at a
+     * time and has no such restriction.
+     *
+     * Eager loading cannot be combined with a cursor: see below.
      *
      * @return Generator
+     * @throws QueryException If relations were requested with with().
      */
     public function cursor(): Generator
     {
+        // with() batches the related rows in a second query once the parents
+        // are known, and a cursor never knows them all at once — nor could it
+        // run that query while streaming. This was ignored on PDO drivers and
+        // honoured on mysqli, which falls back to all(), so the same code
+        // returned models with relations loaded or without depending on the
+        // driver, and said nothing either way. Refusing is the only answer
+        // that is the same everywhere.
+        if (!empty($this->eagerLoad)) {
+            throw new QueryException(
+                'cursor() cannot eager load ' . implode(', ', $this->eagerLoad)
+                . ': relations are batched in a second query, which a cursor cannot run while it streams.'
+                . ' Use each() or all() to eager load, or drop with() and read the relations after the loop.',
+                ''
+            );
+        }
+
         $driver = $this->getDriver('read');
 
         if (!method_exists($driver, 'getPdo')) {
@@ -412,26 +441,65 @@ trait Fetchable
         }
 
         $pdo = $driver->getPdo();
-        $sql = $this->getSQL();
-        $binds = $this->getBinds();
 
-        // Use unbuffered queries for MySQL; other drivers are unbuffered by default
-        $options = [];
-        if ($pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) === 'mysql') {
-            $options[\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY] = false;
+        // MySQL buffers by default, and buffering is a property of the
+        // connection, not of one statement. This was passed to prepare() as a
+        // statement option, where PDO accepts it and ignores it — so cursor()
+        // was quietly buffering the whole result set the entire time. Measured
+        // over 20k rows it cost more memory than getArray(), which at least
+        // says it loads everything. The other PDO drivers stream already.
+        $buffered = $pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) === 'mysql'
+            && $pdo->getAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY);
+
+        if ($buffered) {
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         }
 
-        $stmt = $pdo->prepare($sql, $options);
-        $stmt->execute($binds);
+        $stmt = $pdo->prepare($this->getSQL());
 
+        try {
+            $stmt->execute($this->getBinds());
+
+            yield from $this->streamRows($stmt);
+        } finally {
+            // finally, not a trailing statement: a caller that breaks out of
+            // the loop, or throws inside it, never reaches the end of the
+            // generator body. Leaving the statement open holds the result set
+            // and leaves the connection unable to run anything else, and
+            // leaving the attribute off changes every later query on a
+            // connection the caller shares. PHP runs this on break, on
+            // exception, and when an abandoned generator is collected.
+            $stmt->closeCursor();
+
+            if ($buffered) {
+                $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+            }
+        }
+    }
+
+    /**
+     * Yield the rows of an executed statement, hydrated and keyed as configured.
+     *
+     * Split out so cursor() can wrap the whole stream in one try/finally.
+     *
+     * @param \PDOStatement $stmt The executed statement.
+     * @return Generator
+     */
+    private function streamRows(\PDOStatement $stmt): Generator
+    {
+        // indexBy() used to be dropped here, silently and only on PDO drivers:
+        // the same query answered with the configured keys under mysqli, which
+        // falls back to all(), and with 0, 1, 2 under pdo_mysql. Whether a key
+        // survives must not depend on which driver is behind the connection.
         while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
-            if ($this->modelClass) {
-                yield $this->getHydrated($row);
+            $value = $this->modelClass ? $this->getHydrated($row) : $row;
+
+            if ($this->indexBy === null) {
+                yield $value;
                 continue;
             }
-            yield $row;
-        }
 
-        $stmt->closeCursor();
+            yield is_string($this->indexBy) ? $row[$this->indexBy] : ($this->indexBy)($row) => $value;
+        }
     }
 }

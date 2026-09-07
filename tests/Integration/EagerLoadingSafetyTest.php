@@ -262,16 +262,16 @@ class EagerLoadingSafetyTest extends DatabaseTestCase
     #[Test]
     public function hasOneAnswersWithNullWhenThereIsNoRelatedRow(): void
     {
-        $orphan = (new Raw(
-            'SELECT u.id FROM user u LEFT JOIN user_profile p ON p.user_id = u.id'
-            . ' WHERE p.user_id IS NULL LIMIT 1'
-        ))->fetchAll();
+        // Every user in the fixture has a profile, so this has to make its own
+        // orphan. It used to look for one instead, which meant it only asserted
+        // anything when another test in the class happened to have left one
+        // behind — under a random order it skipped more often than it ran.
+        $username = $this->expendableRow('hasone_orphan');
 
-        if ($orphan === []) {
-            $this->markTestSkipped('Every user in the fixture has a profile.');
-        }
+        $id = (int)(new Raw('SELECT id FROM user WHERE username = ?', [$username]))
+            ->fetchAll()[0]['id'];
 
-        $user = User::find()->where('id', $orphan[0]['id'])->with('profile')->first();
+        $user = User::find()->where('id', $id)->with('profile')->first();
 
         $this->assertInstanceOf(User::class, $user);
         $this->assertTrue($user->relationLoaded('profile'));

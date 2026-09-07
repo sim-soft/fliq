@@ -1021,6 +1021,46 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   raises a `QueryException` naming the columns instead of returning `null` —
   which was indistinguishable from "no such row".
 
+**Cursor**
+
+- **`cursor()` buffered the entire result set, which is the one thing it exists
+  not to do** — `PDO::MYSQL_ATTR_USE_BUFFERED_QUERY` is an attribute of the
+  connection, and it was being passed to `prepare()` as a statement option,
+  where PDO accepts it and does nothing with it. Every row was loaded into
+  memory before the first one was yielded. Measured over 20,000 rows, `cursor()`
+  held 5.15 MB against `getArray()`'s 4.46 MB — the method documented for
+  "processing millions of rows with constant memory" cost more than the method
+  that says it loads everything. Buffering is now switched off on the connection
+  for the duration of the cursor and restored afterwards: the same 20,000 rows
+  now cost 0.74 MB, and draining them all does not raise peak memory at all.
+  **This is a behaviour change**: a genuinely streaming cursor means MySQL will
+  not run another query on that connection until it is drained, so a lazy
+  relation read or a write from inside the loop now fails with "Cannot execute
+  queries while other unbuffered queries are active" instead of silently
+  wasting memory. Collect inside the loop and act after it, or use `each()`,
+  which buffers a chunk at a time and has no such restriction.
+- **A cursor left its statement open when the caller stopped early** — the
+  `closeCursor()` was a trailing statement in the generator body, which a caller
+  who `break`s out of the loop, or throws inside it, never reaches. With
+  buffering genuinely off that leaves the result set open and the connection
+  unable to run anything else. Both the close and the attribute restore now
+  happen in a `finally`, which PHP runs on `break`, on exception, and when an
+  abandoned generator is collected.
+- **`indexBy()` was silently dropped by `cursor()` on PDO drivers** — and
+  honoured on MySQLi, which has no `getPdo()` and so falls back to `all()`. The
+  same query returned the configured keys or `0, 1, 2` depending on which driver
+  was behind the connection, with no error either way. The cursor now keys its
+  rows the way `getArray()` does, string or closure, on every driver.
+- **`with()` was silently dropped by `cursor()` on PDO drivers**, and applied on
+  MySQLi for the same reason — so the same code handed back models with their
+  relations loaded or without, depending on the driver, and a relation that was
+  never loaded is indistinguishable from a parent that has no related rows.
+  Eager loading batches the related rows in a second query once every parent is
+  known, which a cursor can neither know nor run while it streams; combining the
+  two now raises a `QueryException` naming the relations and pointing at
+  `each()`. **Breaking** only for code that was already not getting the eager
+  loading it asked for.
+
 ### Changed
 
 - `whereFulltext()` and `orWhereFulltext()` now throw `InvalidArgumentException`
@@ -1552,6 +1592,16 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   a constraint is safe. The same example selected `avatar` from a projection
   purely to keep the foreign key in it; that is no longer necessary and the
   section says so.
+- The advanced features guide's cursor section promised constant memory and
+  stopped there. Now that a cursor genuinely streams, what that costs has to be
+  documented beside it: a new "You cannot query the same connection while a
+  cursor is open" subsection covers the MySQL restriction, shows the collect-
+  then-act shape that replaces a relation read inside the loop, states that
+  `with()` raises rather than being ignored, and gives `each()` as the answer
+  for callers who need to query as they iterate — with the trade-off between the
+  two spelled out. The section's first example filtered on a `status` column the
+  sample schema does not have; it is `status_code`. Every example, including the
+  one showing what not to do, was run before being written down.
 
 ---
 
