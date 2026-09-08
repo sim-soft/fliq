@@ -14,6 +14,19 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Query result caching**
+
+- **`CacheInterface` claimed to be "PSR-16 compatible"** — it is not, in either
+  direction. It declares four of PSR-16's eight methods (no `clear()`,
+  `getMultiple()`, `setMultiple()` or `deleteMultiple()`) and does not throw on
+  invalid keys, so a class written against it is not a PSR-16 cache, and a
+  PSR-16 cache does not satisfy it without an adapter. Anyone who took the
+  docblock at its word and passed a PSR-16 implementation straight to
+  `QueryCache::setDriver()` got a `TypeError`. The docblock now states what the
+  interface actually is, and `docs/05` carries the adapter — including the `$ttl`
+  translation, since this interface spells "no expiry" as `0` and PSR-16 spells
+  it `null`.
+
 **Error collection**
 
 - **`addErrors()` overwrote messages instead of adding them** — it merged with
@@ -1953,6 +1966,21 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
 
 ### Documentation
 
+- New "When entries go away" section in the advanced features guide. The cache
+  documentation described how to switch caching on but never what it costs: the
+  TTL is the only thing that ends an entry, nothing invalidates on write, and a
+  query cached for 300 seconds keeps serving pre-`UPDATE` rows for up to 300
+  seconds — including after an update issued by your own code, on the same
+  connection, in the same request. The section shows that sequence, says which
+  queries to keep `cache()` off, and covers eviction: expired entries are
+  dropped on the next read that finds them, but there is no background sweep, so
+  keys never read again stay resident and a long-lived worker caching a wide
+  spread of one-off queries wants a driver with its own eviction. `clear()` is
+  documented, along with the fact that it is not on the interface and needs the
+  concrete `ArrayCache`.
+- The custom cache driver section now states that only `get()` and `set()` are
+  ever called by the query cache, so implementers know `delete()` and `has()`
+  are contract obligations no framework path will reach.
 - New "Security: how your values are protected" section in the query builder
   guide, covering value binding, which parts of a query are validated instead of
   bound, validating column names that come from user input, and the

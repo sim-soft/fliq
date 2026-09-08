@@ -86,6 +86,47 @@ User::find()->where('status', 1)->on('tenant_a')->cache(60)->all();
 User::find()->where('status', 1)->on('tenant_b')->cache(60)->all();
 ```
 
+### When entries go away
+
+The TTL is the **only** thing that ends a cache entry. Nothing in the framework
+invalidates entries when you write, so a read cached for 300 seconds keeps
+serving the rows it captured for up to 300 seconds after an `UPDATE` changes
+them — including an update issued by your own code, on the same connection, in
+the same request:
+
+```php
+$name = User::find()->where('id', 1)->cache(300)->first()->username;  // 'alice'
+
+User::find()->where('id', 1)->first()->update(['username' => 'alice2']);
+
+$name = User::find()->where('id', 1)->cache(300)->first()->username;  // still 'alice'
+```
+
+Choose a TTL you are willing to be that far out of date by, and keep `cache()`
+off queries whose freshness matters — a balance, a stock level, a permission
+check.
+
+An expired entry is not served, and is dropped from the driver on the first
+`get()` or `has()` that finds it lapsed. `ArrayCache` therefore does not grow
+without bound in a long-running worker, but it only prunes keys that are read
+again — it has no background sweep, so keys that are never read a second time
+stay resident until the process ends. For a long-lived process caching a wide
+spread of one-off queries, prefer a driver with its own eviction (Redis,
+Memcached) over `ArrayCache`.
+
+To drop everything at once, `ArrayCache::clear()` empties the store. It is not
+part of `CacheInterface`, so you need the concrete instance to call it:
+
+```php
+$cache = new ArrayCache();
+QueryCache::setDriver($cache);
+
+$cache->clear();          // works — you are holding the ArrayCache
+
+QueryCache::reset();      // interface-level alternative: drops the driver
+                          // entirely, which also disables caching
+```
+
 ### Custom Cache Driver
 
 Implement `Simsoft\DB\Cache\CacheInterface`:
@@ -103,6 +144,38 @@ class RedisCache implements CacheInterface
 
 QueryCache::setDriver(new RedisCache($redis));
 ```
+
+Those four methods are named and shaped after PSR-16 but this is not PSR-16: it
+omits `clear()`, `getMultiple()`, `setMultiple()` and `deleteMultiple()`, and it
+does not throw on invalid keys. A PSR-16 cache does not satisfy the interface on
+its own — wrap it:
+
+```php
+class Psr16Cache implements CacheInterface
+{
+    public function __construct(private \Psr\SimpleCache\CacheInterface $psr) {}
+
+    public function get(string $key, mixed $default = null): mixed
+    {
+        return $this->psr->get($key, $default);
+    }
+
+    public function set(string $key, mixed $value, int $ttl = 0): bool
+    {
+        return $this->psr->set($key, $value, $ttl > 0 ? $ttl : null);
+    }
+
+    public function delete(string $key): bool { return $this->psr->delete($key); }
+    public function has(string $key): bool    { return $this->psr->has($key); }
+}
+```
+
+Note the `$ttl` translation: this interface spells "no expiry" as `0`, PSR-16
+spells it as `null`.
+
+Only `get()` and `set()` are called by the query cache. `delete()` and `has()`
+are part of the contract for callers holding a driver directly — implement them
+correctly, but nothing in the framework will reach them.
 
 ---
 
