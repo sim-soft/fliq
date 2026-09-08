@@ -14,8 +14,21 @@ class Update extends Builder
 {
     use LowPriority, Ignore, Condition;
 
-    /** @var array<int, string> */
-    protected array $set = [];
+    /**
+     * @var array<int, array{string, int|float}> Counter assignments, applied at build time.
+     *
+     * These used to be rendered and bound the moment setCounter() was called.
+     * Two things followed from that. The column was quoted for whichever
+     * grammar was current then, and Model::updateCounter() calls setCounter()
+     * before withConnection() — so on PostgreSQL the statement was built with
+     * MySQL backticks and the server rejected it outright. And the value was
+     * bound ahead of the attribute values, though the assignment it belongs to
+     * is emitted after them, so update(['name' => 'x']) combined with a counter
+     * sent the two values in the wrong order and wrote each into the other's
+     * column. Both go away once the rendering happens in the same pass, and in
+     * the same order, as everything else.
+     */
+    protected array $counters = [];
 
     /** @var array<int, string> Columns to return via RETURNING clause */
     protected array $returningColumns = [];
@@ -53,6 +66,7 @@ class Update extends Builder
     public function returning(string ...$columns): static
     {
         $this->returningColumns = array_values($columns);
+        $this->invalidateSQL();
         return $this;
     }
 
@@ -96,19 +110,43 @@ class Update extends Builder
      */
     public function setCounter(string $attribute, int|float $value): static
     {
-        $quoted = $this->quoteColumn($attribute);
+        // Validated here rather than only at build time so an invalid column
+        // name is refused by the call that named it, which is where the caller
+        // can see it. The quoted form is discarded: it belongs to whichever
+        // grammar is current now, and the build quotes it again for whichever
+        // grammar is current then.
+        $this->quoteColumn($attribute);
 
-        if ($value == 0) {
-            $this->set[] = "$quoted = {$this->getPlaceHolder()}";
-            $this->appendBinds($value);
-            return $this;
-        }
-
-        $operator = $value > 0 ? '+' : '-';
-        $this->set[] = "$quoted = $quoted $operator {$this->getPlaceHolder()}";
-        $this->appendBinds(abs($value));
+        $this->counters[] = [$attribute, $value];
+        $this->invalidateSQL();
 
         return $this;
+    }
+
+    /**
+     * Render the counter assignments, binding their values in place.
+     *
+     * @return array<int, string>
+     */
+    private function buildCounterSQL(): array
+    {
+        $sets = [];
+
+        foreach ($this->counters as [$attribute, $value]) {
+            $quoted = $this->quoteColumn($attribute);
+
+            if ($value == 0) {
+                $sets[] = "$quoted = {$this->getPlaceHolder()}";
+                $this->appendBinds($value);
+                continue;
+            }
+
+            $operator = $value > 0 ? '+' : '-';
+            $sets[] = "$quoted = $quoted $operator {$this->getPlaceHolder()}";
+            $this->appendBinds(abs($value));
+        }
+
+        return $sets;
     }
 
     /**
@@ -122,7 +160,10 @@ class Update extends Builder
             $this->appendBinds($value);
         }
 
-        $sets = array_merge($data, $this->set);
+        // Appended after the attribute assignments because that is the order
+        // they are emitted in, and the binds have to arrive in the order their
+        // placeholders do.
+        $sets = array_merge($data, $this->buildCounterSQL());
 
         $sql = implode(' ', array_filter([
             'UPDATE',

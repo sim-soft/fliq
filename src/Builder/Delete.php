@@ -45,6 +45,7 @@ class Delete extends Builder
     public function quick(): self
     {
         $this->quick = true;
+        $this->invalidateSQL();
         return $this;
     }
 
@@ -59,6 +60,7 @@ class Delete extends Builder
     public function returning(string ...$columns): static
     {
         $this->returningColumns = array_values($columns);
+        $this->invalidateSQL();
         return $this;
     }
 

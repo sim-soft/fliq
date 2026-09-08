@@ -10,7 +10,13 @@ use Simsoft\DB\Builder\Raw;
  */
 trait Condition
 {
-    use Binds;
+    // Binds is deliberately not imported here. Every user of this trait is a
+    // Builder, which already provides it — and which overrides getBinds() to
+    // build the statement first, since the values are produced by the same pass
+    // that emits the placeholders they fill. Importing it again would flatten
+    // the plain accessor into Update and Delete, where it takes precedence over
+    // the parent's override: reading the binds before the SQL then answered
+    // null for a statement that plainly had them.
     use ConditionClause;
 
     /** @var string|ActiveQuery|Raw|null Query condition. */
@@ -25,6 +31,7 @@ trait Condition
     public function condition(string|ActiveQuery|Raw|null $condition): static
     {
         $this->condition = $condition;
+        $this->invalidateSQL();
         return $this;
     }
 

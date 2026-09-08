@@ -21,6 +21,7 @@ trait Ignore
     public function ignore(): static
     {
         $this->ignore = true;
+        $this->invalidateSQL();
         return $this;
     }
 

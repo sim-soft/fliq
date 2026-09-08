@@ -14,6 +14,66 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Statement building**
+
+`getSQL()` memoises, and nothing ever invalidated what it cached. The
+memoisation is load-bearing — `buildSQL()` appends a bind for every placeholder
+it emits, so running it twice over the same binds produces two values for one
+placeholder — but caching a statement that can still be mutated meant the first
+read fixed it for good. Everything below follows from a value being computed at
+one moment and used at another.
+
+- **Reading a builder's SQL froze it** — every mutation made after the read was
+  dropped in silence: `Select::distinct()`, `Insert::ignore()`,
+  `Update::ignore()`, `Update::lowPriority()`, `Update::returning()`,
+  `Delete::quick()`, `Delete::lowPriority()` and `condition()` on any of them.
+  Reading early is not an unusual thing to do — `dump()`, `dd()`, `explain()`
+  and string interpolation all read the SQL, and `DB::sqlOnly()` exists to hand
+  back a builder for the express purpose of being inspected — so the documented
+  inspect-then-run flow ran a statement that was not the one it had shown.
+  `$b->getSQL(); $b->returning('id'); $b->execute();` executed without the
+  `RETURNING` clause. Every mutator now discards the cache, and `getSQL()`
+  clears the binds before rebuilding, which is what makes the rebuild safe.
+- **`Update::setCounter()` bound its value ahead of the values it is emitted
+  after** — the counter was rendered and bound the moment it was named, before
+  the attribute assignments that precede it in the statement. `new Update('user',
+  ['username' => 'ALPHA'], 'id = 1')` with `setCounter('status_code', 7)` sent
+  `[7, 'ALPHA']` for placeholders running `username, status_code`, so each value
+  arrived at the other's column and MySQL refused the statement outright:
+  `Truncated incorrect INTEGER value: 'ALPHA'`. Nothing was written.
+- **`Update::setCounter()` quoted the column for the wrong engine** — it quoted
+  at call time, and `Model::updateCounter()` calls it before `withConnection()`.
+  On PostgreSQL the statement was built with MySQL backticks
+  (`UPDATE "user" SET \`status_code\` = ...`) and the server rejected it with
+  `SQLSTATE[42601]: Syntax error`; `updateCounter()` did not work on PostgreSQL
+  at all. Counters are now rendered during the build, in the same pass and the
+  same order as everything else, so they are quoted for whichever connection the
+  statement actually runs on. An invalid column name is still refused by the
+  call that named it.
+- **`Select::condition()` called twice kept the first condition's binds** — it
+  absorbed the source's values as it rendered, and the second call replaced the
+  SQL while leaving the first call's values in place. The statement then held
+  one placeholder and two values and the driver refused it. The condition source
+  is now held and rendered once, during the build.
+- **`getBinds()` answered `null` before the statement had been built** on
+  `Insert`, `Update`, `Delete` and `Upsert` — the values are produced by the same
+  pass that emits the placeholders they fill, so a statement that plainly had
+  values reported none until its SQL had been read. `Select` answered, because it
+  bound in `condition()` instead, so the two disagreed. Both reads now agree with
+  each other in either order, on every builder. (`Traits\Condition` imported
+  `Traits\Binds`, which flattened the plain accessor into the using class where
+  it took precedence over the builder's override; the import is gone.)
+- **`withConnection()` did not requote an already-built statement** — the
+  statement is quoted for a particular grammar, so it is no more valid across a
+  connection change than the cached grammar that `withConnection()` has always
+  discarded.
+
+`Builder\Clauses` types are unaffected: their subclasses are constructed
+complete and have no mutators, and `CaseExpression` still collects its binds as
+it renders — so for those, binds are still read *after* the cast to string, as
+`docs/02-QUERY-BUILDER.md` documents. `ActiveQuery` has its own `getSQL()` that
+rebuilds on every call and was never affected.
+
 **Query monitoring**
 
 `QueryMonitor` exists to notice a lazy-loading loop and name the line that wrote
@@ -67,6 +127,12 @@ N+1 in it.
   `Collection`, so at that point the log was empty and the advisor had nothing
   to suggest. Both now consume the results first, and the advisor's documented
   output no longer names a table its own example does not produce.
+- The SQL-only section of `docs/01-GETTING-STARTED.md` showed a builder being
+  handed back and inspected without saying what may be done with it afterwards.
+  It now states that reading the SQL does not finalise the builder, that
+  `getSQL()` and `getBinds()` agree in either order, and that
+  `Builder\Clauses` types are not builders and still require reading their binds
+  after the cast.
 
 **Drivers**
 

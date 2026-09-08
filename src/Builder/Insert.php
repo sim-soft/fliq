@@ -42,6 +42,7 @@ class Insert extends Builder
     public function returning(string $column): static
     {
         $this->returningColumn = $column;
+        $this->invalidateSQL();
         return $this;
     }
 

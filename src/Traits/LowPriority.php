@@ -21,6 +21,7 @@ trait LowPriority
     public function lowPriority(): static
     {
         $this->lowPriority = true;
+        $this->invalidateSQL();
         return $this;
     }
 

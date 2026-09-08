@@ -49,6 +49,7 @@ abstract class Aggregate extends Builder
     public function distinct(): self
     {
         $this->distinct = true;
+        $this->invalidateSQL();
         return $this;
     }
 
@@ -61,6 +62,7 @@ abstract class Aggregate extends Builder
     public function condition(string|ActiveQuery|Raw $condition): self
     {
         $this->condition = $condition;
+        $this->invalidateSQL();
         return $this;
     }
 

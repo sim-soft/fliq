@@ -655,7 +655,20 @@ $builder->getBinds();    // ['John']
 DB::disableSqlOnly();    // back to executing
 ```
 
-Two things to know before using it:
+Reading the SQL does not finalise the builder. You can keep configuring it
+afterwards and the statement is rebuilt, so what executes is what the last read
+showed:
+
+```php
+$builder = DB::update('user', ['status_code' => 4], 'id = 3');
+$builder->getSQL();                  // inspect
+$builder->returning('id');           // still takes effect
+$builder->withConnection('pg')->execute();
+```
+
+`getSQL()` and `getBinds()` agree with each other in either order.
+
+Three things to know before using it:
 
 - **It is global and it stays on.** The flag is static, so it applies to every
   `DB::` call anywhere in the process until `DB::disableSqlOnly()` is called.
@@ -663,3 +676,6 @@ Two things to know before using it:
 - **`raw()` and `query()` ignore it.** They do not go through the builder, so
   they execute even in SQL-only mode. Only `insert()`, `insertOrIgnore()`, the
   `update*()` family, the `delete*()` family and `upsert()` are affected.
+- **Clauses are not builders.** `CaseExpression` and the other
+  `Builder\Clauses` types collect their binds as they render, so for those you
+  still read `getBinds()` *after* casting to a string.
