@@ -7,6 +7,11 @@ namespace Simsoft\DB\Traits;
  *
  * Builds the LIKE family, including the case-insensitive variants, which differ
  * by engine: PostgreSQL has ILIKE, while the others lower both sides.
+ *
+ * These four methods are case-SENSITIVE by default. The whereLike() family on
+ * ActiveQuery wraps them with the opposite default, so like() and whereLike()
+ * called with the same arguments do not produce the same SQL and, on
+ * PostgreSQL, do not return the same rows.
  */
 trait Likeable
 {
@@ -103,7 +108,7 @@ trait Likeable
      * @param string $attribute the attribute name
      * @param string|string[] $value the like's value
      * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
+     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: true.
      * @return static
      */
     public function orLike(string $attribute, string|array $value, bool $matchAll = true, bool $caseSensitive = true): static
@@ -117,7 +122,7 @@ trait Likeable
      * @param string $attribute the attribute name
      * @param string|string[] $value the like's value
      * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
+     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: true.
      * @return static
      */
     public function notLike(string $attribute, string|array $value, bool $matchAll = true, bool $caseSensitive = true): static
@@ -131,11 +136,86 @@ trait Likeable
      * @param string $attribute the attribute name
      * @param string|string[] $value the like's value
      * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
+     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: true.
      * @return static
      */
     public function orNotLike(string $attribute, string|array $value, bool $matchAll = true, bool $caseSensitive = true): static
     {
         return $this->like($attribute, $value, false, $matchAll, 'OR', $caseSensitive);
+    }
+
+    /**
+     * Where LIKE, case-insensitive by default.
+     *
+     * Not an alias for like(), despite the shared implementation: this family
+     * defaults $caseSensitive to false where like() defaults it to true. The
+     * same call through each produces different SQL, and on PostgreSQL — where
+     * ILIKE and LIKE genuinely differ rather than deferring to the column
+     * collation — different rows. Pass $caseSensitive explicitly if it matters
+     * which you get.
+     *
+     * @param string $attribute The attribute name.
+     * @param string $value The LIKE pattern.
+     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
+     * @param string $logicalOperator The logical operator. Default: 'AND'.
+     * @return static
+     */
+    public function whereLike(
+        string $attribute,
+        string $value,
+        bool $caseSensitive = false,
+        string $logicalOperator = 'AND'
+    ): static {
+        return $this->like($attribute, $value, true, true, $logicalOperator, $caseSensitive);
+    }
+
+    /**
+     * Or where LIKE, case-insensitive by default.
+     *
+     * Not an alias for orLike() — see whereLike() for why.
+     *
+     * @param string $attribute The attribute name.
+     * @param string $value The LIKE pattern.
+     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
+     * @return static
+     */
+    public function orWhereLike(string $attribute, string $value, bool $caseSensitive = false): static
+    {
+        return $this->like($attribute, $value, true, true, 'OR', $caseSensitive);
+    }
+
+    /**
+     * Where NOT LIKE, case-insensitive by default.
+     *
+     * Not an alias for notLike() — see whereLike() for why.
+     *
+     * @param string $attribute The attribute name.
+     * @param string $value The LIKE pattern.
+     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
+     * @param string $logicalOperator The logical operator. Default: 'AND'.
+     * @return static
+     */
+    public function whereNotLike(
+        string $attribute,
+        string $value,
+        bool $caseSensitive = false,
+        string $logicalOperator = 'AND'
+    ): static {
+        return $this->like($attribute, $value, false, true, $logicalOperator, $caseSensitive);
+    }
+
+    /**
+     * Or where NOT LIKE, case-insensitive by default.
+     *
+     * Not an alias for orNotLike() — see whereLike() for why.
+     *
+     * @param string $attribute The attribute name.
+     * @param string $value The LIKE pattern.
+     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
+     * @return static
+     */
+    public function orWhereNotLike(string $attribute, string $value, bool $caseSensitive = false): static
+    {
+        return $this->like($attribute, $value, false, true, 'OR', $caseSensitive);
     }
 }

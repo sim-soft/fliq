@@ -1300,6 +1300,41 @@ $users = User::find()->where('status_code', 1)->like('username', $terms)->get();
 This matches `in()`, which likewise skips an empty value list. Filter the
 result set yourself if an empty search should instead return nothing.
 
+### Case sensitivity
+
+There are two families, and **they have opposite defaults**:
+
+| Family | Methods | Default |
+|--------|---------|---------|
+| Base | `like()`, `orLike()`, `notLike()`, `orNotLike()` | case-**sensitive** |
+| Where | `whereLike()`, `orWhereLike()`, `whereNotLike()`, `orWhereNotLike()` | case-**insensitive** |
+
+They share an implementation and differ only in that default, so the same call
+through each does not produce the same SQL:
+
+```php
+/* WHERE `user`.`username` LIKE ? */
+User::find()->like('username', 'Alice%')->get();
+
+/* WHERE LOWER(`user`.`username`) LIKE LOWER(?) */
+User::find()->whereLike('username', 'Alice%')->get();
+```
+
+On MySQL this often makes no difference, because the usual collations are
+already case-insensitive. **On PostgreSQL it does**: `LIKE` and `ILIKE` are
+genuinely different operators there, so the two calls above return different
+rows. Pass `caseSensitive` explicitly whenever it matters:
+
+```php
+User::find()->like('username', 'Alice%', caseSensitive: false)->get();   // ILIKE on PG
+User::find()->whereLike('username', 'Alice%', caseSensitive: true)->get(); // LIKE on PG
+```
+
+Case-insensitive matching compiles per engine: `ILIKE` / `NOT ILIKE` on
+PostgreSQL, and `LOWER(col) LIKE LOWER(?)` everywhere else. Note that the
+`LOWER()` form cannot use a plain index on the column — add a functional index
+on `LOWER(col)` if such a search needs to be fast.
+
 ## Ordering, Grouping, Limit & Offset
 
 ```php

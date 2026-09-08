@@ -556,6 +556,19 @@ For explicit case-sensitive matching on PG, use `caseSensitive: true`:
 User::find()->whereLike('username', 'Alice%', caseSensitive: true)->get();
 ```
 
+> **Watch the family you call.** `whereLike()` is case-insensitive by default,
+> but `like()` is case-**sensitive** by default. On MySQL that difference is
+> usually hidden by the collation; on PostgreSQL it is not, and the two return
+> different rows:
+>
+> ```php
+> User::find()->like('username', 'Alice%')->get();       // LIKE  — exact case
+> User::find()->whereLike('username', 'Alice%')->get();  // ILIKE — any case
+> ```
+>
+> Pass `caseSensitive` explicitly and the two families agree. See
+> [Case sensitivity](02-QUERY-BUILDER.md#case-sensitivity).
+
 ---
 
 ## Advisory Locks

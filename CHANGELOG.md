@@ -14,6 +14,30 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**LIKE case sensitivity**
+
+- **`orLike()`, `notLike()` and `orNotLike()` documented the wrong default** —
+  all three docblocks said `caseSensitive` defaults to `false` against a
+  signature reading `bool $caseSensitive = true`. The reverse of the behaviour,
+  and the more dangerous way round to be wrong: a reader trusting it expects a
+  case-insensitive search and writes a strict one, which on PostgreSQL silently
+  returns fewer rows rather than failing.
+- **`whereLike()` and its three siblings claimed to be aliases and are not** —
+  each said "Alias for like()", which is true of the implementation and false of
+  the behaviour: they default `caseSensitive` to `false` where the base family
+  defaults it to `true`. The same call through each builds different SQL, and on
+  PostgreSQL — where `LIKE` and `ILIKE` genuinely differ rather than deferring
+  to the column collation — matches different rows. The docblocks now say so and
+  point at each other, and the trait docblock records the split.
+- `orNotLike()` had no caller anywhere in the package or its tests, and the
+  PostgreSQL `ILIKE` branch was never exercised, which is how the above went
+  unnoticed. Both are now covered, including against a live server.
+- The four `whereLike()` wrappers moved from `ActiveQuery` to the `Likeable`
+  trait, alongside the family they delegate to. No signature or behaviour
+  changed — they were the only part of the LIKE family living apart from the
+  rest of it, which is part of why the two defaults drifted without anyone
+  noticing.
+
 **Connection configuration**
 
 - **One malformed entry in a config file silently discarded every connection
@@ -1993,6 +2017,17 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
 
 ### Documentation
 
+- New "Case sensitivity" section in the query builder guide. The Like Clauses
+  section listed the four base methods and said nothing about case at all, and
+  the `whereLike()` family appeared nowhere in it. The section tabulates both
+  families against their opposite defaults, shows the SQL each produces, and
+  notes that the difference is usually invisible on MySQL's case-insensitive
+  collations but changes the result set on PostgreSQL. It also records that the
+  `LOWER(col)` form cannot use a plain index on the column.
+- The PostgreSQL guide's ILIKE section now warns that `like()` and `whereLike()`
+  disagree by default. It previously showed only `whereLike()`, so a reader
+  following it and then reaching for `like()` — the name the query builder guide
+  documents — would get case-sensitive matching without anything having said so.
 - New "Loading connections from a file" section in the getting started guide.
   `Connection::configure()` was named once, in the observer generator guide,
   with no statement anywhere of what the file it loads should contain. The
