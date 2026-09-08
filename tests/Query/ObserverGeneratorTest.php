@@ -48,20 +48,31 @@ class ObserverGeneratorTest extends TestCase
             ->skipValidation()
             ->preview();
 
-        $this->assertStringContainsString('public function creating(Order $order): void', $code);
+        $this->assertStringContainsString('public function creating(Order $order): ?bool', $code);
         $this->assertStringContainsString('public function deleted(Order $order): void', $code);
     }
 
+    /**
+     * The four cancellable events are typed ?bool; the other four are void.
+     *
+     * This used to assert all eight were void, which is what made the stub
+     * unusable: the docblock told the reader to return false from a method
+     * that PHP will not let return anything.
+     */
     #[Test]
-    public function allMethodsReturnVoid(): void
+    public function beforeEventsReturnNullableBoolAndAfterEventsReturnVoid(): void
     {
         $code = ObserverGenerator::forModel('User')
             ->skipValidation()
             ->preview();
 
         $this->assertStringNotContainsString('bool|void', $code);
-        // Count return type declarations
-        $this->assertEquals(8, substr_count($code, '): void'));
+        $this->assertEquals(4, substr_count($code, '): ?bool'));
+        $this->assertEquals(4, substr_count($code, '): void'));
+
+        // A ?bool method that falls off its end is a TypeError, so the
+        // untouched stub has to return something.
+        $this->assertEquals(4, substr_count($code, 'return null;'));
     }
 
     // ------------------------------------------------------------------
@@ -98,8 +109,8 @@ class ObserverGeneratorTest extends TestCase
             ->skipValidation()
             ->preview();
 
-        $this->assertStringContainsString('public function creating(Payment $payment): void', $code);
-        $this->assertStringContainsString('public function deleting(Payment $payment): void', $code);
+        $this->assertStringContainsString('public function creating(Payment $payment): ?bool', $code);
+        $this->assertStringContainsString('public function deleting(Payment $payment): ?bool', $code);
         $this->assertStringNotContainsString('public function created(', $code);
         $this->assertStringNotContainsString('public function updated(', $code);
         $this->assertStringNotContainsString('public function saved(', $code);
@@ -148,8 +159,12 @@ class ObserverGeneratorTest extends TestCase
             ->skipValidation()
             ->preview();
 
-        // "before" events should mention cancellation in their doc
-        $this->assertStringContainsString('Return false to cancel the operation.', $code);
+        // "before" events should mention cancellation in their doc, and say
+        // what the stub's own return value means.
+        $this->assertStringContainsString(
+            'Return false to cancel the operation; null to continue.',
+            $code
+        );
     }
 
     #[Test]

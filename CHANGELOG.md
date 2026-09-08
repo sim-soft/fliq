@@ -6,6 +6,55 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Observer generation**
+
+Every defect below lands in the generated file rather than in this library, so
+none of them could fail a test here — they fail in the reader's project, at the
+moment they load the file the tool told them to write.
+
+- **A generated "before" method could not do what its own docblock told it to**
+  — `creating`, `updating`, `saving` and `deleting` were emitted as `: void`
+  while the docblock printed directly above them said "Return false to cancel
+  the operation". Following that instruction is `Fatal error: A void method
+  must not return a value`, so the one documented way to use the stub broke the
+  file. The four now emit `?bool`, and the stub body carries an explicit
+  `return null;` — a `?bool` method that falls off its end raises a `TypeError`,
+  so the return has to be there for the untouched stub to work at all. The
+  "after" events keep `void`, since they genuinely cannot cancel. The same
+  correction was applied to the observer examples in the Active Record and
+  Observer Generator guides, which printed the broken shape too.
+- **`--append` re-added a custom event on every run** — `detectExistingEvents()`
+  scanned only the eight built-in event names, so a method it had itself
+  written for any other name was invisible to it. A second append wrote a second
+  copy, and the file became `Fatal error: Cannot redeclare`. It now also looks
+  for the events actually being requested.
+- **An event name that is not a legal method name was written out anyway** —
+  `--events=save-point` produced `public function save-point(...)`, a parse
+  error the reader met when they loaded the file rather than when they ran the
+  command. Names are now validated against PHP's method-name grammar up front,
+  in both `generate()` and `append()`.
+- **`--events=creating, created` silently produced a broken method** — the CLI
+  splits on the comma, so a space after it became part of the name. Names are
+  now trimmed in `events()`, which fixes all three `bin/fliq` call sites at
+  once.
+- **An appended method's type hint pointed at a class that does not exist** —
+  `append()` added `public function deleting(User $user)` without ensuring the
+  file imports `User`, so the hint resolved against the observer's own
+  namespace. The file still parsed; it failed later, at call time, with a
+  `TypeError` naming `App\Observers\User`. The model import is now added when
+  it is missing, placed below the last existing `use` (or the namespace, or the
+  opening tag). A file that already binds that short name — importing the model
+  from elsewhere, or aliasing something else to it — is left alone, since a
+  second import of the same name is itself a fatal error.
+- **Appending to a file with no closing brace wrote a parse error over it** —
+  the fallback pasted the methods onto the end and added a brace of its own,
+  leaving them outside any class. Damaging the reader's file is worse than
+  refusing, so it now throws and leaves the file untouched.
+
+Internally, the class-generating and append-generating paths had two copies of
+the method-emitting code and were free to drift. Both now build methods through
+one routine, so a fix cannot be applied to one path and forgotten on the other.
+
 **Set membership (IN / NOT IN)**
 
 - **An empty list matched every row instead of none** — `in()` returned early

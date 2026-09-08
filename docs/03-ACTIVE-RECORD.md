@@ -558,12 +558,20 @@ User::on('saved', function (User $user) {
 
 Group all event handlers for a model into one class:
 
+The four "before" events can cancel, so type them `?bool` and return `null` to
+carry on. A `void` method that returns a value is a fatal error, and a `?bool`
+method that falls off its end raises a TypeError — so the `return null;` stays
+even when the method never cancels. The "after" events cannot cancel and are
+typed `void`.
+
 ```php
 class UserObserver
 {
-    public function creating(User $user): void
+    public function creating(User $user): ?bool
     {
         $user->slug = strtolower($user->name);
+
+        return null;
     }
 
     public function created(User $user): void
@@ -571,11 +579,12 @@ class UserObserver
         EmailService::sendWelcome($user->email);
     }
 
-    public function deleting(User $user): bool|null
+    public function deleting(User $user): ?bool
     {
         if ($user->hasActiveSubscription()) {
             return false; // cancel
         }
+
         return null;
     }
 
