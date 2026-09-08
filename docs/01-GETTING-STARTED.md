@@ -42,6 +42,58 @@ Connection::remove('replica');
 Connection::reset();
 ```
 
+### Loading connections from a file
+
+`Connection::configure()` reads a PHP file that **returns an array** mapping
+connection names to configuration arrays — the same arrays you would pass to
+`add()`:
+
+```php
+/* config/db.php */
+return [
+    'mysql' => [
+        'driver'   => 'mysqli',
+        'host'     => '127.0.0.1',
+        'database' => 'app',
+        'username' => 'root',
+        'password' => '',
+    ],
+    'replica' => [
+        'driver'   => 'mysqli',
+        'host'     => 'replica-host',
+        'database' => 'app',
+        'username' => 'readonly',
+        'password' => '',
+    ],
+];
+```
+
+```php
+Connection::configure('config/db.php');
+```
+
+`configure()` **adds to** whatever is already registered rather than replacing
+it, so you can combine it with `add()` and call it more than once. A later entry
+under an existing name overwrites that name.
+
+It never throws. Anything wrong with the file is reported with
+`trigger_error(..., E_USER_WARNING)` and the connections it could not read are
+simply absent, so the failure surfaces at the first `Connection::get()`. Make
+sure your error handler is not discarding warnings during bootstrap, or you will
+see the second failure without the first. Warnings are raised when:
+
+| Situation | Result |
+|-----------|--------|
+| File does not exist, or the path is a directory | Nothing registered |
+| File throws, or has a parse error | Nothing registered |
+| File returns something other than an array | Nothing registered |
+| An individual entry is not an array | **That entry** skipped, the rest still registered |
+
+That last row is the important one: one malformed entry does not cost you the
+connections declared after it. Each bad entry is named in its own warning.
+
+An empty array is legitimate and registers nothing without complaint.
+
 ## Database Drivers
 
 | Driver      | Config `driver` value | Extension required |

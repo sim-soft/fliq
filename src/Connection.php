@@ -33,26 +33,73 @@ final class Connection
     /**
      * Load configurations from a config file.
      *
+     * The file must return an array mapping connection names to configuration
+     * arrays. Nothing here throws: a bootstrap that cannot read its config is
+     * reported through trigger_error() and the application is left to fail on
+     * the first Connection::get() instead. Every failure is announced, though,
+     * because the alternative — returning in silence — turns a typo in the path
+     * into a "connection not found" thrown much later from somewhere unrelated.
+     *
+     * A malformed entry is skipped rather than abandoning the file, so one bad
+     * connection cannot take the connections declared after it down with it.
+     *
      * @param string $configFile Config file path.
      * @return void
      */
     public static function configure(string $configFile): void
     {
+        if (!is_file($configFile)) {
+            trigger_error("Connection config file not found: $configFile", E_USER_WARNING);
+            return;
+        }
+
         try {
-            if (!file_exists($configFile)) {
-                return;
-            }
-
             $databases = require $configFile;
-            if (!is_array($databases)) {
-                return;
+        } catch (Throwable $throwable) {
+            trigger_error(
+                "Connection config file '$configFile' failed to load: " . $throwable->getMessage(),
+                E_USER_WARNING
+            );
+            return;
+        }
+
+        if (!is_array($databases)) {
+            trigger_error(
+                "Connection config file '$configFile' must return an array, "
+                . get_debug_type($databases) . ' returned.',
+                E_USER_WARNING
+            );
+            return;
+        }
+
+        self::addAll($configFile, $databases);
+    }
+
+    /**
+     * Register every well-formed entry of a loaded config file.
+     *
+     * @param string $configFile The file the entries came from, for messages.
+     * @param array<array-key, mixed> $databases Connection name to configuration.
+     * @return void
+     */
+    private static function addAll(string $configFile, array $databases): void
+    {
+        foreach ($databases as $connection => $config) {
+            if (!is_array($config)) {
+                // Skipped, not fatal. Passing this straight to add() raised a
+                // TypeError that escaped the loop, so a single fat-fingered
+                // entry silently discarded every connection declared below it
+                // and the application booted half-configured.
+                trigger_error(
+                    "Connection '$connection' in '$configFile' must be an array, "
+                    . get_debug_type($config) . ' given. Skipped.',
+                    E_USER_WARNING
+                );
+                continue;
             }
 
-            foreach ($databases as $connection => $config) {
-                self::add($connection, $config);
-            }
-        } catch (Throwable $throwable) {
-            trigger_error($throwable->getMessage());
+            /** @var array<string, mixed> $config */
+            self::add((string)$connection, $config);
         }
     }
 

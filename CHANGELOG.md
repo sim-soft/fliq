@@ -14,6 +14,33 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Connection configuration**
+
+- **One malformed entry in a config file silently discarded every connection
+  after it** — `Connection::configure()` passed each entry straight to `add()`,
+  which is typed `array`, and its `try` sat outside the loop. A scalar entry
+  therefore raised a `TypeError` that broke out of the `foreach`, and the
+  connections declared below it were never registered. The application then
+  booted half-configured with no indication which half: the first `get()` on a
+  missing connection threw "connection not found" for a name that was plainly
+  there in the file. Malformed entries are now skipped individually, each
+  reported by name and type, and the connections around them still load.
+- **A config file that could not be read failed in total silence** — a missing
+  path returned with no message at all, as did a file returning a non-array, so
+  a typo in `configure('config/db.php')` registered nothing and said nothing.
+  The mistake surfaced later as a "connection not found" thrown from somewhere
+  with no bearing on it. Every failure now raises an `E_USER_WARNING` naming the
+  file and what was wrong with it. `configure()` still does not throw, so
+  bootstrap behaviour is unchanged for anyone already handling this correctly.
+- **A directory passed as the config path produced a raw stream error** —
+  the guard used `file_exists()`, which accepts directories, so the path reached
+  `require` and reported "failed to open stream: Permission denied" instead of
+  naming the actual problem. It now checks `is_file()`.
+- **An integer-keyed entry was dropped rather than registered** — a config
+  written as a list instead of a map handed `add()` an `int` where it declares
+  `string`, which was the same escaping `TypeError` as above. Keys are now cast,
+  so such an entry registers under its string form.
+
 **Query result caching**
 
 - **`CacheInterface` claimed to be "PSR-16 compatible"** — it is not, in either
@@ -1966,6 +1993,15 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
 
 ### Documentation
 
+- New "Loading connections from a file" section in the getting started guide.
+  `Connection::configure()` was named once, in the observer generator guide,
+  with no statement anywhere of what the file it loads should contain. The
+  section shows the expected `return [...]` shape, documents that `configure()`
+  adds to what is already registered rather than replacing it and that a later
+  entry overwrites an existing name, and tabulates every failure mode against
+  what survives it — including that a malformed entry costs you that entry only.
+  It also warns that an error handler discarding warnings during bootstrap will
+  hide the first failure and leave you looking at the second.
 - New "When entries go away" section in the advanced features guide. The cache
   documentation described how to switch caching on but never what it costs: the
   TTL is the only thing that ends an entry, nothing invalidates on write, and a
