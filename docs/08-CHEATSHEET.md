@@ -57,7 +57,10 @@ User::find()->active()->admins()->get();
 | Raw statement   | `DB::raw('UPDATE ...', [...])` — returns bool       |
 | Upsert          | `DB::upsert('users', [...], ['email'], null, ['id'])` |
 | Select raw      | `->selectRaw('COUNT(*) AS total')`                  |
+| Select raw + binds | `->selectRaw('IF(score > ?, 1, 0) AS ok', [$n])` |
 | Order by raw    | `->orderByRaw('FIELD(status, 3, 1, 2)')`            |
+| Order by raw + binds | `->orderByRaw('FIELD(status, ?) DESC', [$first])` |
+| Order by expression | `->orderBy(new Raw('FIELD(status, ?) DESC', [$first]))` |
 | Order by desc   | `->orderByDesc('created_at')`                       |
 | Order by many   | `->orderByDesc(['last_name', 'first_name'])`        |
 | Order per column| `->orderBy(['role', 'score' => 'DESC'])`            |
@@ -146,7 +149,7 @@ or the value is compared as text on MySQL and will not match.
 | ELSE value        | `->else('F')`                                                            |
 | Alias (SELECT)    | `->as('grade')`                                                          |
 | In select()       | `User::find()->select('name', CaseExpression::when(...)->as('grade'))`   |
-| In orderByRaw     | `->orderByRaw((string) CaseExpression::when(...)->then(1)->else(2))`     |
+| In orderBy        | `->orderBy(CaseExpression::when(...)->then(1)->else(2))`                 |
 
 ## Relations
 

@@ -77,6 +77,55 @@ All notable changes to `simsoft/fliq` are documented here.
   every attribute entry point (`select`, `where`, `groupBy`, `orderBy`, `in`,
   `isNull`, `between`, and the rest).
 
+**Expressions carrying bind values**
+
+- **A `Raw` expression outside `WHERE` lost its values and the statement would
+  not run** — placeholders are positional, and every value has to reach the
+  driver in the order its placeholder is emitted. `SectionBinds` kept a list per
+  section for that, but had none for `ORDER BY`, so an order expression had
+  nowhere to put its values at all. That single gap is why `orderByRaw()` took
+  no values to begin with, why `orderBy(new Raw(...))` dropped them, and why
+  anything re-emitting a borrowed `ORDER BY` came up short. There is now an
+  `orderBinds` list, merged between `HAVING` and `UNION` to match emission
+  order, and it propagates through `merge()`, `union()` and `clearBinds()` with
+  the rest.
+- **`selectRaw()` and `orderByRaw()` could not take values** — neither had a
+  `$binds` parameter, so `selectRaw('IF(score > ?, 1, 0) AS passed')` emitted a
+  placeholder with nothing to fill it and the driver refused the statement
+  before it reached the server. Writing the value into the string instead was
+  the only way through, which is exactly the injection route the builder exists
+  to close. Both now take `?array $binds = null` as a second argument, matching
+  `whereRaw()`, `groupByRaw()` and `havingRaw()`.
+- **`orderBy()` quoted an expression as though it were a column name** —
+  `orderBy(new Raw('FIELD(status, ?)'))` asked the server for a column literally
+  called `FIELD(status, ?)`, and dropped the bind besides. `orderBy()` and
+  `addOrderBy()` now accept a `Raw` or a `Clause` and emit it as written,
+  collecting its values. A direction is not appended: an expression that wants
+  one says so itself, and one built around `CASE` or `FIELD` usually does not.
+  A `Clause` is given the query's alias and placeholder first, and its SQL is
+  read before its binds, since a clause collects them while it builds.
+- **Sorting by a `CaseExpression` produced structurally invalid SQL** — the
+  documented way to sort by one was to cast it to a string, which left its WHEN
+  and THEN values behind; passing the expression itself instead had it
+  stringified and then quoted, emitting
+  ``ORDER BY `p`.`CASE WHEN {status_code` = ? THEN ? ... END}` `` with the
+  deferred-quoting markers leaking into the statement. Neither form could
+  execute. `->orderBy(CaseExpression::when(...)->then(1)->else(2))` now works
+  directly; the cast form still works if you hand over `getBinds()` yourself,
+  read after the cast.
+- **`SelectClause` and `HavingClause` dropped a `Raw` entry's values** — a
+  clause wrapping `IF(score > ?, 1, 0) AS grade`, or a `HAVING` as ordinary as
+  `COUNT(*) > ?`, emitted the placeholder and discarded what filled it. Both now
+  absorb the expression's binds, as `select()` already did for a bare `Raw`.
+- **`Select` over-supplied the driver when borrowing a query's conditions** — it
+  re-emits the source query's JOIN, WHERE, GROUP BY, HAVING, ORDER BY and LIMIT,
+  but took `getBinds()`, which also hands over the source's SELECT, FROM and
+  UNION values whose placeholders are not in the new statement. Borrowing the
+  conditions of a query that selected a `Raw` column left the driver holding
+  more values than it had positions for and it refused to run the statement. It
+  now takes `getConditionBinds()` followed by the new `getOrderBinds()`, in the
+  order those sections are emitted.
+
 **Collections and query reuse**
 
 - **The documented row-existence check always threw** — `ActiveQuery` declares

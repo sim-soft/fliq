@@ -31,6 +31,12 @@ class HavingClause extends Clause
     protected function buildSQL(): string
     {
         if ($this->attribute instanceof Raw) {
+            // The expression stands as the whole condition, and any values its
+            // placeholders take come with it. They were dropped, so a clause as
+            // ordinary as `COUNT(*) > ?` emitted a placeholder with nothing to
+            // fill it and the driver refused the statement.
+            $this->absorbBinds($this->attribute->getBinds());
+
             return (string)$this->attribute;
         }
 

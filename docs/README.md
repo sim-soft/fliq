@@ -89,7 +89,8 @@ Requires PHP 8.4+ with `ext-pdo`.
 - Array column queries: `arrayContains()`, `arrayOverlaps()` (PostgreSQL native,
   emulated over JSON on MySQL and SQLite)
 - Sub-queries, unions, aggregations (count, sum, avg, min, max)
-- Raw expressions: `selectRaw()`, `whereRaw()`, `orderByRaw()`, `havingRaw()`
+- Raw expressions: `selectRaw()`, `whereRaw()`, `orderByRaw()`, `havingRaw()`,
+  `groupByRaw()` — each taking bind values for its own placeholders
 - Date filters: `whereDate()`, `whereMonth()`, `whereYear()`, `whereTime()`
 - Multi-column conditions: `whereAny()`, `whereAll()`, `whereNone()`
 - Full-text search: `whereFulltext()` (PostgreSQL tsvector, MySQL MATCH AGAINST,

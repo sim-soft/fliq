@@ -1542,13 +1542,20 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * A list entry takes the $direction argument; a keyed entry takes its own
      * value. The two may be mixed in one array.
      *
-     * @param string|array<int|string, string> $attribute the attribute
+     * A Raw expression or Clause is emitted as written, with any values it
+     * carries bound:
+     *
+     * $this->orderBy(new Raw('FIELD(status, ?, ?)', ['draft', 'live']));
+     * $this->orderBy(CaseExpression::when('role', '=', 'admin')->then(1)->else(2));
+     *
+     * @param string|Raw|Clause|array<int|string, string|Raw|Clause> $attribute the attribute
      * @param string $direction the order direction for the attribute
      * @return static
      */
-    public function orderBy(string|array $attribute, string $direction = 'ASC'): static
+    public function orderBy(string|Raw|Clause|array $attribute, string $direction = 'ASC'): static
     {
         if (is_array($attribute)) {
+            /** @var string|Raw|Clause $dir */
             foreach ($attribute as $col => $dir) {
                 // A list entry arrives as position => name, so the name is the
                 // value and the direction is the argument. Reading the key as
@@ -1556,10 +1563,12 @@ class ActiveQuery implements Executable, Updatable, Deletable
                 // columns "0" and "1", which the server rejects as unknown —
                 // and reading the value as the direction meant orderByDesc()
                 // silently sorted ASC.
-                $this->addOrderBy(
-                    is_int($col) ? $dir : $col,
-                    is_int($col) ? $direction : $dir
-                );
+                if (is_int($col)) {
+                    $this->addOrderBy($dir, $direction);
+                    continue;
+                }
+
+                $this->addOrderBy($col, is_string($dir) ? $dir : $direction);
             }
             return $this;
         }
@@ -1574,12 +1583,31 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * Shared by both shapes of orderBy() so the RAND() special case and the
      * direction whitelist cannot apply to one and not the other.
      *
-     * @param string $attribute The attribute name.
+     * @param string|Raw|Clause $attribute The attribute name, or an expression to sort by.
      * @param string $direction The requested sort direction.
      * @return void
      */
-    private function addOrderBy(string $attribute, string $direction): void
+    private function addOrderBy(string|Raw|Clause $attribute, string $direction): void
     {
+        // An expression is emitted as written. It used to be quoted as though
+        // it were a column name, so orderBy(new Raw('FIELD(status, ?)')) asked
+        // the server for a column literally called "FIELD(status, ?)" — and its
+        // bind value was dropped besides. A direction is not appended: an
+        // expression that wants one says so itself, and one built around CASE
+        // or FIELD usually does not.
+        if ($attribute instanceof Raw || $attribute instanceof Clause) {
+            if ($attribute instanceof Clause) {
+                $attribute->alias($this->getAlias());
+                $attribute->setPlaceHolder($this->getPlaceHolder());
+            }
+
+            // Ask for the SQL first: a clause collects its binds while it
+            // builds, so reading them beforehand reads them too early.
+            $this->orderBys[] = $attribute->getSQL();
+            $this->appendSectionBinds($this->orderBinds, $attribute->getBinds());
+            return;
+        }
+
         if (strtoupper($attribute) === 'RAND()') {
             $this->orderBys[] = 'RAND()';
             return;
@@ -3113,11 +3141,13 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * Add a raw ORDER BY expression.
      *
      * @param string $expression The raw SQL expression.
+     * @param array<int, mixed>|null $binds Values for any placeholders in the expression.
      * @return static
      */
-    public function orderByRaw(string $expression): static
+    public function orderByRaw(string $expression, ?array $binds = null): static
     {
         $this->orderBys[] = $expression;
+        $this->appendSectionBinds($this->orderBinds, $binds);
         return $this;
     }
 
@@ -3125,11 +3155,13 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * Add a raw SELECT expression.
      *
      * @param string $expression The raw SQL expression.
+     * @param array<int, mixed>|null $binds Values for any placeholders in the expression.
      * @return static
      */
-    public function selectRaw(string $expression): static
+    public function selectRaw(string $expression, ?array $binds = null): static
     {
         $this->selects[] = $expression;
+        $this->appendSectionBinds($this->selectBinds, $binds);
         return $this;
     }
 

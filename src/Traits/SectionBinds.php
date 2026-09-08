@@ -38,6 +38,9 @@ trait SectionBinds
     /** @var array<int, mixed> Binds for placeholders in HAVING. */
     private array $havingBinds = [];
 
+    /** @var array<int, mixed> Binds for placeholders in ORDER BY. */
+    private array $orderBinds = [];
+
     /** @var array<int, mixed> Binds for placeholders in UNION branches. */
     private array $unionBinds = [];
 
@@ -55,6 +58,7 @@ trait SectionBinds
             $this->whereSectionBinds() ?? [],
             $this->groupBinds,
             $this->havingBinds,
+            $this->orderBinds,
             $this->unionBinds
         );
 
@@ -99,6 +103,20 @@ trait SectionBinds
     }
 
     /**
+     * Get the bind values belonging to ORDER BY alone.
+     *
+     * A caller borrowing a query's conditions may also re-emit its ORDER BY,
+     * and needs those values after the condition ones, matching the order the
+     * placeholders appear in.
+     *
+     * @return array<int, mixed>|null Null when no binds exist.
+     */
+    public function getOrderBinds(): ?array
+    {
+        return $this->orderBinds === [] ? null : $this->orderBinds;
+    }
+
+    /**
      * Take another builder's bind values, section by section.
      *
      * Appending them wholesale to one list would put the incoming values after
@@ -117,6 +135,7 @@ trait SectionBinds
         $this->absorbBinds($source->whereSectionBinds());
         $this->appendSectionBinds($this->groupBinds, $source->groupBinds);
         $this->appendSectionBinds($this->havingBinds, $source->havingBinds);
+        $this->appendSectionBinds($this->orderBinds, $source->orderBinds);
         $this->appendSectionBinds($this->unionBinds, $source->unionBinds);
     }
 
@@ -134,6 +153,7 @@ trait SectionBinds
         $this->joinBinds = [];
         $this->groupBinds = [];
         $this->havingBinds = [];
+        $this->orderBinds = [];
         $this->unionBinds = [];
     }
 

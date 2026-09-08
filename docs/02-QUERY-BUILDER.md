@@ -1192,15 +1192,29 @@ CaseExpression::whenRaw('age >= ? AND age < ?', [18, 30])->then('young')
 
 ### Use in ORDER BY
 
+Pass the expression itself. Its WHEN and THEN values are bound, and `orderBy()`
+collects them along with the SQL:
+
 ```php
 /* Sort admins first, editors second, others last */
 User::find()
-    ->orderByRaw(
-        (string) CaseExpression::when('role', '=', 'admin')->then(1)
+    ->orderBy(
+        CaseExpression::when('role', '=', 'admin')->then(1)
             ->andWhen('role', '=', 'editor')->then(2)
             ->else(3)
     )
     ->get();
+```
+
+Casting it to a string leaves those values behind, so if you do that, hand them
+over yourself — and read them *after* the cast, since the expression collects
+them while it builds:
+
+```php
+$order = CaseExpression::when('role', '=', 'admin')->then(1)->else(2);
+$sql = (string) $order;
+
+User::find()->orderByRaw($sql, $order->getBinds())->get();
 ```
 
 ### Method Reference
@@ -1768,16 +1782,29 @@ For the full method reference, see the [Collections guide](06-COLLECTIONS.md).
 
 Use raw SQL fragments within the fluent builder for expressions that can't be built with methods.
 
+Every one of these takes an optional second argument holding the values for any
+placeholders the expression contains. Put user input there rather than into the
+SQL — see [Security](#security-how-your-values-are-protected) below.
+
 ### `selectRaw()` — Raw SELECT expression
 
 ```php
-/* SELECT `user`.`name`, COUNT(*) AS total FROM `user` GROUP BY `user`.`department_id` */
+/* SELECT `user`.`department_id`, COUNT(*) AS total FROM `user`
+   GROUP BY `user`.`department_id` */
 $users = User::find()
-    ->select('name')
+    ->select('department_id')
     ->selectRaw('COUNT(*) AS total')
     ->groupBy('department_id')
     ->get();
+
+/* With a bound value: SELECT IF(`score` > ?, 1, 0) AS passed */
+$users = User::find()
+    ->selectRaw('IF(`score` > ?, 1, 0) AS passed', [$threshold])
+    ->get();
 ```
+
+Select only the columns you group by, or aggregates of the rest — MySQL's
+default `only_full_group_by` and PostgreSQL both reject anything else.
 
 ### `orderByRaw()` — Raw ORDER BY expression
 
@@ -1785,6 +1812,22 @@ $users = User::find()
 /* SELECT `user`.* FROM `user` ORDER BY FIELD(status, 3, 1, 2) */
 $users = User::find()
     ->orderByRaw('FIELD(status, 3, 1, 2)')
+    ->get();
+
+/* With a bound value */
+$users = User::find()
+    ->orderByRaw('FIELD(`status`, ?) DESC', [$first])
+    ->get();
+```
+
+`orderBy()` also accepts a `Raw` expression directly, emitted as written rather
+than quoted as a column name. No direction is appended — an expression that
+wants one says so itself:
+
+```php
+$users = User::find()
+    ->orderBy(new Raw('FIELD(`status`, ?) DESC', [$first]))
+    ->orderBy('id')
     ->get();
 ```
 

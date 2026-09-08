@@ -57,7 +57,15 @@ class Select extends Builder
                 $query->getOrderSQL(),
                 $query->getLimitSQL(),
             ]));
-            $this->absorbBinds($query->getBinds());
+
+            // Only the sections re-emitted above, in the order they are emitted.
+            // getBinds() would also hand over the source query's SELECT, FROM
+            // and UNION values, whose placeholders are not in this statement:
+            // borrowing the conditions of a query that selected a Raw column
+            // left the driver holding more values than it had positions for,
+            // and it refused to run the statement at all.
+            $this->absorbBinds($query->getConditionBinds());
+            $this->absorbBinds($query->getOrderBinds());
             return $this;
         }
 
