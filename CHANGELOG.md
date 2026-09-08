@@ -14,6 +14,23 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**RETURNING**
+
+- **`returning()` with no arguments emitted no clause at all** — on `Update` and
+  `Delete` the requested columns were held in an array defaulting to `[]`, and
+  `buildSQL()` decided whether to emit the clause with `empty()`. A bare
+  `returning()` stores `[]` as well, so "asked for every column" and "never
+  asked" were the same value and the request was dropped: the statement ran,
+  reported nothing back, and `getReturningResult()` answered `null` — exactly
+  what it answers for a statement that never asked — with no indication why. The
+  docblock on both methods promised `Empty = RETURNING *`, and every grammar
+  implements `returningColumnsSQL([])` as `RETURNING *` for precisely this case,
+  so the one line written to serve it was unreachable from any caller. The
+  columns are now `null` until asked for, which is the shape `Insert` already
+  used, and `returning()` renders `RETURNING *` on PostgreSQL and SQLite 3.35+.
+  `getReturningResult()` accordingly separates `[]` (asked, matched no row) from
+  `null` (never asked). MySQL, which has no such clause, still omits it.
+
 **Cursor and cache**
 
 - **`cursor()` combined with `cache()` did different things on different
@@ -153,6 +170,10 @@ N+1 in it.
   `getSQL()` and `getBinds()` agree in either order, and that
   `Builder\Clauses` types are not builders and still require reading their binds
   after the cast.
+- `docs/10-POSTGRESQL.md` and `docs/08-CHEATSHEET.md` showed `returning()` only
+  with explicit column names. Both now document the no-argument form as
+  `RETURNING *`, and docs/10 records that `getReturningResult()` answers `[]`
+  when the clause matched no row and `null` when none was asked for.
 
 **Drivers**
 

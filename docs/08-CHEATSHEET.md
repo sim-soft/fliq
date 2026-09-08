@@ -396,6 +396,7 @@ takes one column per call.
 | Insert returning  | `(new Insert(...))->returning('id')`         |
 | Update returning  | `(new Update(...))->returning('id', 'name')` |
 | Delete returning  | `(new Delete(...))->returning('id')`         |
+| Every column      | `(new Update(...))->returning()` → `RETURNING *` |
 | Get returned rows | `$builder->getReturningResult()`             |
 
 On MySQL the clause is not emitted and `getReturningResult()` is `null`.

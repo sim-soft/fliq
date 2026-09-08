@@ -30,8 +30,15 @@ class Update extends Builder
      */
     protected array $counters = [];
 
-    /** @var array<int, string> Columns to return via RETURNING clause */
-    protected array $returningColumns = [];
+    /**
+     * @var array<int, string>|null Columns to return via RETURNING clause,
+     *                              null when no clause was asked for.
+     *
+     * An empty array is a request — returning() with no arguments means
+     * RETURNING *, which is why it cannot double as the "never asked" marker
+     * the way it used to.
+     */
+    protected ?array $returningColumns = null;
 
     /** @var array<int, array<string, mixed>>|null Rows returned by RETURNING clause */
     protected ?array $returningResult = null;
@@ -77,7 +84,7 @@ class Update extends Builder
      */
     public function hasReturning(): bool
     {
-        return !empty($this->returningColumns) || $this->returningResult !== null;
+        return $this->returningColumns !== null || $this->returningResult !== null;
     }
 
     /**
@@ -174,8 +181,11 @@ class Update extends Builder
             $this->getCondition(),
         ]));
 
-        // Append RETURNING clause if columns specified
-        if (!empty($this->returningColumns)) {
+        // Append RETURNING clause if one was asked for. Tested against null, not
+        // emptiness: returning() with no arguments asks for RETURNING * and
+        // leaves an empty array behind, which an empty() test read as no request
+        // at all and dropped on the floor.
+        if ($this->returningColumns !== null) {
             $grammar = Connection::grammar($this->connection);
             if ($grammar->supportsReturning()) {
                 $sql .= ' ' . $grammar->returningColumnsSQL($this->returningColumns);

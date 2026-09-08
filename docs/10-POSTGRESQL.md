@@ -145,6 +145,30 @@ $delete->execute();
 $purged = $delete->getReturningResult();
 ```
 
+### Returning every column
+
+Calling `returning()` with no arguments asks for `RETURNING *`, which is useful
+when you want the row as it stands after the write rather than a chosen few
+columns:
+
+```php
+$update = new Update('user', ['status' => 'active']);
+$update->withConnection('pgsql');
+$update->condition("role = 'pending'");
+$update->returning();
+$update->execute();
+
+$rows = $update->getReturningResult();
+/* [['id' => 5, 'name' => 'Alice', 'email' => '...', 'role' => 'pending', 'status' => 'active'], ...] */
+```
+
+`getReturningResult()` distinguishes the two ways a statement can produce no
+rows: it answers `[]` when the clause ran and matched nothing, and `null` when no
+`RETURNING` was asked for at all.
+
+On MySQL, which has no `RETURNING`, the clause is omitted and the statement runs
+without it — `getReturningResult()` stays `null`.
+
 ---
 
 ## INSERT ON CONFLICT
