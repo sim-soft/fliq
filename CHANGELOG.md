@@ -14,6 +14,21 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Cursor and cache**
+
+- **`cursor()` combined with `cache()` did different things on different
+  drivers** — caching stores the whole result set, which is the one thing a
+  cursor exists not to do, so the two cannot both be honoured and which one won
+  came down to the driver underneath. On PDO the cache was never consulted and
+  the rows streamed; on MySQLi, which falls back to `all()`, the set was
+  materialised, written to the cache, and served from it on the next call. The
+  same code therefore read the database on one driver and returned rows from
+  before the last `UPDATE` on the other — with nothing said either way — and
+  over 20k rows cost 17.9 MB against PDO's 0.5 MB, 4.4 MB of it pushed into the
+  cache. Asking for both now raises a `QueryException` naming the conflict,
+  identically on every driver, exactly as `cursor()` with `with()` already did.
+  A TTL of zero or less is not a caching request and still streams.
+
 **Statement building**
 
 `getSQL()` memoises, and nothing ever invalidated what it cached. The
@@ -127,6 +142,11 @@ N+1 in it.
   `Collection`, so at that point the log was empty and the advisor had nothing
   to suggest. Both now consume the results first, and the advisor's documented
   output no longer names a table its own example does not produce.
+- `docs/05-ADVANCED-FEATURES.md` did not say what `cache()` covers. It now names
+  the reads that are cached, records that aggregates (`count()`, `sum()`,
+  `avg()`, `min()`, `max()` and their `*Distinct()` variants) build a separate
+  query carrying no TTL and so run every time, and documents that `cursor()` is
+  refused rather than silently ignoring the TTL.
 - The SQL-only section of `docs/01-GETTING-STARTED.md` showed a builder being
   handed back and inspected without saying what may be done with it afterwards.
   It now states that reading the SQL does not finalise the builder, that

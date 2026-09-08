@@ -48,6 +48,30 @@ $posts = Post::find()->where('published', true)->cache(300)->all();
 $user = User::find()->where('email', 'john@example.com')->cache(120)->first();
 ```
 
+### What `cache()` applies to
+
+Caching covers the reads that return rows — `all()`, `getArray()`, `first()`,
+`paginate()` and `cursorPaginate()`.
+
+It does **not** cover aggregates. `count()`, `sum()`, `avg()`, `min()`, `max()`
+and their `*Distinct()` variants build a separate query that carries no TTL, so
+they run against the database every time even when the query they were called on
+asked for caching:
+
+```php
+$query = User::find()->where('status_code', 1)->cache(60);
+
+foreach ($query->all() as $user) { /* cached */ }
+
+$query->count();  // not cached — runs every time
+```
+
+(`all()` returns a lazy `Collection`, so the cache is consulted when the rows are
+consumed, not when `all()` is called.)
+
+`cursor()` is refused outright rather than silently ignoring the TTL — see
+[Cursor](#cursor-unbuffered-iteration).
+
 ### What makes a cache entry unique
 
 The cache key is built from the **connection name**, the SQL, and the bound
@@ -441,6 +465,22 @@ For the same reason `with()` cannot be combined with `cursor()`: eager loading
 batches the related rows in a second query once every parent is known, and a
 cursor never has them all at once. Asking for both raises a `QueryException`
 rather than handing back models whose relations are quietly unloaded.
+
+### You cannot cache a cursor either
+
+`cache()` stores the whole result set, which is the one thing a cursor exists
+not to do. Asking for both raises a `QueryException`:
+
+```php
+/* Not this — the two requests contradict each other */
+User::find()->cache(60)->cursor();
+
+/* Cache the rows */
+User::find()->cache(60)->all();
+
+/* Or stream them */
+User::find()->cursor();
+```
 
 If you need to query as you iterate, use `each()`, which fetches a chunk at a
 time and has no such restriction:

@@ -410,10 +410,12 @@ trait Fetchable
      * separate connection, or use {@see each()}, which buffers a chunk at a
      * time and has no such restriction.
      *
-     * Eager loading cannot be combined with a cursor: see below.
+     * Neither eager loading nor caching can be combined with a cursor: see
+     * below.
      *
      * @return Generator
-     * @throws QueryException If relations were requested with with().
+     * @throws QueryException If relations were requested with with(), or a
+     *                        cache TTL was set with cache().
      */
     public function cursor(): Generator
     {
@@ -429,6 +431,23 @@ trait Fetchable
                 'cursor() cannot eager load ' . implode(', ', $this->eagerLoad)
                 . ': relations are batched in a second query, which a cursor cannot run while it streams.'
                 . ' Use each() or all() to eager load, or drop with() and read the relations after the loop.',
+                ''
+            );
+        }
+
+        // Caching stores the whole result set, which is the one thing a cursor
+        // exists not to do — so the two cannot both be honoured, and which one
+        // won came down to the driver. On PDO the cache was never consulted and
+        // the rows streamed; on mysqli, which falls back to all(), the set was
+        // materialised, sent to the cache, and served from it on the next call.
+        // The same code therefore read the database on one driver and returned
+        // rows from before the last UPDATE on the other, and over 20k rows cost
+        // 17.9 MB against PDO's 0.5 MB. Refusing is the only answer that is the
+        // same everywhere.
+        if ($this->getCacheTtl() > 0) {
+            throw new QueryException(
+                'cursor() cannot cache: caching stores the whole result set, which is the one thing'
+                . ' a cursor exists not to do. Use all() to cache the rows, or drop cache() to stream them.',
                 ''
             );
         }
