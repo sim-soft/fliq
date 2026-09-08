@@ -375,17 +375,22 @@ QueryMonitor::enable(threshold: 5);
 // Your code runs...
 $users = User::find()->get();
 foreach ($users as $user) {
-    echo $user->posts; // N+1! Will trigger a warning after 5 iterations
+    foreach ($user->posts as $post) {  // N+1! One query per user
+        echo $post->title;
+    }
 }
 
 // Check detected patterns
 $patterns = QueryMonitor::getDetectedPatterns();
-/* ['SELECT ... FROM `posts` WHERE `user_id` = ?' => ['count' => 50, 'origin' => 'app/Controller.php:42']] */
+/* ['SELECT `post`.* FROM `post` WHERE `post`.`user_id` = ?' => ['count' => 50, 'origin' => '/app/Controller.php:42']] */
 
 // Custom handler instead of trigger_error
 QueryMonitor::setHandler(function (string $pattern, int $count, string $origin) {
     logger()->warning("N+1 detected: $pattern ($count queries) from $origin");
 });
+
+// Restore the default trigger_error behaviour
+QueryMonitor::clearHandler();
 
 // Disable when done
 QueryMonitor::disable();
@@ -393,6 +398,15 @@ QueryMonitor::disable();
 /* Reset counters */
 QueryMonitor::reset();
 ```
+
+`origin` is the first frame outside the library — the line in your own code that
+issued the query, which is the line to fix. Counting stops mattering once the
+relation is eager loaded: `User::find()->with('posts')->get()` issues two
+queries regardless of how many users come back, and the monitor reports nothing.
+
+`disable()` and `reset()` leave a handler installed. Call `clearHandler()` when
+the block that registered it is done, or it keeps receiving queries for the rest
+of the process.
 ### Query Logging
 
 ```php
@@ -401,9 +415,14 @@ use Simsoft\DB\QueryLogger;
 // Enable logging
 QueryLogger::enable();
 
-// Run queries...
-$users = User::find()->where('status', 1)->get();
-$posts = Post::find()->where('published', true)->get();
+// Run queries. get() returns a lazy Collection, so nothing is logged until
+// the results are actually consumed.
+foreach (User::find()->where('status', 1)->get() as $user) {
+    // ...
+}
+foreach (Post::find()->where('published', true)->get() as $post) {
+    // ...
+}
 
 // Get all logged queries with timing
 $queries = QueryLogger::getQueries();
@@ -426,10 +445,16 @@ QueryLogger::setHandler(function (string $sql, ?array $binds, float $timeMs) {
     file_put_contents('queries.log', "$timeMs ms: $sql\n", FILE_APPEND);
 });
 
+// Stop sending queries to the handler
+QueryLogger::clearHandler();
+
 // Reset
 QueryLogger::reset();
 QueryLogger::disable();
 ```
+
+As with the monitor, neither `disable()` nor `reset()` removes the handler —
+`clearHandler()` does.
 
 #### Retention
 

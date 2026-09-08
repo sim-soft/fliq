@@ -75,6 +75,21 @@ class QueryLogger
     }
 
     /**
+     * Stop sending queries to the handler.
+     *
+     * disable() and reset() both leave the handler installed, so one set during
+     * a profiling block kept receiving every query for the rest of the process
+     * — writing to a file the caller had finished with, or into a closure whose
+     * request had ended. There was no way to undo setHandler(); this is it.
+     *
+     * @return void
+     */
+    public static function clearHandler(): void
+    {
+        self::$handler = null;
+    }
+
+    /**
      * Log a query execution.
      *
      * @param string $sql The SQL that was executed.

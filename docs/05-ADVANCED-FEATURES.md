@@ -484,15 +484,20 @@ use Simsoft\DB\QueryLogger;
 // Enable logging first
 QueryLogger::enable();
 
-// Run your application queries...
-$users = User::find()->where('status', 1)->where('role', 'admin')->get();
-$posts = Post::find()->join('user', ['id' => 'post.user_id'])->get();
+// Run your application queries. get() is lazy, so the advisor only sees a
+// query once its results have been consumed.
+foreach (User::find()->where('status', 1)->where('role', 'admin')->get() as $user) {
+    // ...
+}
+foreach (Post::find()->join('user', ['id' => 'post.user_id'])->get() as $post) {
+    // ...
+}
 
 // Get suggestions
 $suggestions = IndexAdvisor::suggest();
 // [
 /* ['table' => 'user', 'columns' => ['status', 'role'], 'reason' => 'Used in WHERE clause'],
-   ['table' => 'post', 'columns' => ['user_id'], 'reason' => 'Used in JOIN condition'], */
+   ['table' => 'user', 'columns' => ['id'], 'reason' => 'Used in JOIN condition'], */
 // ]
 
 // Get as CREATE INDEX SQL statements

@@ -347,9 +347,11 @@ User::transaction(function () {
 | Task               | Code                                                   |
 |--------------------|--------------------------------------------------------|
 | N+1 detection      | `QueryMonitor::enable()`                               |
+| N+1 handler        | `QueryMonitor::setHandler(...)` / `::clearHandler()`   |
 | Query logging      | `QueryLogger::enable()`                                |
 | Get logged queries | `QueryLogger::getQueries()`                            |
 | Slowest query      | `QueryLogger::getSlowestQuery()`                       |
+| Log handler        | `QueryLogger::setHandler(...)` / `::clearHandler()`    |
 | Log retention      | `QueryLogger::setLimit(1000)` (`0` = unlimited)        |
 | SQL in exceptions  | `QueryException::enableDebug()` (dev only)             |
 | Query cache        | `User::find()->where(...)->cache(60)->get()`           |

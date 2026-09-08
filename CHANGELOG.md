@@ -4,7 +4,69 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`QueryMonitor::clearHandler()` and `QueryLogger::clearHandler()`** — there
+  was no way to undo `setHandler()`. Neither `disable()` nor `reset()` removes a
+  handler, so one registered for a profiling block kept receiving queries for
+  the rest of the process: writing to a file the caller had finished with, or
+  into a closure whose request had ended.
+
 ### Fixed
+
+**Query monitoring**
+
+`QueryMonitor` exists to notice a lazy-loading loop and name the line that wrote
+it. It was failing at both halves, and failing quietly — a monitor that groups
+nothing reports nothing, which is indistinguishable from a codebase that has no
+N+1 in it.
+
+- **Every warning blamed the library instead of the caller** — `getOrigin()`
+  walked the backtrace looking for the first frame outside the library, testing
+  each against six hardcoded fragments (`'src/Drivers/'`, `'src/Model.php'` and
+  so on) written with forward slashes. On Windows `__FILE__` uses backslashes,
+  so no frame ever matched, no frame was ever skipped, and the very first one
+  was returned — which is the `getOrigin()` call inside `recordQuery()` itself.
+  Every `origin` in every warning read `.../src/QueryMonitor.php:94`, a file the
+  caller cannot change, where the documentation promised
+  `'app/Controller.php:42'`. The fragment list was also incomplete on any
+  platform: it named six paths, so a query arriving through any other file in
+  the package — `Collection`'s lazy pager among them, which is the path a
+  relation load actually takes — would have been credited to the library even
+  where the fragments did match. Origin is now determined by testing each frame
+  against the package directory derived from `__DIR__`, which covers every file
+  on either separator with nothing to keep in sync.
+- **The trailing literal, which is the one that varies, was never normalised** —
+  the numeric pattern required a delimiter after the digits and end-of-string is
+  not one, so `WHERE id = 1` and `WHERE id = 2` normalised to themselves and
+  stayed distinct. That is exactly where an N+1 puts its varying value, so the
+  loop the class is built to catch counted as one occurrence per id, never
+  reached the threshold, and produced no warning. Six queries differing only in
+  the id yielded six patterns and zero detections. The same omission left
+  `LIMIT 10` unnormalised while `LIMIT 5 OFFSET 10` normalised only the first of
+  its two numbers.
+- **An escaped quote split one string literal into two** — `'[^']*'` stops at
+  the first quote of an escaped pair, so `'o''brien'` normalised to `??` while
+  `'smith'` normalised to `?`, and the same query grouped differently depending
+  on whether the value contained an apostrophe. The literal pattern now
+  understands the doubled-quote escape, written so it cannot backtrack.
+- **The backtrace depth was too shallow for the case that matters** — a lazy
+  relation load reaches `recordQuery()` eight frames down, through `Execute`,
+  `Fetchable` and `Collection`'s pager, leaving almost nothing of the ten-frame
+  budget for the caller. Raised to a documented constant with room to clear the
+  library.
+
+**Documentation**
+
+- The N+1 example in `docs/01-GETTING-STARTED.md` did not run: `echo
+  $user->posts;` raises `Object of class Simsoft\DB\Collection could not be
+  converted to string`, and never materialised the relation it was demonstrating.
+- The query-logging examples in `docs/01-GETTING-STARTED.md` and
+  `docs/05-ADVANCED-FEATURES.md` called `get()` and then read the log, showing a
+  count of 2 and a list of suggested indexes. `get()` returns a lazy
+  `Collection`, so at that point the log was empty and the advisor had nothing
+  to suggest. Both now consume the results first, and the advisor's documented
+  output no longer names a table its own example does not produce.
 
 **Drivers**
 
