@@ -53,11 +53,7 @@ class PostgresDriver extends Driver implements CachesStatements
      */
     protected function connect(): void
     {
-        // A new connection carries no transaction, whatever the old one had.
-        $this->resetTransactionLevel();
-
-        // Until the new connection is established there is nothing to vouch for.
-        $this->clearActivity();
+        $this->prepareConnect();
 
         try {
             $this->cacheEnabled = (bool)($this->config['statement_cache'] ?? true);
@@ -81,8 +77,8 @@ class PostgresDriver extends Driver implements CachesStatements
                 $options[PDO::ATTR_PERSISTENT] = true;
             }
 
-            // User options override defaults
-            $options = array_replace($options, (array)($this->config['options'] ?? []));
+            // User options override defaults, bar the error mode.
+            $options = $this->mergePdoOptions($options, $this->config['options'] ?? []);
 
             $this->connection = new PDO(
                 $dsn,
@@ -196,6 +192,16 @@ class PostgresDriver extends Driver implements CachesStatements
             $stmt->execute($binds);
             $this->markActivity();
 
+            // A statement with no columns has no rows to give, whatever the
+            // driver says. PDO's pgsql driver reports one empty row per
+            // affected row for an UPDATE or DELETE, so query() on an UPDATE
+            // touching one row answered [[]] — a result set of one row with no
+            // columns, which every caller reads as "a row was found". The other
+            // three drivers answer [] for the same statement.
+            if ($stmt->columnCount() === 0) {
+                return [];
+            }
+
             return $stmt->fetchAll();
         });
     }
@@ -266,6 +272,8 @@ class PostgresDriver extends Driver implements CachesStatements
 
     /**
      * {@inheritdoc}
+     *
+     * @throws \Simsoft\DB\Exceptions\ConnectionException If the server is still unreachable.
      */
     protected function forceReconnect(): void
     {
@@ -273,6 +281,7 @@ class PostgresDriver extends Driver implements CachesStatements
         $this->statementCache = [];
         $this->connection = null;
         $this->connect();
+        $this->assertReconnected();
     }
 
     /**

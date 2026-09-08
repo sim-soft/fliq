@@ -6,6 +6,76 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Drivers**
+
+The four drivers agreed on the happy path and had drifted apart on every failure
+path. Each of these turned a plain fact — the server is unreachable, nothing was
+inserted, that statement has no rows — into an exception of the wrong type
+thrown from somewhere other than where it happened.
+
+- **A failed MySQLi connection reported itself as connected** — `connect()`
+  assigned `new mysqli()` to the handle before `real_connect()` ran, so when the
+  connect failed the handle stayed behind and satisfied `isConnected()`. Every
+  later call then raised a PHP `Error` rather than an exception: `mysqli object
+  is not fully initialized` from a query, a statement or a transaction, and
+  `Property access is not allowed yet` from `lastInsertId()`. An `Error` is not
+  an `Exception`, so a caller catching `Exception` around its query did not
+  catch it at all. The handle is now built locally and published only once
+  `real_connect()` has returned, matching what the PDO drivers already did.
+- **A failed reconnect returned normally** — `connect()` records its failure as
+  an error string rather than throwing, because the constructor path collects it
+  (`Connection::get()` reads `hasError()` and raises `ConnectionException`
+  itself). Nothing read it on the reconnect path, so `forceReconnect()` returned
+  having established nothing and the caller carried on with a driver holding no
+  connection. The failure surfaced two frames later from whatever statement came
+  next, as `RuntimeException('Database connection failed')` on PDO and a PHP
+  `Error` on MySQLi — neither naming the server as the cause. All four drivers
+  now raise the `ConnectionException` the documentation already promised, with
+  the underlying reason in the message.
+- **A driver that recovered still reported the failure it recovered from** —
+  errors only ever accumulated and nothing could retract one, so a connection
+  that dropped and came back answered `hasError()` true forever after, naming a
+  failure that no longer applied. This is not cosmetic:
+  `Connection::createDriver()` reads exactly that to decide whether a connection
+  is usable. Every `connect()` now clears the state a new connection does not
+  inherit — the recorded errors, the transaction depth and the last activity.
+- **`MySQLiDriver::lastInsertId()` threw where the other three answered
+  `false`** — with no connection it raised `RuntimeException`, and on a handle
+  whose connect had failed a PHP `Error`, while the three PDO-backed drivers all
+  returned `false` through `normalizeInsertId()`. `Execute::getLastInsertId()`
+  is typed `?string`, maps only `false` to `null` and does not catch, so "nothing
+  was inserted" escaped as an exception from a method that had a value for it.
+  MySQLi now shares the same normaliser.
+- **`MySQLiDriver::query()` treated a statement with no result set as a
+  failure** — `get_result()` answers `false` both for a statement that failed
+  and for one that ran fine and has no rows to give, so `query('SET @x = 1')`
+  threw `Failed to get result: ` with an empty reason, because there was no
+  error to name. The other three drivers return `[]` for the same statement.
+  Column count now distinguishes the two, and a genuine failure is still
+  reported — with the statement's own error rather than the connection's, which
+  is empty in exactly that case.
+- **`PostgresDriver::query()` returned one empty row per affected row for a
+  write** — PDO's pgsql driver reports an `UPDATE` touching one row as a result
+  set of one row with no columns, so `query()` answered `[[]]`, which every
+  caller reads as "a row was found". A column-less result is now `[]`, matching
+  the other three drivers. `RETURNING` is unaffected: those rows have columns.
+- **A driver advertised reconnect-on-deserialize and could not deliver it** —
+  `__wakeup()` called `connect()`, but PDO refuses to be serialized, so three
+  drivers in four died with `Serialization of 'PDO' is not allowed`: an
+  exception naming a class the caller never mentioned, thrown from a driver
+  advertising the opposite. The one that did round trip, MySQLi, wrote its
+  config out with it — host, username and password in plaintext, into whatever
+  the payload was stored in. A driver is a live connection plus the credentials
+  that opened it, and neither survives that boundary usefully. All four now
+  refuse with a `LogicException` that says so and points at `Connection::add()`.
+- **`options` could disarm the PDO drivers** — the key is documented as
+  overriding the defaults, and `PDO::ATTR_ERRMODE` was among them. The drivers
+  are written for the exception form throughout, so setting `PDO::ERRMODE_SILENT`
+  did not make the library quieter: `prepare()` began returning `false` and the
+  caller got `TypeError: prepareStatement(): Return value must be of type
+  PDOStatement, false returned` in place of the database error. The error mode is
+  now pinned across all three PDO drivers; every other option applies as written.
+
 **Model generation**
 
 As with the observer generator, these defects land in the generated file rather

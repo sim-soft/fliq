@@ -31,11 +31,17 @@ class MySQLiDriver extends Driver
      */
     protected function connect(): void
     {
-        // A new connection carries no transaction, whatever the old one had.
-        $this->resetTransactionLevel();
+        $this->prepareConnect();
 
-        // Until the new connection is established there is nothing to vouch for.
-        $this->clearActivity();
+        // Built locally and only published once real_connect() has returned.
+        // Assigning the bare mysqli() first left a handle behind when the
+        // connect failed, and that handle satisfied isConnected() — so the
+        // driver called itself connected, and the next statement died with
+        // Error('mysqli object is not fully initialized') rather than saying
+        // the server was unreachable. A property access on it was worse still:
+        // Error('Property access is not allowed yet'), thrown from
+        // lastInsertId(), which is typed to answer false.
+        $connection = null;
 
         try {
             mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
@@ -47,23 +53,23 @@ class MySQLiDriver extends Driver
                 $host = 'p:' . $host;
             }
 
-            $this->connection = new mysqli();
+            $connection = new mysqli();
 
             // Set timeout before connecting
-            $this->connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, (int)$this->config['timeout']);
+            $connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, (int)$this->config['timeout']);
 
             // Set init command before connecting (joined with semicolons)
             $initCommands = (array)($this->config['init_command'] ?? []);
             if ($initCommands) {
-                $this->connection->options(MYSQLI_INIT_COMMAND, implode('; ', $initCommands));
+                $connection->options(MYSQLI_INIT_COMMAND, implode('; ', $initCommands));
             }
 
             // Apply user options before connecting
             foreach ((array)($this->config['options'] ?? []) as $option => $value) {
-                $this->connection->options($option, $value);
+                $connection->options($option, $value);
             }
 
-            $this->connection->real_connect(
+            $connection->real_connect(
                 $host,
                 $this->config['username'],
                 $this->config['password'],
@@ -71,10 +77,12 @@ class MySQLiDriver extends Driver
                 $this->config['port']
             );
 
-            $this->connection->set_charset($this->config['charset']);
+            $connection->set_charset($this->config['charset']);
 
+            $this->connection = $connection;
             $this->markActivity();
         } catch (mysqli_sql_exception $exception) {
+            $this->connection = null;
             $this->addError($exception->getMessage());
         }
     }
@@ -166,8 +174,25 @@ class MySQLiDriver extends Driver
         $stmt->execute($binds ?? []);
         $result = $stmt->get_result();
         if ($result === false) {
+            // get_result() answers false for two unrelated things: a statement
+            // that failed, and a statement that ran fine and has no result set
+            // to give — an UPDATE, a DELETE, a SET. Treating both as failure
+            // made `query('SET @x = 1')` throw "Failed to get result: " with an
+            // empty reason, because there was no error to name. The other three
+            // drivers return [] for the same statement. field_count is what
+            // distinguishes them: zero columns means there was never a result
+            // set, and errno is what a real failure sets.
+            $failed = $stmt->errno !== 0 || $stmt->field_count > 0;
+            $error = $stmt->error !== '' ? $stmt->error : $conn->error;
             $stmt->close();
-            throw new RuntimeException('Failed to get result: ' . $conn->error);
+
+            if ($failed) {
+                throw new RuntimeException('Failed to get result: ' . $error);
+            }
+
+            $this->markActivity();
+
+            return [];
         }
         $rows = $result->fetch_all(MYSQLI_ASSOC);
         $result->free();
@@ -182,9 +207,18 @@ class MySQLiDriver extends Driver
      */
     public function lastInsertId(): false|string
     {
-        $insertId = $this->getConnection()->insert_id;
+        // "No id to report" is what an absent connection has, and the method is
+        // typed to say so. This alone threw instead — RuntimeException from a
+        // null handle, and Error('Property access is not allowed yet') from a
+        // handle whose connect had failed — while the three PDO-backed drivers
+        // all answer false through normalizeInsertId(). Execute::getLastInsertId()
+        // maps false to null and does not catch, so the same "nothing was
+        // inserted" fact escaped as an exception from a method typed ?string.
+        return $this->normalizeInsertId(function (): string|false {
+            $insertId = $this->getConnection()->insert_id;
 
-        return $insertId > 0 ? (string)$insertId : false;
+            return $insertId > 0 ? (string)$insertId : false;
+        });
     }
 
     /**
@@ -248,11 +282,14 @@ class MySQLiDriver extends Driver
 
     /**
      * {@inheritdoc}
+     *
+     * @throws \Simsoft\DB\Exceptions\ConnectionException If the server is still unreachable.
      */
     protected function forceReconnect(): void
     {
         $this->connection = null;
         $this->connect();
+        $this->assertReconnected();
     }
 
     /**

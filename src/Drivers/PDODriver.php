@@ -47,11 +47,7 @@ class PDODriver extends Driver implements CachesStatements
      */
     protected function connect(): void
     {
-        // A new connection carries no transaction, whatever the old one had.
-        $this->resetTransactionLevel();
-
-        // Until the new connection is established there is nothing to vouch for.
-        $this->clearActivity();
+        $this->prepareConnect();
 
         try {
             $this->cacheEnabled = (bool)($this->config['statement_cache'] ?? true);
@@ -81,8 +77,8 @@ class PDODriver extends Driver implements CachesStatements
                 $defaults[PDO::ATTR_PERSISTENT] = true;
             }
 
-            // User options override defaults
-            $options = array_replace($defaults, (array)($this->config['options'] ?? []));
+            // User options override defaults, bar the error mode.
+            $options = $this->mergePdoOptions($defaults, $this->config['options'] ?? []);
 
             $this->connection = new PDO(
                 $dsn,
@@ -126,6 +122,8 @@ class PDODriver extends Driver implements CachesStatements
 
     /**
      * {@inheritdoc}
+     *
+     * @throws \Simsoft\DB\Exceptions\ConnectionException If the server is still unreachable.
      */
     protected function forceReconnect(): void
     {
@@ -133,6 +131,7 @@ class PDODriver extends Driver implements CachesStatements
         $this->statementCache = [];
         $this->connection = null;
         $this->connect();
+        $this->assertReconnected();
     }
 
     /**

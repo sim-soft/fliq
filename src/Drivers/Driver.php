@@ -65,6 +65,55 @@ abstract class Driver
     abstract protected function connect(): void;
 
     /**
+     * Merge user PDO options over the driver's defaults, keeping error mode.
+     *
+     * `options` is documented as overriding the defaults, and every default may
+     * be overridden except one. PDO::ATTR_ERRMODE governs whether a failure is
+     * raised or swallowed, and all three PDO-backed drivers are written for the
+     * exception form: prepare() is typed to return a statement, execute()'s
+     * bool means "the statement ran", and Execute::execute() turns a Throwable
+     * into QueryException. Setting PDO::ERRMODE_SILENT does not make the
+     * library quieter, it makes it wrong — prepare() starts returning false,
+     * which surfaced as `TypeError: prepareStatement(): Return value must be of
+     * type PDOStatement, false returned` from a config the documentation
+     * invited. A silent driver cannot report anything, so this one attribute is
+     * pinned.
+     *
+     * @param array<int, mixed> $defaults The driver's own options.
+     * @param mixed $userOptions The `options` config value, whatever its shape.
+     * @return array<int, mixed>
+     */
+    protected function mergePdoOptions(array $defaults, mixed $userOptions): array
+    {
+        $options = array_replace($defaults, (array)$userOptions);
+        $options[\PDO::ATTR_ERRMODE] = \PDO::ERRMODE_EXCEPTION;
+
+        return $options;
+    }
+
+    /**
+     * Reset the state a new connection does not inherit.
+     *
+     * Called by every connect() before it opens anything. Clearing the errors
+     * is what makes a recovered driver able to say it recovered: they only ever
+     * accumulated, so a driver that failed once and then succeeded still
+     * reported the stale failure through hasError() forever after.
+     *
+     * @return void
+     */
+    protected function prepareConnect(): void
+    {
+        // A new connection carries no transaction, whatever the old one had.
+        $this->resetTransactionLevel();
+
+        // Until the new connection is established there is nothing to vouch for.
+        $this->clearActivity();
+
+        // Whatever went wrong last time is not this connection's failure.
+        $this->clearErrors();
+    }
+
+    /**
      * Execute SQL statement. Return bool only indicates whether the operation is a success.
      *
      * @param Executable $query The executable object.
@@ -335,8 +384,45 @@ abstract class Driver
      * Drop the dead connection and establish a new one.
      *
      * @return void
+     * @throws ConnectionException If the new connection could not be opened.
      */
     abstract protected function forceReconnect(): void;
+
+    /**
+     * Fail loudly when a reconnect attempt did not produce a connection.
+     *
+     * connect() records its failure as an error string rather than throwing,
+     * because the constructor path wants to collect it — Connection::get()
+     * reads hasError() and raises ConnectionException itself. Nothing read it
+     * on the reconnect path, so a failed reconnect returned normally and the
+     * caller went on to use a driver that had no connection. What they got
+     * depended on the driver: PDO threw RuntimeException('Database connection
+     * failed') from deep inside the next statement, while MySQLi left a
+     * half-built handle behind and threw Error('mysqli object is not fully
+     * initialized') — a PHP Error, which callers catching Exception do not
+     * catch at all. Both are two frames removed from the real cause, which is
+     * that the server is unreachable.
+     *
+     * Drivers call this at the end of forceReconnect() so the failure surfaces
+     * where it happened, as the ConnectionException the documentation already
+     * tells callers to expect from a lost connection.
+     *
+     * @return void
+     * @throws ConnectionException If no connection was established.
+     */
+    protected function assertReconnected(): void
+    {
+        if ($this->isConnected() && $this->noError()) {
+            return;
+        }
+
+        $errors = $this->getErrors();
+        $reason = $errors === [] ? 'the connection could not be re-established' : end($errors);
+
+        throw new ConnectionException(
+            'The database connection was lost and could not be re-established: ' . $reason
+        );
+    }
 
     /**
      * Determine whether a failure means the connection is gone.
@@ -601,12 +687,32 @@ abstract class Driver
     }
 
     /**
-     * Reconnect on wakeup (deserialization).
+     * Refuse to be serialized.
      *
-     * @return void
+     * There was a __wakeup() here that reconnected on deserialization, and it
+     * could only ever run for one driver in four: PDO refuses to be serialized,
+     * so the three PDO-backed drivers died with `Serialization of 'PDO' is not
+     * allowed` — an exception naming a class the caller had not mentioned,
+     * thrown from a driver that advertised the opposite. Only MySQLi round
+     * tripped, and what it wrote out was the config: host, username and
+     * password, in plaintext, into whatever the payload was being stored in.
+     *
+     * A driver is a live connection and the credentials to open it. Neither
+     * survives a serialize/unserialize boundary usefully, and the credentials
+     * should not cross one at all. Refusing uniformly, and saying why, is more
+     * use than a feature that works for a quarter of callers and leaks for
+     * them. Register the connection again on the other side instead — that is
+     * what Connection::add() is for, and it reads the password from wherever
+     * you keep it rather than from a cache entry.
+     *
+     * @return array<string, mixed>
+     * @throws \LogicException Always.
      */
-    public function __wakeup(): void
+    public function __serialize(): array
     {
-        $this->connect();
+        throw new \LogicException(
+            static::class . ' cannot be serialized: it holds a live connection and the credentials '
+            . 'that opened it. Register the connection with Connection::add() where it is needed.'
+        );
     }
 }

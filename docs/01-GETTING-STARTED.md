@@ -204,12 +204,21 @@ PDO defaults (applied automatically, user options override):
 
 | Option                         | Default                  | Description                    |
 |--------------------------------|--------------------------|--------------------------------|
-| `PDO::ATTR_ERRMODE`            | `PDO::ERRMODE_EXCEPTION` | Throw exceptions on errors     |
+| `PDO::ATTR_ERRMODE`            | `PDO::ERRMODE_EXCEPTION` | Fixed — see below              |
 | `PDO::ATTR_DEFAULT_FETCH_MODE` | `PDO::FETCH_ASSOC`       | Return associative arrays      |
 | `PDO::ATTR_EMULATE_PREPARES`   | `false`                  | Use real prepared statements   |
 | `PDO::ATTR_STRINGIFY_FETCHES`  | `false`                  | Keep native PHP types          |
 | `PDO::ATTR_TIMEOUT`            | `5`                      | Connection timeout (seconds)   |
 | `PDO::ATTR_PERSISTENT`         | `false`                  | Set via `'persistent' => true` |
+
+`PDO::ATTR_ERRMODE` is the one default `options` cannot change. Setting it to
+`PDO::ERRMODE_SILENT` or `PDO::ERRMODE_WARNING` does not make FLIQ quieter — it
+makes it unable to report anything. The drivers are written for the exception
+form throughout, so under `ERRMODE_SILENT` a failing `prepare()` returns `false`
+and you get `TypeError: prepareStatement(): Return value must be of type
+PDOStatement, false returned` instead of the database error that caused it. The
+value is pinned to `PDO::ERRMODE_EXCEPTION`; every other option you pass applies
+as written. To handle failures rather than see them, catch `QueryException`.
 
 ### Statement Cache
 

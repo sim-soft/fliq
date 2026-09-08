@@ -54,6 +54,22 @@ trait Error
     }
 
     /**
+     * Discard every recorded error.
+     *
+     * Errors accumulate and nothing removed them, so one transient failure was
+     * permanent: a driver whose first connection attempt failed and whose
+     * second succeeded still answered hasError() true and listed the stale
+     * message, for a connection that was working. Anything that can succeed
+     * after failing has to be able to say so.
+     *
+     * @return void
+     */
+    public function clearErrors(): void
+    {
+        $this->errors = [];
+    }
+
+    /**
      * Determine there is no errors.
      *
      * @return bool True if no errors.

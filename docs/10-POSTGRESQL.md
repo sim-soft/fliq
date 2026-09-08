@@ -38,7 +38,7 @@ Connection::add('pgsql', [
     'timeout'              => 5,
     'statement_cache'      => true,
     'statement_cache_size' => 100,
-    'options'              => [],  /* PDO options override */
+    'options'              => [],  /* PDO options override, bar ATTR_ERRMODE */
 ]);
 ```
 

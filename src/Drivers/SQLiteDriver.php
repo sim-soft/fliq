@@ -47,11 +47,7 @@ class SQLiteDriver extends Driver implements CachesStatements
      */
     protected function connect(): void
     {
-        // A new connection carries no transaction, whatever the old one had.
-        $this->resetTransactionLevel();
-
-        // Until the new connection is established there is nothing to vouch for.
-        $this->clearActivity();
+        $this->prepareConnect();
 
         try {
             // Read before connecting, as the other PDO-backed drivers do. This
@@ -63,11 +59,11 @@ class SQLiteDriver extends Driver implements CachesStatements
 
             $dsn = 'sqlite:' . $this->config['database'];
 
-            $this->connection = new PDO($dsn, null, null, array_replace([
+            $this->connection = new PDO($dsn, null, null, $this->mergePdoOptions([
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES => false,
-            ], (array)($this->config['options'] ?? [])));
+            ], $this->config['options'] ?? []));
 
             // Enable WAL mode for better concurrency (file-based only)
             if ($this->config['database'] !== ':memory:') {
@@ -91,7 +87,8 @@ class SQLiteDriver extends Driver implements CachesStatements
      * database exists only inside its connection, so reopening one would hand
      * back an empty database rather than the caller's data — better to say so.
      *
-     * @throws ConnectionException If the database is in-memory.
+     * @throws ConnectionException If the database is in-memory, or the file
+     *                             could no longer be opened.
      */
     protected function forceReconnect(): void
     {
@@ -106,6 +103,7 @@ class SQLiteDriver extends Driver implements CachesStatements
         $this->statementCache = [];
         $this->connection = null;
         $this->connect();
+        $this->assertReconnected();
     }
 
     /**
