@@ -2225,6 +2225,32 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   example was run against MySQL and PostgreSQL, on `setting`, whose composite
   unique key is what the examples are about.
 
+### Tests
+
+- 12 tests covering `Builder::__toString()`, which no test had ever called
+  despite four classes declaring it and the query-builder guide documenting a
+  cast. Casting is not merely an alias for `getSQL()`: it triggers the same
+  build, so it inherits the memoisation and the bind accumulation that build
+  carries. The tests run one builder of every kind — `Select`, `Insert`,
+  `Update`, `Delete`, `Upsert` and an aggregate — through a cast-first read, a
+  repeated cast (the values must not accumulate), a mutation after a cast, and a
+  connection change after a cast, plus the four string contexts PHP reaches
+  `__toString()` from. No defect was found; the method was correct on both
+  engines and is now held that way.
+- 17 tests covering `CursorPaginator`, which had none. Its offset counterpart
+  has been covered since it was written, and the two are easy to mistake for
+  each other, but they are separate classes and this one carries cursors rather
+  than page numbers. `isEmpty()` had no caller at all. The tests pin it against
+  `count()` for empty, single and multi-row pages, and include a page whose only
+  row is itself falsy — `0`, `''`, `[]`, `null`, `false` — since that is the
+  reading `empty()` invites and would be wrong. Also covers iterating twice
+  (the iterator yields from an array, not a spent generator), string cursors,
+  and `hasMore` being about the query where `isEmpty()` is about the page.
+- Both sets were checked by mutation rather than by line count, since covering a
+  correct line proves nothing on its own: inverting `isEmpty()`, rewriting it to
+  the falsy-element reading, and emptying `__toString()` each fail the new tests
+  (2, 5 and 9 failures).
+
 ---
 
 ## [2.0.6] - 2026-08-13

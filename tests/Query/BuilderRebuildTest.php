@@ -6,11 +6,14 @@ use Models\User;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use Simsoft\DB\Builder\Aggregations\Count;
+use Simsoft\DB\Builder\Builder;
 use Simsoft\DB\Builder\Delete;
 use Simsoft\DB\Builder\Insert;
 use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Builder\Select;
 use Simsoft\DB\Builder\Update;
+use Simsoft\DB\Builder\Upsert;
 use Simsoft\DB\Connection;
 
 /**
@@ -236,5 +239,105 @@ class BuilderRebuildTest extends TestCase
         $this->assertSame(['a', 'b'], $insert->getBinds());
         $insert->getSQL();
         $this->assertSame(['a', 'b'], $insert->getBinds());
+    }
+
+    /**
+     * One builder of every kind, each already bound to a connection.
+     *
+     * @return array<string, array{callable(): Builder}>
+     */
+    public static function everyBuilder(): array
+    {
+        return [
+            'Select' => [static fn(): Builder => (new Select('user', ['{username}'], 'id = 1'))
+                ->withConnection('mysql')],
+            'Insert' => [static fn(): Builder => (new Insert('user', ['username' => 'a']))
+                ->withConnection('mysql')],
+            'Update' => [static fn(): Builder => (new Update('user', ['username' => 'a'], 'id = 1'))
+                ->withConnection('mysql')],
+            'Delete' => [static fn(): Builder => (new Delete('user', 'id = 1'))
+                ->withConnection('mysql')],
+            'Upsert' => [static fn(): Builder => (new Upsert('user', ['username' => 'a'], ['username']))
+                ->withConnection('mysql')],
+            'Count' => [static fn(): Builder => (new Count('user', '*'))
+                ->withConnection('mysql')],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('everyBuilder')]
+    public function castingToStringGivesTheSameStatementAsReadingIt(callable $make): void
+    {
+        $builder = $make();
+
+        // Cast first, so __toString() is what triggers the build. Reading it
+        // afterwards must not produce a second, different statement.
+        $cast = (string)$builder;
+
+        $this->assertNotSame('', $cast);
+        $this->assertSame($builder->getSQL(), $cast);
+    }
+
+    #[Test]
+    #[DataProvider('everyBuilder')]
+    public function castingToStringDoesNotAccumulateBinds(callable $make): void
+    {
+        // Every cast runs getSQL(), and buildSQL() appends a bind per
+        // placeholder it emits. Interpolating a builder into a log line is an
+        // ordinary thing to do repeatedly, so it must not add values the
+        // statement has no positions for.
+        $builder = $make();
+
+        $first = (string)$builder;
+        $binds = $builder->getBinds();
+
+        (string)$builder;
+        (string)$builder;
+
+        $this->assertSame($first, (string)$builder);
+        $this->assertSame($binds, $builder->getBinds());
+    }
+
+    #[Test]
+    public function everyStringContextAgrees(): void
+    {
+        // __toString() is reached by more than an explicit cast, and the
+        // engines differ enough in how they invoke it to be worth pinning.
+        $update = (new Update('user', ['username' => 'a'], 'id = 1'))->withConnection('mysql');
+
+        $expected = $update->getSQL();
+
+        $this->assertSame($expected, "$update");
+        $this->assertSame($expected, implode('', [$update]));
+        $this->assertSame($expected, sprintf('%s', $update));
+        $this->assertSame($expected, '' . $update);
+        $this->assertSame(['a'], $update->getBinds());
+    }
+
+    #[Test]
+    public function aCastIsNotStaleAfterAMutation(): void
+    {
+        // The same freeze the rest of this class covers, reached through the
+        // cast rather than through getSQL().
+        $select = (new Select('user', ['{username}']))->withConnection('mysql');
+
+        $this->assertStringNotContainsString('DISTINCT', (string)$select);
+
+        $select->distinct();
+
+        $this->assertStringContainsString('DISTINCT', (string)$select);
+    }
+
+    #[Test]
+    public function aCastIsRequotedAfterAConnectionChange(): void
+    {
+        $select = (new Select('user', ['{username}']))->withConnection('mysql');
+
+        $this->assertStringContainsString('`username`', (string)$select);
+
+        $select->withConnection('pg');
+
+        $this->assertStringContainsString('"username"', (string)$select);
+        $this->assertStringNotContainsString('`', (string)$select);
     }
 }
