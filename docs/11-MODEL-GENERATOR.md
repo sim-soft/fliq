@@ -421,6 +421,7 @@ These columns are never added to `$fillable` (they're managed automatically):
 | `created_at` + `updated_at` exist           | Adds `use Timestamps;` trait                   |
 | `created` + `updated` exist                 | Adds `use Timestamps;` trait                   |
 | Column ending with `_id` (e.g., `user_id`)  | Generates a `hasOne` relation method           |
+| `_id` column whose method name is unusable  | Skips that one relation (see below)            |
 | MySQL ENUM type (e.g., `ENUM('a','b','c')`) | Adds a comment listing the valid values        |
 | Always                                      | Adds `$guarded` with the primary key column(s) |
 
@@ -731,6 +732,58 @@ class Post extends Model
     }
 }
 ```
+
+#### When a relation is skipped
+
+A relation is a method on the generated class, so its name has to be one PHP
+will accept and one nothing else has claimed. Three `_id` columns cannot have
+one, and the generator leaves each out rather than writing a file that breaks:
+
+| Column       | Would generate                | Why it is skipped                                                 |
+|--------------|-------------------------------|-------------------------------------------------------------------|
+| `save_id`    | `save(): Relation`            | Overrides `Model::save(bool): bool` with an incompatible signature |
+| `class_id`   | `hasOne(Class::class, ...)`   | `class` is a reserved word — a parse error                         |
+| a second column resolving to a name already used | a duplicate method | `Cannot redeclare`                            |
+
+Everything else on the table is generated as normal; only the one relation is
+missing. Write it by hand, under a name of your choosing:
+
+```php
+public function savedBy(): Relation
+{
+    return $this->hasOne(User::class, ['id' => 'save_id']);
+}
+```
+
+### Table Names PHP Cannot Name a Class After
+
+The class name is derived from the table name, so a table PHP has no legal
+class name for cannot produce a loadable file. Rather than write one that fails
+to parse, the generator refuses and names the table:
+
+```
+Table '2fa_token' produces the class name '2faToken', which is not a valid PHP
+class name. Pass an explicit name with className().
+```
+
+This covers names starting with a digit (legal in MySQL, not in PHP) and names
+that are reserved words (`class`, `list`, `match`, `enum`, and so on). Supply
+the name yourself:
+
+```php
+ModelGenerator::fromTable('2fa_token')
+    ->className('TwoFactorToken')
+    ->generate();
+```
+
+```bash
+vendor/bin/fliq make:model TwoFactorToken --table=2fa_token
+```
+
+The table name itself is also checked before it reaches the database, because
+two of the three introspection queries name the table inline and an identifier
+cannot be parameter-bound. Only letters, digits, underscores and dollar signs
+are accepted.
 
 ### Enum Column Comments
 

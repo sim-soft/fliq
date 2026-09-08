@@ -6,6 +6,44 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Model generation**
+
+As with the observer generator, these defects land in the generated file rather
+than in this library. A table name comes from a database rather than from a
+developer typing it, so the generator meets names it did not choose.
+
+- **On PostgreSQL, a column in more than one constraint was introspected more
+  than once** — the column query joined `key_column_usage` and filtered for the
+  primary key in the `SELECT` list rather than in the join, so it returned one
+  row per constraint the column belonged to. A column that was both `UNIQUE`
+  and a foreign key came back three times, and each copy became another
+  `@property` line and another relation method: `Cannot redeclare
+  Model::user()`, a fatal error in a file the reader had not written. The
+  primary key is now looked up as a pre-filtered subquery, so the column list
+  is one row per column whatever constraints it carries. The fixture's
+  `user_profile.user_id` is exactly this shape and could not be generated
+  before. MySQL and SQLite were unaffected.
+- **A relation was generated for a column whose method name PHP would not
+  accept** — the `*_id` rule fired on the column name alone. Three cases each
+  produced a file that failed at load rather than at generation: `save_id` gave
+  `save(): Relation`, which cannot override `Model::save(bool): bool`;
+  `class_id` gave `Class::class`, a reserved word used as a class reference, so
+  a parse error; and two columns resolving to one name gave `Cannot redeclare`.
+  Each of the three is now skipped — the rest of the model is generated
+  normally, and the one relation can be written by hand under a name of the
+  reader's choosing.
+- **A table PHP has no legal class name for was generated anyway** — MySQL
+  accepts a table named `2fa_token`, PHP does not accept a class named
+  `2faToken`. The file was written without complaint and was a parse error on
+  its class line; the same applied to a table named after a reserved word
+  (`class`, `list`, `match`). Both are now refused up front, naming the table
+  and pointing at `className()`, which is the documented way through and is
+  verified to produce a loadable file.
+- **The table name reached SQL uninspected** — `SHOW COLUMNS FROM \`$table\``
+  and `PRAGMA table_info('$table')` name the table inline, because an
+  identifier cannot be parameter-bound. The name is now checked against a plain
+  identifier grammar before either query is built.
+
 **Observer generation**
 
 Every defect below lands in the generated file rather than in this library, so

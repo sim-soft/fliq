@@ -538,28 +538,21 @@ class TestableModelGenerator extends ModelGenerator
     /**
      * Override preview to use fake columns instead of introspecting.
      *
+     * The class name is resolved by the real method rather than a copy of it.
+     * A double that derives the name its own way cannot show what the real
+     * generator does with a name PHP will not accept — which is the whole of
+     * what ModelGeneratorSafetyTest is checking.
+     *
      * @return string
      */
     public function preview(): string
     {
         $reflection = new \ReflectionClass(ModelGenerator::class);
 
-        $tableMethod = $reflection->getMethod('tableToClassName');
-        $className = $tableMethod->invoke($this, $this->getTable());
+        $resolve = $reflection->getMethod('resolveClassName');
+        $className = $resolve->invoke($this);
 
         $buildMethod = $reflection->getMethod('buildClassCode');
         return $buildMethod->invoke($this, $className, $this->fakeColumns);
-    }
-
-    /**
-     * Get the table name.
-     *
-     * @return string
-     */
-    private function getTable(): string
-    {
-        $reflection = new \ReflectionClass(ModelGenerator::class);
-        $prop = $reflection->getProperty('table');
-        return $prop->getValue($this);
     }
 }
