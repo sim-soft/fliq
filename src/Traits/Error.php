@@ -27,13 +27,21 @@ trait Error
     /**
      * Add an array of error messages.
      *
-     * @param array<int, string> $messages Array of error messages.
+     * Keys are discarded and the messages appended, which is what the storage
+     * declares and what addError() does one at a time. Spreading kept string
+     * keys, so a batch keyed by field name — the shape a caller building
+     * ['email' => 'is required'] would naturally reach for — overwrote any
+     * earlier message sharing a key instead of adding to it, and two calls
+     * about the same field left one message where there should have been two.
+     * The errors array then held string keys its own type forbids.
+     *
+     * @param array<array-key, string> $messages Array of error messages.
      * @return void
      */
     public function addErrors(array $messages = []): void
     {
-        if ($messages) {
-            $this->errors = [...$this->errors, ...$messages];
+        foreach ($messages as $message) {
+            $this->errors[] = $message;
         }
     }
 
@@ -43,13 +51,21 @@ trait Error
      * Flattens the grouped error messages and appends them to this model's errors.
      * Accepts any iterable where each value is an array of error message strings.
      *
-     * @param Traversable<string, array<string>> $errors The validator errors object.
+     * Appended rather than spread, for the reason given on addErrors(). The
+     * bundled validator appends within each field, so its inner arrays are
+     * integer-keyed and spreading them happened to renumber; any other source
+     * keying its messages by rule name would have lost every field after the
+     * first to share one.
+     *
+     * @param Traversable<string, array<array-key, string>> $errors The validator errors object.
      * @return void
      */
     public function addValidationErrors(Traversable $errors): void
     {
         foreach ($errors as $messages) {
-            $this->errors = [...$this->errors, ...$messages];
+            foreach ($messages as $message) {
+                $this->errors[] = $message;
+            }
         }
     }
 

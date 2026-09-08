@@ -306,6 +306,11 @@ User::transaction(function () {
 | `$model->getErrors()`                               | Get all errors        |
 | `$model->hasError()`                                | True if errors exist  |
 | `$model->noError()`                                 | True if no errors     |
+| `$model->clearErrors()`                             | Discard all errors    |
+
+Errors accumulate and are always appended, so nothing you add displaces anything
+already recorded. Any keys on the array you pass are discarded —
+`getErrors()` returns a plain list.
 
 ### Scenario Trait (opt-in: `use Scenario`)
 

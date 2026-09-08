@@ -14,6 +14,22 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Error collection**
+
+- **`addErrors()` overwrote messages instead of adding them** — it merged with
+  the spread operator, which preserves string keys, so a batch keyed by field
+  name (`['email' => 'is required']`, the shape a caller naturally reaches for)
+  replaced any earlier message sharing that key. Two calls about one field left
+  one message where there should have been two, and the loss was silent:
+  `getErrors()` simply returned fewer messages than were handed to it. The
+  errors array also ended up holding string keys that its own
+  `array<int, string>` type forbids, which `getErrors()` then returned. Both it
+  and `addValidationErrors()` now append, matching what `addError()` has always
+  done one at a time. The bundled `simsoft/validator` was unaffected in
+  practice — it appends within each field, so its inner arrays are
+  integer-keyed and spreading them renumbered — but any other source keying
+  messages by rule name lost every field after the first to share one.
+
 **RETURNING**
 
 - **`returning()` with no arguments emitted no clause at all** — on `Update` and
@@ -170,6 +186,10 @@ N+1 in it.
   `getSQL()` and `getBinds()` agree in either order, and that
   `Builder\Clauses` types are not builders and still require reading their binds
   after the cast.
+- `docs/08-CHEATSHEET.md` omitted `clearErrors()` from the Error trait table and
+  said nothing about how errors combine. It now lists the method and records
+  that errors are appended, never displaced, and that keys on the array passed
+  in are discarded.
 - `docs/10-POSTGRESQL.md` and `docs/08-CHEATSHEET.md` showed `returning()` only
   with explicit column names. Both now document the no-argument form as
   `RETURNING *`, and docs/10 records that `getReturningResult()` answers `[]`
