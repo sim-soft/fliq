@@ -64,6 +64,22 @@ All notable changes to `simsoft/fliq` are documented here.
   written as a list instead of a map handed `add()` an `int` where it declares
   `string`, which was the same escaping `TypeError` as above. Keys are now cast,
   so such an entry registers under its string form.
+- **A config key present but set to `null` was reported as missing** — the
+  driver's validation tested `isset()`, which cannot tell the two apart, so
+  `'password' => null` produced "Missing required config keys: password" about a
+  key sitting on the line in front of the reader. The usual next step — adding
+  the key that is said to be absent — changes nothing, because it is already
+  there. The two cases are now reported separately and both are named when both
+  occur, so a config with one key absent and another nulled says so in one
+  message rather than mentioning only the first problem found.
+
+  The rejection itself is unchanged and deliberately so: a `null` host connects
+  to localhost and a `null` database selects none, both without complaint, so a
+  typo that nulls either reaches a server — just not the intended one. That was
+  confirmed against MySQL and PostgreSQL with the check bypassed. Only the
+  wording was wrong. One case is newly caught as a consequence: `SQLiteDriver`
+  defaults `database` to `:memory:` before validation runs, so an explicit
+  `['database' => null]` used to pass and now does not.
 
 **Query result caching**
 
@@ -2250,6 +2266,22 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   correct line proves nothing on its own: inverting `isEmpty()`, rewriting it to
   the falsy-element reading, and emptying `__toString()` each fail the new tests
   (2, 5 and 9 failures).
+- 15 tests covering the three error paths in `Driver` that nothing reached: the
+  two ways `ping()` reports failure, the rollback that cannot be sent, and
+  config validation. Each was confirmed reachable against a live server before
+  being written, which mattered — the first attempt at the `ping()` tests passed
+  against a deliberately broken `ping()`, because the `false` they observed came
+  from the `catch` rather than from either branch being aimed at. The paths now
+  covered are: no connection left to probe (a failed reconnect leaves the driver
+  holding nothing); a probe that reports failure by return value rather than by
+  throwing, which is reachable because `mysqli_report()` is process-global and
+  the driver sets it only inside `connect()`; and a savepoint rollback lost with
+  its connection, the nested counterpart of the outer-rollback case. A companion
+  test pins the suppression's boundary — a rollback that fails for any other
+  reason is still raised — since a driver that swallowed that would report a
+  rollback it never performed. Verified by mutation: making `ping()` ignore both
+  failures, and widening the suppression to every rollback error, produce 5
+  failures between them.
 
 ---
 

@@ -133,6 +133,29 @@ class DriverReconnectTest extends DatabaseTestCase
     }
 
     /**
+     * Count the rows one marker value left behind, and clear them.
+     *
+     * The scratch table is shared by the whole class and every data set runs
+     * it twice, so an absolute count would depend on what ran first. Each
+     * test that writes here picks its own marker, reads back only that, and
+     * takes it away again so the next data set starts from nothing.
+     *
+     * @param int $marker The value written by the test asking.
+     * @return int
+     */
+    private function takeMarkers(int $marker): int
+    {
+        $mysql = Connection::get('mysql');
+        $count = (int)$mysql->query(
+            new Raw('SELECT COUNT(*) AS c FROM ' . self::TABLE . ' WHERE n = ?', [$marker])
+        )[0]['c'];
+
+        $mysql->execute(new Raw('DELETE FROM ' . self::TABLE . ' WHERE n = ?', [$marker]));
+
+        return $count;
+    }
+
+    /**
      * @param non-empty-string $driver The driver to exercise.
      * @return void
      */
@@ -477,5 +500,315 @@ class DriverReconnectTest extends DatabaseTestCase
         $cache->setAccessible(true);
         $held = $cache->getValue($probe);
         $this->assertIsArray($held);
+    }
+
+    /**
+     * @param non-empty-string $driver The driver to exercise.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('mysqlDrivers')]
+    public function pingSucceedsOnALiveConnection(string $driver): void
+    {
+        $probe = $this->probeConnection($driver);
+
+        $this->assertTrue($probe->ping());
+
+        // The probe has to leave the connection usable. An unread result set
+        // keeps MySQL busy and fails the next prepared statement — the
+        // liveness check breaking the connection it just vouched for.
+        $this->assertSame(7, (int)$probe->query(new Raw('SELECT 7 AS n'))[0]['n']);
+    }
+
+    /**
+     * @param non-empty-string $driver The driver to exercise.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('mysqlDrivers')]
+    public function pingFailsOnAConnectionTheServerClosed(string $driver): void
+    {
+        $probe = $this->probeConnection($driver);
+        $probe->query(new Raw('SELECT 1 AS n'));
+
+        $this->killFromTheServer($probe);
+
+        // The driver still holds a handle and has not been told anything, so
+        // this is the case ping() exists for: the failure is only discoverable
+        // by asking the server.
+        $this->assertFalse($probe->ping());
+    }
+
+    /**
+     * @param non-empty-string $driver The driver to exercise.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('mysqlDrivers')]
+    public function aFailedPingReportsFailureRatherThanThrowing(string $driver): void
+    {
+        $probe = $this->probeConnection($driver);
+        $probe->query(new Raw('SELECT 1 AS n'));
+        $this->killFromTheServer($probe);
+
+        // Callers use ping() to decide what to do next, so it answers rather
+        // than raising — including when asked repeatedly.
+        $this->assertFalse($probe->ping());
+        $this->assertFalse($probe->ping());
+    }
+
+    /**
+     * @param non-empty-string $driver The driver to exercise.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('mysqlDrivers')]
+    public function aFailedPingLeavesTheDriverAbleToRecover(string $driver): void
+    {
+        $probe = $this->probeConnection($driver);
+        $probe->query(new Raw('SELECT 1 AS n'));
+        $this->killFromTheServer($probe);
+
+        $this->assertFalse($probe->ping());
+
+        // Reporting the connection dead must not also give up on it: the
+        // statement-level retry is what the guides promise recovers.
+        $this->assertSame(9, (int)$probe->query(new Raw('SELECT 9 AS n'))[0]['n']);
+        $this->assertTrue($probe->ping());
+    }
+
+    /**
+     * @param non-empty-string $driver The driver to exercise.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('mysqlDrivers')]
+    public function aRollbackOnALostConnectionDoesNotReplaceTheRealFailure(string $driver): void
+    {
+        // The unwind is the point. The callback throws, so the transaction has
+        // to roll back — but the connection it lives on is already gone, so the
+        // ROLLBACK cannot be sent. The server discards an interrupted
+        // transaction on its own, and letting the rollback's own failure
+        // propagate would bury the cause of the unwind under a symptom of it.
+        $probe = $this->probeConnection($driver);
+
+        try {
+            $probe->transaction(function () use ($probe): bool {
+                $probe->execute(new Raw('INSERT INTO ' . self::TABLE . ' (n) VALUES (?)', [91]));
+
+                $this->killFromTheServer($probe);
+
+                throw new RuntimeException('the real failure');
+            });
+            self::fail('The callback threw, so the transaction must not report success.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('the real failure', $exception->getMessage());
+        }
+
+        // And the interrupted work is not on the server.
+        $this->assertSame(0, $this->takeMarkers(91));
+    }
+
+    /**
+     * @param non-empty-string $driver The driver to exercise.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('mysqlDrivers')]
+    public function theDriverIsUsableAfterARollbackCouldNotBeSent(string $driver): void
+    {
+        $probe = $this->probeConnection($driver);
+
+        try {
+            $probe->transaction(function () use ($probe): bool {
+                $probe->execute(new Raw('INSERT INTO ' . self::TABLE . ' (n) VALUES (?)', [91]));
+                $this->killFromTheServer($probe);
+
+                throw new RuntimeException('unwind');
+            });
+        } catch (RuntimeException) {
+            // Expected; the point is what the driver looks like afterwards.
+        }
+
+        // The depth counter has to unwind even though the rollback failed,
+        // or every later transaction on this driver is treated as nested.
+        $this->assertSame(0, $probe->getTransactionLevel());
+
+        $committed = $probe->transaction(function () use ($probe): bool {
+            $probe->execute(new Raw('INSERT INTO ' . self::TABLE . ' (n) VALUES (?)', [92]));
+            return true;
+        });
+
+        $this->assertTrue($committed);
+        $this->assertSame(1, $this->takeMarkers(92));
+
+        // The interrupted write went with the connection; only the one
+        // committed afterwards survived.
+        $this->assertSame(0, $this->takeMarkers(91));
+    }
+
+    /**
+     * @param non-empty-string $driver The driver to exercise.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('mysqlDrivers')]
+    public function pingIsFalseWhenThereIsNoConnectionToAsk(string $driver): void
+    {
+        // The other ping tests all reach the server and get an error back. This
+        // one never gets that far: a reconnect that fails leaves the driver
+        // holding no handle at all, and ping() has to answer from that state
+        // rather than dereference it.
+        $probe = $this->probeConnection($driver);
+        $probe->query(new Raw('SELECT 1 AS n'));
+
+        $this->pointAtADeadPort($probe);
+
+        try {
+            $this->invoke($probe, 'forceReconnect');
+            self::fail('The port is closed, so the reconnect must not succeed.');
+        } catch (ConnectionException) {
+            // Expected — the state it leaves behind is the subject.
+        }
+
+        $this->assertFalse($this->invoke($probe, 'isConnected'));
+        $this->assertFalse($probe->ping());
+    }
+
+    /**
+     * @return void
+     */
+    #[Test]
+    public function pingIsFalseWhenTheProbeReportsFailureByReturnValue(): void
+    {
+        // mysqli_report() is process-global and the driver sets it once, inside
+        // connect(). Any other library in the process can turn it off, and then
+        // a dead connection stops throwing and starts answering false. ping()
+        // has to honour that answer instead of reading it as success.
+        $probe = $this->probeConnection('mysqli');
+        $probe->query(new Raw('SELECT 1 AS n'));
+        $this->killFromTheServer($probe);
+
+        $previous = (int)ini_get('mysqli.report_mode');
+        mysqli_report(MYSQLI_REPORT_OFF);
+
+        try {
+            // The handle is still held, so this is not the no-connection case:
+            // the probe runs, and returns false rather than raising.
+            $this->assertTrue($this->invoke($probe, 'isConnected'));
+            $this->assertFalse($this->invoke($probe, 'probeLiveness'));
+            $this->assertFalse($probe->ping());
+        } finally {
+            mysqli_report($previous);
+        }
+    }
+
+    /**
+     * @param non-empty-string $driver The driver to exercise.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('mysqlDrivers')]
+    public function aSavepointRollbackOnALostConnectionDoesNotReplaceTheRealFailure(string $driver): void
+    {
+        // Same suppression as the outer rollback, on the other branch: the
+        // connection dies inside a *nested* transaction, so what cannot be sent
+        // is ROLLBACK TO SAVEPOINT. The inner callback's exception is the one
+        // the caller needs to see.
+        $probe = $this->probeConnection($driver);
+
+        try {
+            $probe->transaction(function () use ($probe): bool {
+                $probe->execute(new Raw('INSERT INTO ' . self::TABLE . ' (n) VALUES (?)', [93]));
+
+                $probe->transaction(function () use ($probe): bool {
+                    $probe->execute(new Raw('INSERT INTO ' . self::TABLE . ' (n) VALUES (?)', [94]));
+
+                    $this->killFromTheServer($probe);
+
+                    throw new RuntimeException('the inner failure');
+                });
+
+                return true;
+            });
+            self::fail('The inner callback threw, so the transaction must not report success.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('the inner failure', $exception->getMessage());
+        } catch (\Throwable $exception) {
+            // The outer rollback runs on the same dead connection; whatever it
+            // reports, it must not be what replaced the inner failure.
+            $this->assertStringNotContainsString('SAVEPOINT', $exception->getMessage());
+        }
+
+        $this->assertSame(0, $this->takeMarkers(93));
+        $this->assertSame(0, $this->takeMarkers(94));
+    }
+
+    /**
+     * @param non-empty-string $driver The driver to exercise.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('mysqlDrivers')]
+    public function aRollbackFailureThatIsNotALostConnectionIsStillRaised(string $driver): void
+    {
+        // The suppression is narrow on purpose. Releasing the savepoint from
+        // inside the nested transaction makes the inner ROLLBACK TO SAVEPOINT
+        // fail for a reason that has nothing to do with the connection — and a
+        // driver that swallowed *that* would report a rollback it never
+        // performed. RELEASE is used rather than a bare COMMIT because COMMIT
+        // also desynchronises PDO's own transaction tracking, which would fail
+        // the outer transaction for an unrelated reason.
+        $probe = $this->probeConnection($driver);
+        $raised = null;
+
+        $probe->transaction(function () use ($probe, &$raised): bool {
+            $probe->execute(new Raw('INSERT INTO ' . self::TABLE . ' (n) VALUES (?)', [95]));
+
+            try {
+                $probe->transaction(function () use ($probe): bool {
+                    $probe->execute(new Raw('RELEASE SAVEPOINT fliq_sp_2'));
+
+                    throw new RuntimeException('unwind onto a savepoint that is gone');
+                });
+            } catch (\Throwable $throwable) {
+                $raised = $throwable;
+            }
+
+            return true;
+        });
+
+        $this->assertNotNull($raised);
+        $this->assertStringContainsStringIgnoringCase('savepoint', $raised->getMessage());
+
+        // And the failure that surfaced is the rollback's own, not the
+        // callback's — this is the case the driver must not suppress.
+        $this->assertStringNotContainsString('unwind onto a savepoint', $raised->getMessage());
+
+        $this->takeMarkers(95);
+    }
+
+    /**
+     * Repoint a live driver at a closed port, so the next reconnect fails.
+     *
+     * @param Driver $driver The connection to sabotage.
+     * @return void
+     */
+    private function pointAtADeadPort(Driver $driver): void
+    {
+        $config = new ReflectionProperty($driver::class, 'config');
+        $config->setValue($driver, [...$config->getValue($driver), 'port' => 1]);
+    }
+
+    /**
+     * Call a driver method the public API does not expose.
+     *
+     * @param Driver $driver The driver to call into.
+     * @param non-empty-string $method The method name.
+     * @return mixed
+     */
+    private function invoke(Driver $driver, string $method): mixed
+    {
+        return (new ReflectionMethod($driver, $method))->invoke($driver);
     }
 }

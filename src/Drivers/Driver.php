@@ -667,22 +667,35 @@ abstract class Driver
     /**
      * Validate config.
      *
+     * A required key set to null is rejected as well as an absent one, and it
+     * has to be: a null `host` connects to localhost and a null `database`
+     * selects none, both without complaint, so a config typo that nulls one
+     * reaches a server — just not the intended one. What the driver cannot do
+     * is call such a key missing. It is present, and saying otherwise sends
+     * the reader looking for a line that is already in front of them.
+     *
      * @return void
-     * @throws InvalidArgumentException If required config keys are missing.
+     * @throws InvalidArgumentException If required config keys are missing or null.
      */
     private function validate(): void
     {
         $missing = [];
+        $null = [];
         foreach ($this->required as $key) {
-            if (!isset($this->config[$key])) {
+            if (!array_key_exists($key, $this->config)) {
                 $missing[] = $key;
+            } elseif ($this->config[$key] === null) {
+                $null[] = $key;
             }
         }
 
-        if ($missing) {
-            throw new InvalidArgumentException(
-                "Database: Missing required config keys: " . implode(', ', $missing)
-            );
+        $problems = array_filter([
+            $missing === [] ? '' : 'missing required config keys: ' . implode(', ', $missing),
+            $null === [] ? '' : 'required config keys set to null: ' . implode(', ', $null),
+        ]);
+
+        if ($problems) {
+            throw new InvalidArgumentException('Database: ' . implode('; ', $problems) . '.');
         }
     }
 

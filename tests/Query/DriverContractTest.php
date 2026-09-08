@@ -2,11 +2,13 @@
 
 namespace Query;
 
+use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
+use ReflectionProperty;
 use Simsoft\DB\Drivers\Driver;
 use Simsoft\DB\Drivers\MySQLiDriver;
 use Simsoft\DB\Drivers\PDODriver;
@@ -204,5 +206,179 @@ class DriverContractTest extends TestCase
             strpos($body, '$this->beginTransaction()'),
             strpos($body, '$this->reconnectIfDead()')
         );
+    }
+
+    /**
+     * A working config for each driver that talks to a server.
+     *
+     * SQLite is excluded throughout this group: it defaults `database` to
+     * `:memory:`, and the default is merged before validate() runs, so its one
+     * required key is filled in before anything can find it absent.
+     *
+     * @return array<string, array{0: class-string<Driver>, 1: array<string, mixed>}>
+     */
+    public static function serverDrivers(): array
+    {
+        $mysql = [
+            'host' => '127.0.0.1',
+            'port' => 3306,
+            'database' => 'sample_db',
+            'username' => 'root',
+            'password' => '',
+        ];
+
+        return [
+            'mysqli' => [MySQLiDriver::class, $mysql],
+            'pdo' => [PDODriver::class, $mysql],
+            'postgres' => [PostgresDriver::class, [
+                'host' => '127.0.0.1',
+                'port' => 5432,
+                'database' => 'sample_db',
+                'username' => 'postgres',
+                'password' => 'postgres',
+            ]],
+        ];
+    }
+
+    /**
+     * @param class-string<Driver> $driver The driver class to construct.
+     * @param array<string, mixed> $config A config that would otherwise work.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('serverDrivers')]
+    public function anAbsentRequiredKeyIsReportedAsMissing(string $driver, array $config): void
+    {
+        unset($config['database']);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('missing required config keys: database');
+
+        new $driver($config);
+    }
+
+    /**
+     * @param class-string<Driver> $driver The driver class to construct.
+     * @param array<string, mixed> $config A config that would otherwise work.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('serverDrivers')]
+    public function everyAbsentKeyIsNamedAtOnce(string $driver, array $config): void
+    {
+        // Reporting one at a time turns a wholly empty config into four
+        // rounds of edit-and-rerun.
+        try {
+            new $driver([]);
+            self::fail('An empty config must not be accepted.');
+        } catch (InvalidArgumentException $exception) {
+            foreach ((new ReflectionClass($driver))->getDefaultProperties()['required'] ?? [] as $key) {
+                $this->assertStringContainsString((string)$key, $exception->getMessage());
+            }
+        }
+    }
+
+    /**
+     * @param class-string<Driver> $driver The driver class to construct.
+     * @param array<string, mixed> $config A config that would otherwise work.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('serverDrivers')]
+    public function aNullRequiredKeyIsNotCalledMissing(string $driver, array $config): void
+    {
+        // It is present. Calling it missing sends the reader looking for a line
+        // that is already in front of them — and `password => null` is a config
+        // someone writes on purpose.
+        $config['password'] = null;
+
+        try {
+            new $driver($config);
+            self::fail('A null required key must not be accepted.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertStringContainsString('set to null: password', $exception->getMessage());
+            $this->assertStringNotContainsString('missing', $exception->getMessage());
+        }
+    }
+
+    /**
+     * @param class-string<Driver> $driver The driver class to construct.
+     * @param array<string, mixed> $config A config that would otherwise work.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('serverDrivers')]
+    public function aNullRequiredKeyIsStillRejected(string $driver, array $config): void
+    {
+        // Rewording is not relaxing. A null `host` connects to localhost and a
+        // null `database` selects none, both without complaint, so a config
+        // that nulls one reaches a server that is not the intended one.
+        $config['host'] = null;
+
+        $this->expectException(InvalidArgumentException::class);
+
+        new $driver($config);
+    }
+
+    /**
+     * @param class-string<Driver> $driver The driver class to construct.
+     * @param array<string, mixed> $config A config that would otherwise work.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('serverDrivers')]
+    public function absentAndNullKeysAreReportedTogether(string $driver, array $config): void
+    {
+        unset($config['database']);
+        $config['host'] = null;
+
+        try {
+            new $driver($config);
+            self::fail('A config with both faults must not be accepted.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertStringContainsString('missing required config keys: database', $exception->getMessage());
+            $this->assertStringContainsString('set to null: host', $exception->getMessage());
+        }
+    }
+
+    #[Test]
+    public function sqliteNeedsNoConfigAtAll(): void
+    {
+        // Its one required key is also defaulted, so validate() can never find
+        // it absent. That is the intended behaviour, not an oversight, and it
+        // is worth pinning: an in-memory database is the documented default.
+        $driver = new SQLiteDriver([]);
+
+        $config = (new ReflectionProperty($driver, 'config'))->getValue($driver);
+
+        $this->assertIsArray($config);
+        $this->assertSame(':memory:', $config['database']);
+    }
+
+    #[Test]
+    public function sqliteStillRejectsAnExplicitNullDatabase(): void
+    {
+        // The default cannot fill a key that is present, so this is the one
+        // way SQLite's required entry is reachable.
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('set to null: database');
+
+        new SQLiteDriver(['database' => null]);
+    }
+
+    /**
+     * @param class-string<Driver> $driver The driver class to construct.
+     * @param array<string, mixed> $config A config that would otherwise work.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('serverDrivers')]
+    public function anEmptyStringPasswordIsAccepted(string $driver, array $config): void
+    {
+        // The distinction the rewording rests on: '' is a value, null is not.
+        // Every connection example in the guides uses '' for a local server.
+        $config['password'] = '';
+
+        $this->assertFalse((new $driver($config))->hasError());
     }
 }
