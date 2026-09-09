@@ -38,8 +38,8 @@ $user->save();
 
 The name says it all — **F**ast, **L**ightweight, **I**ndependent **Q**uery Builder.
 
-- **Fast** — One object per query, zero-allocation fast path, prepared statement caching. No other PHP ORM builds query this lean.
-- **Lightweight** — ~100KB install size, zero dependencies. No service containers, no config files, no boot process.
+- **Fast** — Two objects per query however many conditions you add, prepared statement caching, no intermediate node tree.
+- **Lightweight** — ~650KB of source, zero runtime dependencies. No service containers, no config files, no boot process.
 - **Independent** — Standalone library with no framework coupling. One `composer require`, one `Connection::add()` call, done.
 - **Query Builder** — Fluent, expressive API that compiles directly to optimized SQL without intermediate object layers.
 
@@ -134,7 +134,7 @@ $post->delete();
 
 ## Features
 
-- [Zero-Allocation Query Building](#zero-allocation-query-building)
+- [Flat Query Building](#flat-query-building)
 - [Nested Eager Loading](#nested-eager-loading)
 - [Conditional Queries](#conditional-queries)
 - [JSON Column Queries](#json-column-queries)
@@ -149,9 +149,9 @@ $post->delete();
 
 ---
 
-### Zero-Allocation Query Building
+### Flat Query Building
 
-The most common query patterns (`where`, `in`, `like`, `between`, `orderBy`, `select`) build SQL strings directly without creating intermediate objects. One `ActiveQuery` object handles everything.
+The most common query patterns (`where`, `in`, `like`, `between`, `orderBy`, `select`) build SQL strings directly without creating intermediate objects. A built query holds two objects — the `ActiveQuery` and its grammar — and stays at two however many conditions you add, rather than growing a node tree.
 
 ### Nested Eager Loading
 

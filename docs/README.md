@@ -65,8 +65,8 @@ $users = User::find()
 
 | Principle         | What it means                                                                                           |
 |-------------------|---------------------------------------------------------------------------------------------------------|
-| **Fast**          | One object per query, zero-allocation fast path, prepared statement caching. Query building takes ~7μs. |
-| **Lightweight**   | ~100KB install size, zero runtime dependencies. No service containers, no config files.                 |
+| **Fast**          | Two objects per query however many conditions, prepared statement caching. Query building takes ~6μs.   |
+| **Lightweight**   | ~650KB of source, zero runtime dependencies. No service containers, no config files.                    |
 | **Independent**   | No framework coupling. Works in any PHP project — vanilla, Slim, Symfony, or your own framework.        |
 | **Query Builder** | Fluent API that compiles directly to optimized SQL. Every query shows you the actual SQL it generates.  |
 
@@ -153,12 +153,12 @@ Requires PHP 8.4+ with `ext-pdo`.
 
 | Metric                       | Result           |
 |------------------------------|------------------|
-| Simple SELECT build          | 6.9μs per query  |
-| Complex WHERE (5 conditions) | 9.1μs per query  |
-| Model hydration              | 0.67μs per model |
-| ActiveQuery object size      | 448 bytes        |
-| Model instance size          | 536 bytes        |
-| Install size                 | ~100KB           |
+| Simple SELECT build          | 5.6μs per query  |
+| Complex WHERE (5 conditions) | 11.4μs per query |
+| Model hydration              | 0.48μs per model |
+| ActiveQuery object size      | 640 bytes        |
+| Model instance size          | 600 bytes        |
+| Source size                  | ~650KB           |
 | Dependencies                 | 0                |
 
 See [full benchmarks](07-COMPARISON.md) for comparison with Eloquent, Doctrine,
