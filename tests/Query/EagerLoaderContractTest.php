@@ -91,6 +91,36 @@ class ContractUser extends Model
 
         return $this->hasMany(ContractPost::class, ['user_id' => 'id']);
     }
+
+    /**
+     * Declares a type that permits null, so PHP guarantees nothing.
+     *
+     * The declaration is the whole basis for calling the method, and a nullable
+     * one does not promise a Relation comes back.
+     *
+     * @return Relation|null
+     */
+    public function nullableRelation(): ?Relation
+    {
+        self::$invoked[] = 'nullableRelation';
+
+        return null;
+    }
+
+    /**
+     * The same declaration written the long way.
+     *
+     * `?Relation` and `Relation|null` are one type to PHP, and both reflect as
+     * a named type — the union spelling is not a union.
+     *
+     * @return Relation|null
+     */
+    public function nullableUnionRelation(): Relation|null
+    {
+        self::$invoked[] = 'nullableUnionRelation';
+
+        return $this->hasMany(ContractPost::class, ['user_id' => 'id']);
+    }
 }
 
 /**
@@ -198,6 +228,8 @@ class EagerLoaderContractTest extends TestCase
             'is not public' => ['hiddenRelation', false],
             'does not exist' => ['nosuchthing', false],
             'inherited and not a relation' => ['delete', false],
+            'declares a nullable Relation' => ['nullableRelation', false],
+            'declares Relation|null' => ['nullableUnionRelation', false],
         ];
     }
 
@@ -448,5 +480,119 @@ class EagerLoaderContractTest extends TestCase
 
         $models = iterator_to_array(ContractUser::find()->get());
         $this->assertSame($models, EagerLoader::loadRelations($models, []));
+    }
+
+    /**
+     * The names whose declaration permits null.
+     *
+     * @return array<string, array{0: non-empty-string}>
+     */
+    public static function nullableNames(): array
+    {
+        return [
+            '?Relation' => ['nullableRelation'],
+            'Relation|null' => ['nullableUnionRelation'],
+        ];
+    }
+
+    /**
+     * @param non-empty-string $name The nullable-returning method under test.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('nullableNames')]
+    public function aNullableDeclarationIsNotEnoughToCallOn(string $name): void
+    {
+        // Testing the return type is worth doing because PHP then enforces it.
+        // A nullable declaration is not enforced in the way the callers rely on
+        // — it permits exactly the value none of them handle — so the check has
+        // to read the nullability, not just the name.
+        $model = new ContractUser();
+        $this->assertFalse($model->isRelationMethod($name));
+
+        // Ineligible means never invoked, the same as every other ineligible
+        // shape: deciding must not run the thing being decided about.
+        iterator_to_array(ContractUser::find()->with($name)->get());
+        $this->assertSame([], ContractUser::$invoked);
+    }
+
+    /**
+     * @param non-empty-string $name The nullable-returning method under test.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('nullableNames')]
+    public function aNullableRelationReadsAsAnAbsentAttribute(string $name): void
+    {
+        // Not an error, and specifically not a fatal one. Reading an ineligible
+        // name is how a typo behaves, and it answers null rather than dying on
+        // "Call to a member function fetch() on null" — which is what happened
+        // while a nullable declaration counted as eligible.
+        $user = ContractUser::find()->where('id', 1)->first();
+        $this->assertInstanceOf(ContractUser::class, $user);
+
+        $this->assertNull($user->{$name});
+        $this->assertFalse(isset($user->{$name}));
+        $this->assertFalse($user->relationLoaded($name));
+        $this->assertSame([], ContractUser::$invoked);
+    }
+
+    /**
+     * @param non-empty-string $name The nullable-returning method under test.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('nullableNames')]
+    public function aNullableRelationIsRefusedByHasRatherThanRaisingATypeError(string $name): void
+    {
+        // has() rejects an ineligible name with a message naming the class and
+        // the method. Before the declaration was read properly this one got
+        // past the filter and failed inside resolveRelation() with a TypeError
+        // about a return value, which names neither.
+        try {
+            iterator_to_array(ContractUser::find()->has($name)->get());
+            self::fail('A nullable declaration must not be accepted by has().');
+        } catch (\InvalidArgumentException $exception) {
+            $message = $exception->getMessage();
+        }
+
+        $this->assertStringContainsString(ContractUser::class . "::$name()", $message);
+
+        // And the message has to rule out the declaration actually written.
+        // "declares Relation as its return type" is what an author of
+        // `?Relation` believes they did, so the old wording read as a denial of
+        // the code in front of them.
+        $this->assertStringContainsString('nullable Relation', $message);
+    }
+
+    /**
+     * @param non-empty-string $name The nullable-returning method under test.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('nullableNames')]
+    public function everyCallerAgreesAboutANullableDeclaration(string $name): void
+    {
+        // The trait exists so that one question has one answer. These are the
+        // four places that ask it; each used to answer differently for this
+        // shape. What they agree on now is that the name is not a relation.
+        $model = new ContractUser();
+        $eligible = $model->isRelationMethod($name);
+
+        $this->assertFalse($eligible);
+
+        $user = ContractUser::find()->where('id', 1)->with($name)->first();
+        $this->assertInstanceOf(ContractUser::class, $user);
+        $this->assertSame($eligible, $user->relationLoaded($name));
+        $this->assertSame($eligible, $user->{$name} !== null);
+
+        try {
+            iterator_to_array(ContractUser::find()->has($name)->get());
+            self::fail('An ineligible name must not be accepted by has().');
+        } catch (\InvalidArgumentException) {
+            // The documented refusal, which is the agreement being asserted.
+        }
+
+        $this->assertSame([], ContractUser::$invoked);
     }
 }

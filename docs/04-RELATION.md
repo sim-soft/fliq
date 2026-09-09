@@ -2,6 +2,7 @@
 
 ## Table of Contents
 - [Declare Relations](#declare-relations)
+  - [What counts as a relation method](#what-counts-as-a-relation-method)
 - [Accessing Related Records](#accessing-related-records)
   - [When the key is NULL](#when-the-key-is-null)
 - [Filtering Related Records](#filtering-related-records)
@@ -91,6 +92,35 @@ class Post extends Model
     }
 }
 ```
+
+### What counts as a relation method
+
+A method is treated as a relation only if it is **public**, **not static**, takes
+**no required arguments**, and declares **`Relation`** as its return type.
+Anything else is an ordinary method and reading its name as a property returns
+`null`, the same as any absent attribute.
+
+The return type must not be nullable. `?Relation` and `Relation|null` are
+rejected:
+
+```php
+public function posts(): Relation            // a relation
+
+public function posts(): ?Relation           // NOT — nullable
+public function posts(): Relation|null       // NOT — nullable, spelled out
+public function posts()                      // NOT — no declared type
+public function posts(int $limit): Relation  // NOT — requires an argument
+protected function posts(): Relation         // NOT — not public
+public static function posts(): Relation     // NOT — static
+```
+
+The declaration is what makes the relation usable without checking: PHP enforces
+a non-nullable return type itself, so `$user->posts` and `with('posts')` can rely
+on getting a `Relation` back. A nullable type promises nothing, so it is not
+accepted rather than being accepted and failing later.
+
+`has('posts')` reports an unusable declaration by name; property reads and eager
+loading treat it as an absent attribute.
 
 ## Accessing Related Records
 

@@ -87,7 +87,7 @@ class EagerLoader
     /**
      * Recursively load a relation tree.
      *
-     * @param array<Model> $models The parent models at this level.
+     * @param non-empty-array<Model> $models The parent models at this level.
      * @param array<string, mixed> $tree The remaining relation tree to load.
      * @param array<string, callable> $constraints Constraints keyed by full dot-notation path.
      * @param string $prefix The current path prefix for constraint matching.
@@ -148,7 +148,14 @@ class EagerLoader
     /**
      * Load a single relation for all models at one level.
      *
-     * @param array<Model> $models The parent models.
+     * The set is required to be non-empty rather than checked for it. Both
+     * callers already guarantee that — loadRelations() returns early on an
+     * empty set, and loadTree() only recurses on a non-empty collection — so a
+     * runtime check here could not be reached, and a check that cannot fail
+     * reads as though the caller might send nothing. Saying so in the signature
+     * gets it verified at every call site instead of at none.
+     *
+     * @param non-empty-array<Model> $models The parent models.
      * @param string $relationName The relation method name.
      * @param callable|null $constraint Optional constraint callback.
      * @return void
@@ -161,10 +168,6 @@ class EagerLoader
         // pair of features and every combination of them was fatal.
         $firstModel = reset($models);
 
-        if ($firstModel === false) {
-            return;
-        }
-
         // method_exists() was the whole guard, and then the name was called.
         // That is the hazard ResolvesRelations was written to close in __get(),
         // where reading `$user->delete` as a property ran the delete; the same
@@ -176,10 +179,14 @@ class EagerLoader
             return;
         }
 
+        // No instanceof check after the call, for the reason ActiveQuery gives
+        // at the same point: eligibility already required a declared,
+        // non-nullable Relation return type, and PHP enforces that itself. The
+        // check could only ever have been reached by a method whose declaration
+        // lied, which is not a thing PHP permits — and while it stood, the one
+        // shape that did slip past eligibility, a nullable declaration, was
+        // silently swallowed here and left the relation unloaded.
         $relation = $firstModel->{$relationName}();
-        if (!$relation instanceof Relation) {
-            return;
-        }
 
         $foreignKey = $relation->getForeignKey();
         $localKey = $relation->getLocalKey();

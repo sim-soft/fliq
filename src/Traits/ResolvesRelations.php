@@ -19,8 +19,9 @@ use Simsoft\DB\Relation;
  * "Call to a member function fetch() on true".
  *
  * Reading a property must never write to the database, so eligibility is
- * narrowed to methods that declare they return a Relation and can actually be
- * called with no arguments. Everything else reads as the absent attribute it is.
+ * narrowed to methods that declare they return a Relation — not merely a
+ * Relation or null — and can actually be called with no arguments. Everything
+ * else reads as the absent attribute it is.
  *
  * The check is public because eager loading asks the same question of the same
  * names. EagerLoader had its own answer — method_exists() alone, the very guard
@@ -31,6 +32,18 @@ trait ResolvesRelations
 {
     /**
      * Determine whether a name may be resolved as a relation.
+     *
+     * The return type must not be nullable. `?Relation` and `Relation|null` both
+     * reflect as a ReflectionNamedType naming Relation, so testing the name
+     * alone accepted them — and the whole point of testing the declaration is
+     * that PHP then guarantees what comes back. It does not guarantee that for a
+     * nullable type, so an eligible method could still answer null, and the four
+     * callers of this each met that differently: reading the property and
+     * isset() both died on "Call to a member function fetch() on null", has()
+     * raised a TypeError naming an internal method, eager loading quietly left
+     * the relation unloaded, and saveTogether() returned true having saved
+     * nothing. Requiring the declaration to exclude null is what makes the one
+     * answer usable by all four.
      *
      * @param string $name The property or relation name.
      * @return bool
@@ -49,6 +62,8 @@ trait ResolvesRelations
 
         $returnType = $method->getReturnType();
 
-        return $returnType instanceof ReflectionNamedType && $returnType->getName() === Relation::class;
+        return $returnType instanceof ReflectionNamedType
+            && $returnType->getName() === Relation::class
+            && !$returnType->allowsNull();
     }
 }

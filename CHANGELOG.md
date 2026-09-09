@@ -1521,6 +1521,21 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   naming neither the filter nor the relation. All three now reject an ineligible
   name with an `InvalidArgumentException` that says which name was passed and
   what a relation has to be, without calling anything.
+- **A relation method declaring `?Relation` broke each of its callers a
+  different way** — `isRelationMethod()` tested the return type's *name* and not
+  its nullability, and `?Relation` and `Relation|null` both reflect as a named
+  type called `Relation`. So a nullable declaration passed eligibility, and the
+  guarantee eligibility exists to establish — that PHP itself enforces what comes
+  back — did not hold. The four callers then disagreed about the same method:
+  reading the property and `isset()` died on `Call to a member function fetch()
+  on null`, `has()` raised a `TypeError` naming an internal method rather than
+  the relation, eager loading silently left the relation unloaded, and
+  `saveTogether()` returned `true` having saved nothing. Eligibility now requires
+  the declaration to exclude null, so all four give the one answer. The
+  `has()` rejection message also said a relation "declares Relation as its
+  return type" — precisely what the author of a `?Relation` believes they did —
+  and now rules out the nullable spelling by name. `docs/04-RELATION.md` records
+  the rule, which was not written down anywhere.
 - **`with()` combined with `indexBy()` was fatal** — the loader read
   `$models[0]`, and a keyed set has no key `0`. Every combination of two
   documented features raised "Undefined array key 0" followed by a `TypeError`.
@@ -2282,6 +2297,23 @@ that already lived there, as `Grammar::literal()` and `Grammar::readableSQL()`.
   rollback it never performed. Verified by mutation: making `ping()` ignore both
   failures, and widening the suppression to every rollback error, produce 5
   failures between them.
+- 21 tests covering the paths through `EagerLoader` that nothing reached, taking
+  the file to 100% line coverage. 12 concern the nullable declaration above,
+  each run against both spellings, and they produce 12 failures and errors
+  against the unfixed source — including the two fatals, which is what the
+  divergence looked like in production.
+
+  The other 9 cover states the batch loader short-circuits, and what each one
+  pins is the work *avoided* rather than the value returned. An unsaved parent
+  gets an empty relation, and gets it without sending the `WHERE 1 = 0` whose
+  answer is known before it leaves. A set whose first model does not have the
+  relation is passed over without any of the later ones being read — reading a
+  relation lazy-loads it, so the collector that gathers models for a nested
+  level would otherwise reintroduce, one query per parent, the N+1 eager loading
+  exists to remove. Both are asserted on the query count for a reason: both
+  lines were correct-but-uncovered, where covering the line proves nothing on
+  its own, and the first attempt at each passed against source with the guard
+  deleted. Deleting each of the three guards now fails the suite.
 
 ---
 

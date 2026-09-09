@@ -3078,7 +3078,8 @@ class ActiveQuery implements Executable, Updatable, Deletable
         if (!$model->isRelationMethod($relationName)) {
             throw new InvalidArgumentException(
                 "$class::$relationName() does not return a relation: a relation is a public method that takes"
-                . ' no arguments and declares Relation as its return type.'
+                . ' no arguments and declares Relation, not null and not a nullable Relation, as its return'
+                . ' type.'
             );
         }
 
