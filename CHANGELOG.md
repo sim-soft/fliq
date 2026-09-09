@@ -27,6 +27,32 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**MySQLi driver**
+
+- **A second `init_command` failed the whole connection.** The configured list
+  was joined with `'; '` and handed to mysqli as one string, but
+  `MYSQLI_INIT_COMMAND` carries a single statement — the server parsed the whole
+  thing as one and rejected the rest. So configuring two init commands did not
+  quietly skip the second, it failed the connection outright with a syntax error
+  quoting SQL the caller had never written as one statement. Each command is now
+  set as its own option, and all of them run, in order, on every new connection
+  including the one an automatic reconnect opens.
+- **An unbound write that the server rejected reported success.** With no binds
+  the driver called `mysqli::query()` and returned `$result !== false`.
+  `mysqli_report()` is process-global, so any other library in the process can
+  set `MYSQLI_REPORT_OFF`, and mysqli then reports failure by return value
+  instead of throwing — the rejected statement came back as a `false` return,
+  and nothing reads the return of `execute()` as a failure signal. A write the
+  server refused was reported to the caller as no error at all. It now raises,
+  matching the bound path and the other three drivers.
+- **A bound write rejected when it ran reported success too.** The same hole one
+  branch over, and the one that covers the commonest write failures there are: a
+  statement can prepare cleanly and still be refused at execution — a duplicate
+  key, a `NOT NULL` violation. Under `MYSQLI_REPORT_OFF` `mysqli_stmt::execute()`
+  signals that by returning `false`, which the driver returned as its own result.
+  Measured: an `INSERT` on a duplicate primary key wrote nothing and raised
+  nothing. It now raises with the server's reason.
+
 **A broken observer failed the query it was watching**
 
 - **`QueryLogger` and `QueryMonitor` called their handlers bare**, so anything a

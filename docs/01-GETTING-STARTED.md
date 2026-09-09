@@ -129,6 +129,13 @@ Connection::add('mysql', [
 ]);
 ```
 
+Every entry in `init_command` runs, in order, on each new connection — including
+the one opened by an automatic reconnect, which is the point of putting session
+settings here rather than issuing them once after connecting. Each must be a
+single complete statement; a command the server rejects fails the connection,
+since a session silently missing the settings you asked for is the worse
+outcome.
+
 Pass `MYSQLI_OPT_*` constants via `options` for driver-level tuning:
 
 ```php

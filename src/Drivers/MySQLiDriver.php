@@ -58,10 +58,15 @@ class MySQLiDriver extends Driver
             // Set timeout before connecting
             $connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, (int)$this->config['timeout']);
 
-            // Set init command before connecting (joined with semicolons)
-            $initCommands = (array)($this->config['init_command'] ?? []);
-            if ($initCommands) {
-                $connection->options(MYSQLI_INIT_COMMAND, implode('; ', $initCommands));
+            // One option call per command. They used to be joined with '; ' and
+            // sent as one string, but MYSQLI_INIT_COMMAND carries a single
+            // statement — the server parses the whole string as one and rejects
+            // the second, so configuring two init commands did not merely skip
+            // the second, it failed the connection outright with a syntax error
+            // naming SQL the caller never wrote as one statement. Setting the
+            // option repeatedly queues them, and all of them run.
+            foreach ((array)($this->config['init_command'] ?? []) as $initCommand) {
+                $connection->options(MYSQLI_INIT_COMMAND, $initCommand);
             }
 
             // Apply user options before connecting
@@ -128,20 +133,49 @@ class MySQLiDriver extends Driver
             if ($result instanceof \mysqli_result) {
                 $result->free();
             }
+
+            // mysqli_report() is process-global, so a host application or
+            // another library can set MYSQLI_REPORT_OFF at any point and
+            // mysqli then answers false instead of throwing. This path used to
+            // return that false as its own result, and nothing reads the
+            // return of execute() as a failure signal — so a write that the
+            // server had rejected came back as "no exception raised" and the
+            // caller carried on believing the row was there. The bound path
+            // below raises for the same failure, and so does every other
+            // driver; a statement rejected by the server has to say so.
+            if ($result === false) {
+                throw new RuntimeException('Failed to execute statement: ' . $conn->error);
+            }
+
             $this->markActivity();
 
-            return $result !== false;
+            return true;
         }
 
         $stmt = $conn->prepare($sql);
         if ($stmt === false) {
+            // Reachable for the same reason: under MYSQLI_REPORT_OFF prepare()
+            // reports by returning false rather than throwing.
             throw new RuntimeException('Failed to prepare statement: ' . $conn->error);
         }
         $ok = $stmt->execute($binds);
+        $error = $stmt->error !== '' ? $stmt->error : $conn->error;
         $stmt->close();
+
+        // The same hole as above, one branch over: a statement that prepares
+        // cleanly can still be rejected when it runs — a duplicate key, a NOT
+        // NULL violation — and under MYSQLI_REPORT_OFF execute() reports that
+        // by returning false. This method used to hand that false back as its
+        // own result, so the most common kind of write failure there is
+        // travelled up as a bool nobody inspects. Measured: an INSERT on a
+        // duplicate primary key wrote nothing and raised nothing.
+        if ($ok === false) {
+            throw new RuntimeException('Failed to execute statement: ' . $error);
+        }
+
         $this->markActivity();
 
-        return $ok;
+        return true;
     }
 
     /**
