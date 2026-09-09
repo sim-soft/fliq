@@ -2,10 +2,12 @@
 
 namespace Query;
 
+use ErrorException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
+use RuntimeException;
 use Simsoft\DB\QueryLogger;
 use Simsoft\DB\QueryMonitor;
 
@@ -421,5 +423,226 @@ class QueryObserverContractTest extends TestCase
         }
 
         $this->assertSame(1, $calls);
+    }
+
+    // ------------------------------------------------------------------
+    // A failing handler must not fail the query
+    //
+    // Both observers called their handler bare, so anything it threw came
+    // back out of logQuery()/recordQuery() — which run inside Execute's try,
+    // where it was caught and rewrapped as a QueryException naming the
+    // statement. A handler streaming to a full disk or a dead APM socket
+    // therefore failed the query it was only meant to watch.
+    // ------------------------------------------------------------------
+
+    #[Test]
+    public function aLoggerHandlerThatThrowsDoesNotStopTheLogging(): void
+    {
+        QueryLogger::enable();
+        QueryLogger::setHandler(static function (): void {
+            throw new RuntimeException('log sink is gone');
+        });
+
+        $raised = '';
+        set_error_handler(function (int $_no, string $message) use (&$raised): bool {
+            $raised = $message;
+
+            return true;
+        }, E_USER_WARNING);
+
+        try {
+            QueryLogger::logQuery('SELECT 1', null, microtime(true));
+        } finally {
+            restore_error_handler();
+        }
+
+        // The query was still recorded — the handler is an extra destination,
+        // not the log itself.
+        $this->assertSame(1, QueryLogger::getQueryCount());
+
+        // And the failure was reported rather than swallowed: a handler that
+        // never runs would otherwise look like one that runs and finds nothing.
+        $this->assertStringContainsString('QueryLogger handler threw', $raised);
+        $this->assertStringContainsString('log sink is gone', $raised);
+    }
+
+    #[Test]
+    public function aMonitorHandlerThatThrowsDoesNotStopTheDetection(): void
+    {
+        QueryMonitor::enable(threshold: 2);
+        QueryMonitor::setHandler(static function (): void {
+            throw new RuntimeException('monitor sink is gone');
+        });
+
+        $raised = '';
+        set_error_handler(function (int $_no, string $message) use (&$raised): bool {
+            $raised = $message;
+
+            return true;
+        }, E_USER_WARNING);
+
+        try {
+            QueryMonitor::recordQuery('SELECT * FROM user WHERE id = 1');
+            QueryMonitor::recordQuery('SELECT * FROM user WHERE id = 2');
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame(['SELECT * FROM user WHERE id = ?' => 2], $this->patterns());
+        $this->assertStringContainsString('QueryMonitor handler threw', $raised);
+        $this->assertStringContainsString('monitor sink is gone', $raised);
+    }
+
+    #[Test]
+    public function aHandlerFailureSurvivesAnErrorHandlerThatThrows(): void
+    {
+        // Many dev setups convert warnings to exceptions. Reporting the
+        // handler's failure would then throw from the reporting itself, putting
+        // the exception straight back on the path the guard exists to keep
+        // clear — so the report is guarded in turn.
+        QueryLogger::enable();
+        QueryLogger::setHandler(static function (): void {
+            throw new RuntimeException('sink gone');
+        });
+
+        set_error_handler(static function (int $_no, string $message): bool {
+            throw new ErrorException($message);
+        });
+
+        try {
+            QueryLogger::logQuery('SELECT 1', null, microtime(true));
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame(1, QueryLogger::getQueryCount(), 'the log survived both failures');
+    }
+
+    // ------------------------------------------------------------------
+    // Retention
+    // ------------------------------------------------------------------
+
+    #[Test]
+    public function theRetentionLimitCanBeReadBack(): void
+    {
+        // getLimit() is public, documented, and was called by nothing — so a
+        // caller sizing the log against it had no assurance it reported what
+        // setLimit() had stored.
+        $this->assertSame(QueryLogger::DEFAULT_LIMIT, QueryLogger::getLimit());
+
+        QueryLogger::setLimit(5);
+        $this->assertSame(5, QueryLogger::getLimit());
+
+        QueryLogger::setLimit(0);
+        $this->assertSame(0, QueryLogger::getLimit(), 'zero is unlimited, not "none"');
+
+        QueryLogger::setLimit(-3);
+        $this->assertSame(0, QueryLogger::getLimit(), 'a negative limit clamps to unlimited');
+    }
+
+    #[Test]
+    public function resetClearsTheLogButKeepsTheLimit(): void
+    {
+        // The limit is configuration, not data. Restoring it on reset() would
+        // silently re-enable unbounded growth in the long-running process the
+        // limit was set for.
+        QueryLogger::enable();
+        QueryLogger::setLimit(7);
+        QueryLogger::logQuery('SELECT 1', null, microtime(true));
+
+        QueryLogger::reset();
+
+        $this->assertSame(0, QueryLogger::getQueryCount());
+        $this->assertSame(7, QueryLogger::getLimit());
+    }
+
+    // ------------------------------------------------------------------
+    // Disabled means silent
+    // ------------------------------------------------------------------
+
+    #[Test]
+    public function aDisabledLoggerRecordsNothingAndCallsNoHandler(): void
+    {
+        $calls = 0;
+        QueryLogger::disable();
+        QueryLogger::setHandler(function () use (&$calls): void {
+            $calls++;
+        });
+
+        QueryLogger::logQuery('SELECT 1', null, microtime(true));
+
+        $this->assertSame(0, QueryLogger::getQueryCount());
+        $this->assertSame(0, $calls, 'a handler set while disabled stays quiet');
+    }
+
+    #[Test]
+    public function aDisabledMonitorDetectsNothing(): void
+    {
+        QueryMonitor::disable();
+
+        QueryMonitor::recordQuery('SELECT * FROM user WHERE id = 1');
+        QueryMonitor::recordQuery('SELECT * FROM user WHERE id = 2');
+        QueryMonitor::recordQuery('SELECT * FROM user WHERE id = 3');
+
+        $this->assertSame([], $this->patterns());
+    }
+
+    #[Test]
+    public function aMonitorHandlerFailureSurvivesAnErrorHandlerThatThrows(): void
+    {
+        // The logger's twin of this is covered; the monitor's was not, and it
+        // is the one that matters more — recordQuery() runs before the driver,
+        // so an exception escaping here stops the statement rather than merely
+        // misreporting it.
+        QueryMonitor::enable(threshold: 2);
+        QueryMonitor::setHandler(static function (): void {
+            throw new RuntimeException('monitor sink is gone');
+        });
+
+        set_error_handler(static function (int $_no, string $message): bool {
+            throw new ErrorException($message);
+        });
+
+        try {
+            QueryMonitor::recordQuery('SELECT * FROM user WHERE id = 1');
+            QueryMonitor::recordQuery('SELECT * FROM user WHERE id = 2');
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame(['SELECT * FROM user WHERE id = ?' => 2], $this->patterns());
+    }
+
+    // ------------------------------------------------------------------
+    // Ranking
+    // ------------------------------------------------------------------
+
+    #[Test]
+    public function theSlowestQueryIsFoundWhereverItSits(): void
+    {
+        // getSlowestQuery() was called by no test at all, so the comparison
+        // that does the ranking had never run against a later query that was
+        // slower — the one case where the loop has to replace its candidate.
+        // A profiler that always named the first query would look plausible.
+        QueryLogger::enable();
+
+        $now = microtime(true);
+        QueryLogger::logQuery('SELECT 1', null, $now - 0.001);
+        QueryLogger::logQuery('SELECT 2', null, $now - 0.050);
+        QueryLogger::logQuery('SELECT 3', null, $now - 0.002);
+
+        $slowest = QueryLogger::getSlowestQuery();
+
+        $this->assertIsArray($slowest);
+        $this->assertSame('SELECT 2', $slowest['sql']);
+        $this->assertGreaterThan(0, QueryLogger::getTotalTime());
+    }
+
+    #[Test]
+    public function anEmptyLogHasNoSlowestQuery(): void
+    {
+        QueryLogger::enable();
+
+        $this->assertNull(QueryLogger::getSlowestQuery(), 'nothing logged means nothing to rank');
     }
 }

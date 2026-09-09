@@ -459,6 +459,11 @@ queries regardless of how many users come back, and the monitor reports nothing.
 `disable()` and `reset()` leave a handler installed. Call `clearHandler()` when
 the block that registered it is done, or it keeps receiving queries for the rest
 of the process.
+
+A handler that throws does not stop the query it was reporting on — see
+[A handler that fails](#a-handler-that-fails) below, which applies to both
+observers.
+
 ### Query Logging
 
 ```php
@@ -507,6 +512,34 @@ QueryLogger::disable();
 
 As with the monitor, neither `disable()` nor `reset()` removes the handler —
 `clearHandler()` does.
+
+#### A handler that fails
+
+The handler above writes to a file, which is a thing that can fail: a full disk,
+a rotated-away directory, a dead APM socket. Whatever it throws is caught and
+reported as an `E_USER_WARNING` naming the exception, and the query is left
+alone.
+
+```php
+QueryLogger::setHandler(function (string $sql, ?array $binds, float $timeMs) {
+    throw new RuntimeException('log sink is gone');
+});
+
+$user = User::find()->where('id', 1)->first();  // still returns the row
+// Warning: QueryLogger handler threw RuntimeException: log sink is gone.
+//          The query itself was unaffected.
+```
+
+This matters more than it sounds. Both observers are called from inside the
+execution path, so before this was guarded a throwing handler surfaced as a
+`QueryException` naming your SQL — a write reported failure *after* the row was
+committed, and a caller that retried wrote it twice. `QueryMonitor`'s handler
+runs before the statement reaches the driver, so a failure there stopped the
+query outright.
+
+The warning is not suppressible from here on purpose: a handler that silently
+never runs looks exactly like one that runs and finds nothing. Handle the error
+inside your own handler if you would rather it stayed quiet.
 
 #### Retention
 

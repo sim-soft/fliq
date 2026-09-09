@@ -358,6 +358,7 @@ already recorded. Any keys on the array you pass are discarded —
 | Slowest query      | `QueryLogger::getSlowestQuery()`                       |
 | Log handler        | `QueryLogger::setHandler(...)` / `::clearHandler()`    |
 | Log retention      | `QueryLogger::setLimit(1000)` (`0` = unlimited)        |
+| Handler that fails | Warns; the query is unaffected (both observers)        |
 | SQL in exceptions  | `QueryException::enableDebug()` (dev only)             |
 | Query cache        | `User::find()->where(...)->cache(60)->get()`           |
 | Index suggestions  | `IndexAdvisor::suggestSQL()`                           |

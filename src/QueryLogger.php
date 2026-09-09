@@ -2,6 +2,8 @@
 
 namespace Simsoft\DB;
 
+use Throwable;
+
 /**
  * QueryLogger class.
  *
@@ -114,7 +116,55 @@ class QueryLogger
         self::trim();
 
         if (self::$handler !== null) {
-            (self::$handler)($sql, $binds, $timeMs);
+            self::callHandler(self::$handler, $sql, $binds, $timeMs);
+        }
+    }
+
+    /**
+     * Hand one query to the custom handler, surviving its failure.
+     *
+     * The handler used to be called bare, so anything it threw came back out of
+     * logQuery() — which runs inside Execute's try, where it was caught and
+     * rewrapped as a QueryException naming the statement. A handler streaming to
+     * a full disk or a dead APM socket therefore failed the query it was only
+     * meant to observe, and named the SQL as the cause. Measured on all three
+     * paths: a write reported failure after the row had already been committed,
+     * a read discarded rows it had already fetched, and the same failure through
+     * QueryMonitor — which runs before the statement — meant the statement never
+     * ran at all.
+     *
+     * Logging is diagnostic. It must not be able to change what the database
+     * does, or what the caller is told the database did.
+     *
+     * The report is itself guarded, because trigger_error() throws under the
+     * warnings-to-exceptions handler that many dev setups install — which would
+     * put the exception straight back on the path this exists to keep clear.
+     *
+     * The handler is passed in rather than read from the property, because the
+     * null check at the call site does not narrow across the method boundary.
+     *
+     * @param callable $handler The installed handler.
+     * @param string $sql The SQL that was executed.
+     * @param array<int, mixed>|null $binds The bind values.
+     * @param float $timeMs The execution time in milliseconds.
+     * @return void
+     */
+    private static function callHandler(callable $handler, string $sql, ?array $binds, float $timeMs): void
+    {
+        try {
+            $handler($sql, $binds, $timeMs);
+        } catch (Throwable $throwable) {
+            // Silence would leave a handler that never runs looking like one
+            // that runs and finds nothing.
+            try {
+                trigger_error(
+                    'QueryLogger handler threw ' . $throwable::class . ': ' . $throwable->getMessage()
+                    . '. The query itself was unaffected.',
+                    E_USER_WARNING
+                );
+            } catch (Throwable) {
+                // Nothing left to report it to.
+            }
         }
     }
 

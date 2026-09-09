@@ -27,6 +27,27 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**A broken observer failed the query it was watching**
+
+- **`QueryLogger` and `QueryMonitor` called their handlers bare**, so anything a
+  handler threw came back out of `logQuery()` or `recordQuery()` — both of which
+  run inside `Execute`'s try, where it was caught and rewrapped as a
+  `QueryException` naming the SQL. A handler streaming to a full disk or a dead
+  APM socket therefore failed the query it was only meant to observe, and
+  reported the statement as the cause. Measured live on all three paths: a write
+  reported failure *after* the row had been committed, so a caller that retried
+  wrote it twice; a read discarded rows it had already fetched; and through
+  `QueryMonitor` — whose `recordQuery()` runs *before* the statement reaches the
+  driver — a loop of four inserts past the threshold wrote one row and lost
+  three. Both handlers are now called through a guard: the failure is reported
+  as an `E_USER_WARNING` naming the exception, and the query proceeds untouched.
+- **The report needed a guard of its own.** `trigger_error()` throws under the
+  warnings-to-exceptions error handler that many development setups install,
+  which would have put the exception straight back onto the path the guard
+  exists to keep clear. The `trigger_error()` call is wrapped in turn. It is not
+  silent, because a handler that never runs looks exactly like one that runs and
+  finds nothing.
+
 **Last insert id after an upsert**
 
 - **An upsert reported an id for a row it had not written** —

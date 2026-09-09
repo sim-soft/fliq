@@ -2,6 +2,8 @@
 
 namespace Simsoft\DB;
 
+use Throwable;
+
 /**
  * QueryMonitor class.
  *
@@ -227,6 +229,13 @@ class QueryMonitor
             return $file . ':' . ($frame['line'] ?? 0);
         }
 
+        // Only reachable if all TRACE_DEPTH frames are library files, which
+        // needs 24 consecutive ones: the deepest real path measured — a lazy
+        // relation load through a collection — uses 9, and no arrangement of
+        // internal frames extends it, since debug_backtrace() gives the caller
+        // of every fileless frame a file of its own. Kept because the walk must
+        // return a string and a wrong file:line would be worse than admitting
+        // there isn't one; not covered, because nothing can honestly get here.
         return 'unknown';
     }
 
@@ -266,7 +275,7 @@ class QueryMonitor
         $origin = self::$origins[$pattern];
 
         if (self::$handler !== null) {
-            (self::$handler)($pattern, $count, $origin);
+            self::callHandler(self::$handler, $pattern, $count, $origin);
             return;
         }
 
@@ -274,5 +283,46 @@ class QueryMonitor
             "N+1 query detected ({$count}x): {$pattern} [from: {$origin}]",
             E_USER_WARNING
         );
+    }
+
+    /**
+     * Hand one warning to the custom handler, surviving its failure.
+     *
+     * The same guard QueryLogger's handler needs, and for a worse reason. This
+     * one runs from recordQuery(), which Execute calls *before* handing the
+     * statement to the driver: a handler that threw was caught there and
+     * rewrapped as a QueryException, so the statement never ran. Measured on
+     * SQLite, a loop of four inserts past the N+1 threshold wrote one row and
+     * lost three — to a failure in the code that was only watching.
+     *
+     * A monitor must not be able to stop the queries it is monitoring.
+     *
+     * The handler is passed in rather than read from the property, because the
+     * null check at the call site does not narrow across the method boundary.
+     *
+     * @param callable $handler The installed handler.
+     * @param string $pattern The detected pattern.
+     * @param int $count How many times it was seen.
+     * @param string $origin Where it was issued from.
+     * @return void
+     */
+    private static function callHandler(callable $handler, string $pattern, int $count, string $origin): void
+    {
+        try {
+            $handler($pattern, $count, $origin);
+        } catch (Throwable $throwable) {
+            // Guarded in turn: trigger_error() throws under a
+            // warnings-to-exceptions handler, which would put the failure back
+            // on the path this exists to keep clear.
+            try {
+                trigger_error(
+                    'QueryMonitor handler threw ' . $throwable::class . ': ' . $throwable->getMessage()
+                    . '. The query itself was unaffected.',
+                    E_USER_WARNING
+                );
+            } catch (Throwable) {
+                // Nothing left to report it to.
+            }
+        }
     }
 }
