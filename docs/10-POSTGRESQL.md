@@ -233,6 +233,44 @@ $upsert = new Upsert(
 $upsert->withConnection('pgsql')->execute();
 ```
 
+### Knowing which row the upsert touched
+
+Ask for it back, the same way `ignore()` does above. The clause is emitted after
+the conflict action:
+
+```php
+/*
+  INSERT INTO "setting" ("group", "key", "value")
+  VALUES (?, ?, ?)
+  ON CONFLICT ("group", "key") DO UPDATE SET "value" = EXCLUDED."value"
+  RETURNING "id"
+*/
+$upsert = (new Upsert('setting', $attributes, ['value'], ['group', 'key']))
+    ->returning('id')
+    ->withConnection('pgsql');
+$upsert->execute();
+
+$upsert->getReturningResult(); /* [['id' => 42]] — inserted or updated */
+$upsert->getLastInsertId();    /* '42', the row this statement wrote */
+```
+
+Without the clause, `getLastInsertId()` falls back to the driver, whose answer on
+PostgreSQL is `lastval()` — the last sequence value this *session* consumed, by
+whatever statement. An upsert that took the `DO UPDATE` branch still consumed one
+on its way there, so the id it reported named no row at all. Ask for the columns
+back and the statement answers for itself.
+
+`returning()` with no arguments asks for every column:
+
+```php
+$upsert->returning();  /* ... DO UPDATE SET "value" = EXCLUDED."value" RETURNING * */
+```
+
+MySQL has no `RETURNING` and needs none: `LAST_INSERT_ID()` is scoped to the
+statement there, and `ON DUPLICATE KEY UPDATE` sets it to the id of the row it
+touched. Calling `returning()` on a MySQL connection is accepted and emits
+nothing, so the same builder code runs on all three engines.
+
 ---
 
 ## Row-Level Locking

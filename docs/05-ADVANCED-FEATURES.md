@@ -444,6 +444,28 @@ use Simsoft\DB\Builder\Upsert;
     ->execute();
 ```
 
+### Knowing which row it touched
+
+`DB::upsert()` runs the statement and hands back whether it succeeded, so the
+builder form is the one to use when you need the row itself. On PostgreSQL and
+SQLite, `returning()` asks the statement to name it:
+
+```php
+$upsert = (new Upsert('setting', $attributes, ['value'], ['group', 'key']))
+    ->returning('id')
+    ->withConnection('pgsql');
+$upsert->execute();
+
+$upsert->getLastInsertId();    /* '42', whether it inserted or updated */
+$upsert->getReturningResult(); /* [['id' => 42]] */
+```
+
+Ask, rather than reading the connection's last insert id: that id is
+session-scoped on both engines and an upsert that took the update branch reports
+one belonging to a row it did not write — a consumed sequence number on
+PostgreSQL, the previous statement's id on SQLite. MySQL needs no clause and
+emits none; see [PostgreSQL Guide](10-POSTGRESQL.md#knowing-which-row-the-upsert-touched).
+
 ---
 
 ## Cursor Pagination

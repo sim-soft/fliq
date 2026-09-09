@@ -5,12 +5,10 @@ namespace Simsoft\DB\Drivers;
 use PDO;
 use PDOException;
 use PDOStatement;
-use Simsoft\DB\Builder\Delete;
-use Simsoft\DB\Builder\Insert;
-use Simsoft\DB\Builder\Update;
 use Simsoft\DB\Exceptions\ConnectionException;
 use Simsoft\DB\Interfaces\CachesStatements;
 use Simsoft\DB\Interfaces\Executable;
+use Simsoft\DB\Interfaces\ReturnsRows;
 
 /**
  * SQLite database driver.
@@ -184,14 +182,19 @@ class SQLiteDriver extends Driver implements CachesStatements
     /**
      * Whether this statement carries a RETURNING clause whose rows to keep.
      *
+     * The three builders were named here individually, which was the set that
+     * declared the methods rather than the set that can carry the clause. Upsert
+     * was not among them and so had its rows dropped — leaving its caller with
+     * SQLite's connection-scoped last id, which after a skipped upsert names
+     * whatever the previous statement inserted.
+     *
      * @param Executable $query The query about to run.
      * @return bool
-     * @phpstan-assert-if-true Insert|Update|Delete $query
+     * @phpstan-assert-if-true ReturnsRows $query
      */
     private function capturesReturning(Executable $query): bool
     {
-        return ($query instanceof Insert || $query instanceof Update || $query instanceof Delete)
-            && $query->hasReturning();
+        return $query instanceof ReturnsRows && $query->hasReturning();
     }
 
     /**

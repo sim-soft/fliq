@@ -5,13 +5,14 @@ namespace Simsoft\DB\Builder;
 use InvalidArgumentException;
 use Simsoft\DB\Connection;
 use Simsoft\DB\Grammar\Grammar;
+use Simsoft\DB\Interfaces\ReturnsRows;
 use Simsoft\DB\Traits\Ignore;
 
 /**
  * Insert Query Builder Class.
  *
  */
-class Insert extends Builder
+class Insert extends Builder implements ReturnsRows
 {
     use Ignore;
 
@@ -70,11 +71,17 @@ class Insert extends Builder
     /**
      * Check if this INSERT has a RETURNING clause.
      *
+     * Rows already captured count as well as a clause asked for, matching the
+     * other three write builders. Insert tested the request alone, so a result
+     * in hand on a builder whose request had been cleared read as "never asked"
+     * and sent getLastInsertId() to the driver's session-scoped id with the
+     * statement's own answer sitting unread beside it.
+     *
      * @return bool
      */
     public function hasReturning(): bool
     {
-        return $this->returningColumn !== null;
+        return $this->returningColumn !== null || $this->returningResult !== null;
     }
 
     /**

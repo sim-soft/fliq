@@ -6,6 +6,19 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Added
 
+- **`Upsert::returning()`** — the one write builder that could not be asked what
+  it wrote. `Insert`, `Update` and `Delete` each carried a RETURNING clause;
+  `Upsert` carried none, so on PostgreSQL and SQLite there was no way to learn
+  which row an upsert had touched. It now emits the clause after the conflict
+  action, and `returning()` with no arguments asks for `RETURNING *`, matching
+  the other three. MySQL omits it, as it does elsewhere — `LAST_INSERT_ID()` is
+  per-statement there and already answers correctly.
+- **`Simsoft\DB\Interfaces\ReturnsRows`** — names the capability the three
+  builders had been carrying informally. `Execute::getLastInsertId()`, the
+  PostgreSQL driver and the SQLite driver each dispatched by listing class
+  names, which is how `Upsert` came to be missed in four places at once. They
+  now test the interface.
+
 - **`QueryMonitor::clearHandler()` and `QueryLogger::clearHandler()`** — there
   was no way to undo `setHandler()`. Neither `disable()` nor `reset()` removes a
   handler, so one registered for a profiling block kept receiving queries for
@@ -13,6 +26,45 @@ All notable changes to `simsoft/fliq` are documented here.
   into a closure whose request had ended.
 
 ### Fixed
+
+**Last insert id after an upsert**
+
+- **An upsert reported an id for a row it had not written** —
+  `getLastInsertId()` answered from the statement's own RETURNING rows only when
+  the builder was an `Insert`, and fell through to the driver otherwise. That
+  fallback is session-scoped on two of the three engines: PostgreSQL's
+  `lastInsertId()` with no sequence name calls `lastval()`, and SQLite's is
+  connection-scoped. A conflicting insert still consumes a sequence number on
+  its way to `DO UPDATE`, so an upsert that inserted nothing reported that
+  number — measured live against a table holding one row, the id came back as
+  `'2'`, naming no row in the table at all. On SQLite the same upsert reported
+  whatever the previous statement had inserted. `rowCount()` is no help as a
+  substitute signal: it is 0 for `DO NOTHING` but 1 for `DO UPDATE` whether or
+  not a row was written.
+- The three drivers and `Execute` dispatched on the three class names that
+  happened to declare the RETURNING methods, rather than on the capability, so
+  `Upsert` was skipped at every one of the four sites — and, having no clause to
+  carry, could not have been rescued at any of them. All four now test
+  `ReturnsRows`, and `Upsert` implements it.
+- **`Insert::hasReturning()` disagreed with the other three builders** — it
+  tested only whether a clause had been asked for, where `Update`, `Delete` and
+  now `Upsert` also report true once rows have been captured. An `Insert`
+  holding a result whose request had been cleared therefore read as "never
+  asked", and `getLastInsertId()` went to the driver's session-scoped id with
+  the statement's own answer sitting unread beside it.
+
+**Test suite**
+
+- **Two connection-resilience tests failed depending on the order the suite
+  ran** — they asserted that a reconnected connection reads `'alice'` for user
+  1, a fixture value another test class overwrites by design and does not
+  restore. `ConnectionResilienceTest` extends `TestCase` rather than
+  `DatabaseTestCase`, so it never reloads `sample_db.sql`, and any random order
+  placing `BuilderRebuildExecutionTest` first failed it. Both now read the
+  expected value over a live connection before severing the one under test,
+  which is what they were checking in the first place — that the reconnected
+  connection reads what a live one reads. Verified still to catch a broken
+  reconnect: removing `forceReconnect()` errors 5 of the 7 tests.
 
 **LIKE case sensitivity**
 

@@ -6,11 +6,9 @@ use InvalidArgumentException;
 use PDO;
 use PDOException;
 use PDOStatement;
-use Simsoft\DB\Builder\Delete;
-use Simsoft\DB\Builder\Insert;
-use Simsoft\DB\Builder\Update;
 use Simsoft\DB\Interfaces\CachesStatements;
 use Simsoft\DB\Interfaces\Executable;
+use Simsoft\DB\Interfaces\ReturnsRows;
 
 /**
  * PostgreSQL database driver.
@@ -136,24 +134,13 @@ class PostgresDriver extends Driver implements CachesStatements
         $sql = $query->getSQL();
         $binds = $query->getBinds();
 
-        // Handle INSERT/UPDATE/DELETE with RETURNING clause
-        if ($query instanceof Insert && $query->hasReturning()) {
-            $stmt = $this->prepareStatement($sql);
-            $stmt->execute($binds ?? []);
-            $this->markActivity();
-            $query->setReturningResult($stmt->fetchAll());
-            return true;
-        }
-
-        if ($query instanceof Update && $query->hasReturning()) {
-            $stmt = $this->prepareStatement($sql);
-            $stmt->execute($binds ?? []);
-            $this->markActivity();
-            $query->setReturningResult($stmt->fetchAll());
-            return true;
-        }
-
-        if ($query instanceof Delete && $query->hasReturning()) {
+        // Any write statement carrying a RETURNING clause. This was written as
+        // three identical branches naming Insert, Update and Delete, which is
+        // the set of builders that happened to declare the methods rather than
+        // the set that can carry the clause — Upsert could not, so its rows were
+        // never captured and its caller was left with the connection's
+        // session-scoped id instead.
+        if ($query instanceof ReturnsRows && $query->hasReturning()) {
             $stmt = $this->prepareStatement($sql);
             $stmt->execute($binds ?? []);
             $this->markActivity();

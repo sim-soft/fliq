@@ -72,11 +72,38 @@ class ConnectionResilienceTest extends TestCase
         usleep(300000);
     }
 
+    /**
+     * The username of user 1, read over a connection that was never killed.
+     *
+     * These tests are about whether a reconnected connection reads what a live
+     * one reads, so the expected value comes from a live one rather than from
+     * the fixture. Asserting the literal 'alice' coupled them to a column that
+     * other test classes legitimately write to: this class extends TestCase and
+     * so never reloads sample_db.sql, and a run that happened to order
+     * BuilderRebuildExecutionTest first — which sets user 1's username to
+     * 'ALPHA' by design and does not put it back — failed here instead of
+     * there. It was a seed-dependent failure in a test that had nothing to do
+     * with the change that exposed it.
+     *
+     * @return string
+     */
+    private function currentUsername(): string
+    {
+        $rows = Connection::get('resilience_killer')
+            ->query(new Raw('SELECT `username` FROM `user` WHERE `id` = ?', [1]));
+
+        $this->assertCount(1, $rows, 'user 1 is part of the fixture and must exist');
+
+        return (string)$rows[0]['username'];
+    }
+
     #[Test]
     public function aDroppedConnectionIsReestablishedTransparently(): void
     {
         $driver = Connection::get('resilience');
         $driver->query(new Raw('SELECT 1'));
+
+        $expected = $this->currentUsername();
 
         $this->killConnection($driver);
 
@@ -85,7 +112,7 @@ class ConnectionResilienceTest extends TestCase
         $rows = $driver->query(new Raw('SELECT `username` FROM `user` WHERE `id` = ?', [1]));
 
         $this->assertCount(1, $rows);
-        $this->assertEquals('alice', $rows[0]['username']);
+        $this->assertEquals($expected, $rows[0]['username']);
     }
 
     #[Test]
@@ -232,12 +259,14 @@ class ConnectionResilienceTest extends TestCase
         $driver = Connection::get('resilience_impatient');
         $driver->query(new Raw('SELECT 1'));
 
+        $expected = $this->currentUsername();
+
         $this->killConnection($driver);
 
         // The kill took longer than the idle window, so the ping runs and
         // reconnects before the statement is even attempted.
         $rows = $driver->query(new Raw('SELECT `username` FROM `user` WHERE `id` = ?', [1]));
-        $this->assertEquals('alice', $rows[0]['username']);
+        $this->assertEquals($expected, $rows[0]['username']);
 
         Connection::remove('resilience_impatient');
     }

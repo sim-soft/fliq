@@ -202,4 +202,49 @@ class ReadableSQLTest extends TestCase
 
         $this->assertSame($sql, $grammar->readableSQL($sql, []));
     }
+
+    #[Test]
+    public function ddPrintsTheSameRenderingAsDumpAndThenStops(): void
+    {
+        // dd() ends the process, so it cannot be called in-process without
+        // taking the test run down with it. Documented in three places
+        // (02-QUERY-BUILDER, the cheatsheet, the README) and executed by
+        // nothing — the half of it that dump() does not share, the exit, was
+        // covered by no test at all.
+        //
+        // pcov instruments the parent process only, so the two lines this runs
+        // still report as uncovered. They are tested: mutating the exit code to
+        // 0 fails the third assertion, and dropping the dump() call fails the
+        // first. The report cannot see across the process boundary, which is
+        // the same boundary that makes the test possible.
+        $script = <<<'PHP'
+            <?php
+            require %s;
+            use Simsoft\DB\Builder\Raw;
+            use Simsoft\DB\Connection;
+            Connection::add('lite', ['driver' => 'sqlite', 'database' => ':memory:']);
+            (new Raw('SELECT * FROM t WHERE a = ?', ['x']))->withConnection('lite')->dd();
+            echo "NOT REACHED";
+            PHP;
+
+        $path = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fliq_dd_' . bin2hex(random_bytes(6)) . '.php';
+        file_put_contents($path, sprintf(
+            $script,
+            var_export(dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php', true)
+        ));
+
+        try {
+            $output = [];
+            $status = 0;
+            exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($path) . ' 2>&1', $output, $status);
+        } finally {
+            @unlink($path);
+        }
+
+        $printed = implode("\n", $output);
+
+        $this->assertStringContainsString("SELECT * FROM t WHERE a = 'x'", $printed, 'dd() prints the rendering');
+        $this->assertStringNotContainsString('NOT REACHED', $printed, 'and nothing after it runs');
+        $this->assertSame(1, $status, 'it exits non-zero, so a script cut short is visible to the shell');
+    }
 }

@@ -3,6 +3,7 @@
 namespace Simsoft\DB\Builder;
 
 use Simsoft\DB\Connection;
+use Simsoft\DB\Interfaces\ReturnsRows;
 use Simsoft\DB\Traits\Condition;
 use Simsoft\DB\Traits\Ignore;
 use Simsoft\DB\Traits\LowPriority;
@@ -10,7 +11,7 @@ use Simsoft\DB\Traits\LowPriority;
 /**
  * Update Query Builder Class
  */
-class Update extends Builder
+class Update extends Builder implements ReturnsRows
 {
     use LowPriority, Ignore, Condition;
 

@@ -5,6 +5,7 @@ namespace Simsoft\DB\Builder;
 use InvalidArgumentException;
 use Simsoft\DB\Connection;
 use Simsoft\DB\Grammar\Grammar;
+use Simsoft\DB\Interfaces\ReturnsRows;
 
 /**
  * Upsert Query Builder Class.
@@ -12,8 +13,20 @@ use Simsoft\DB\Grammar\Grammar;
  * Generates INSERT ... ON DUPLICATE KEY UPDATE / ON CONFLICT SQL statements.
  * Uses the Grammar interface for database-specific syntax.
  */
-class Upsert extends Builder
+class Upsert extends Builder implements ReturnsRows
 {
+    /**
+     * @var array<int, string>|null Columns to return via RETURNING clause,
+     *                              null when no clause was asked for.
+     *
+     * An empty array is a request — returning() with no arguments means
+     * RETURNING *, which is why it cannot double as the "never asked" marker.
+     */
+    protected ?array $returningColumns = null;
+
+    /** @var array<int, array<string, mixed>>|null Rows returned by RETURNING clause */
+    protected ?array $returningResult = null;
+
     /**
      * Constructor.
      *
@@ -29,6 +42,61 @@ class Upsert extends Builder
         protected array $conflictColumns = []
     )
     {
+    }
+
+    /**
+     * Add a RETURNING clause to the upsert.
+     *
+     * Supported by PostgreSQL and SQLite 3.35+; MySQL has no RETURNING and the
+     * grammar omits the clause there, where it is not needed — MySQL's
+     * LAST_INSERT_ID() is per-statement and already reports nothing for an
+     * upsert that wrote no new row.
+     *
+     * On the two engines that do support it this is the only way to learn what
+     * the statement did. Their lastInsertId() is session-scoped, so an upsert
+     * that took the conflict branch still answered with an id: the sequence
+     * number the failed attempt consumed on PostgreSQL, the previous
+     * statement's id on SQLite. Neither names a row this statement wrote.
+     *
+     * @param string ...$columns The columns to return. Empty = RETURNING *.
+     * @return static
+     */
+    public function returning(string ...$columns): static
+    {
+        $this->returningColumns = array_values($columns);
+        $this->invalidateSQL();
+        return $this;
+    }
+
+    /**
+     * Check if this upsert has a RETURNING clause.
+     *
+     * @return bool
+     */
+    public function hasReturning(): bool
+    {
+        return $this->returningColumns !== null || $this->returningResult !== null;
+    }
+
+    /**
+     * Get the result from a RETURNING clause execution.
+     *
+     * @return array<int, array<string, mixed>>|null
+     */
+    public function getReturningResult(): ?array
+    {
+        return $this->returningResult;
+    }
+
+    /**
+     * Set the RETURNING result after execution.
+     *
+     * @param array<int, array<string, mixed>> $result The returned rows.
+     * @return void
+     */
+    public function setReturningResult(array $result): void
+    {
+        $this->returningResult = $result;
     }
 
     /**
@@ -74,10 +142,21 @@ class Upsert extends Builder
         // one understood an explicit update value, so ['v' => 'x'] wrote 'x' on
         // MySQL and the inserted value on PostgreSQL and SQLite. The assignments
         // are the part that does not vary by engine; only the wrapper does.
-        return $sql . $grammar->onConflictSQL(
+        $sql .= $grammar->onConflictSQL(
             $this->buildAssignments($grammar, $columns),
             $this->resolveConflictColumns($grammar, $columns)
         );
+
+        // After the conflict action, where the clause returns a row when this
+        // statement wrote one and none when it took the conflict branch without
+        // writing. Tested against null, not emptiness, for the reason Update
+        // gives at the same point: returning() with no arguments asks for
+        // RETURNING * and leaves an empty array behind.
+        if ($this->returningColumns !== null && $grammar->supportsReturning()) {
+            $sql .= ' ' . $grammar->returningColumnsSQL($this->returningColumns);
+        }
+
+        return $sql;
     }
 
     /**

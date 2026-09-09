@@ -3,7 +3,6 @@
 namespace Simsoft\DB\Traits;
 
 use InvalidArgumentException;
-use Simsoft\DB\Builder\Insert;
 use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Cache\CacheInterface;
 use Simsoft\DB\Cache\QueryCache;
@@ -12,6 +11,7 @@ use Simsoft\DB\Drivers\Driver;
 use Simsoft\DB\Exceptions\ConnectionException;
 use Simsoft\DB\Exceptions\QueryException;
 use Simsoft\DB\Interfaces\Executable;
+use Simsoft\DB\Interfaces\ReturnsRows;
 use Simsoft\DB\QueryLogger;
 use Simsoft\DB\QueryMonitor;
 use Throwable;
@@ -167,7 +167,11 @@ trait Execute
      *
      * @param Executable|null $query The SQL query object.
      * @return bool
-     * @throws QueryException
+     * @throws QueryException If the server rejected the statement.
+     * @throws ConnectionException If the server was never reached. Deliberately
+     *                             not wrapped: the statement is not at fault,
+     *                             and reporting it as one sends the caller
+     *                             looking for a fault in SQL that is good.
      */
     public function execute(?Executable $query = null): bool
     {
@@ -201,24 +205,38 @@ trait Execute
     /**
      * Get last insert Id.
      *
-     * @return string|null
+     * Answered from the statement's own RETURNING rows where it has them, and
+     * from the driver otherwise. The distinction matters because the driver's
+     * answer is session-scoped on two of the three engines: PostgreSQL reports
+     * lastval() and SQLite the connection's last id, so a statement that wrote
+     * nothing still gets an id — the sequence number a conflicting attempt
+     * consumed, or whatever the previous statement inserted. Only MySQL is
+     * per-statement and reports nothing when nothing was written.
+     *
+     * The test used to name Insert, which is not the same set as "carries
+     * RETURNING": Upsert did not implement it, so every upsert took the driver
+     * path and an upsert that took the conflict branch reported an id for a row
+     * it had not written.
+     *
+     * @return string|null The id, or null when the statement wrote no row.
      */
     public function getLastInsertId(): ?string
     {
         // Check if the builder has a RETURNING result (PostgreSQL/SQLite)
-        if ($this instanceof Insert && $this->hasReturning()) {
+        if ($this instanceof ReturnsRows && $this->hasReturning()) {
             $rows = $this->getReturningResult();
             if (!empty($rows) && is_array($rows[0]) && $rows[0] !== []) {
                 $firstValue = reset($rows[0]);
                 return $firstValue !== null ? (string)$firstValue : null;
             }
 
-            // RETURNING ran and named no row, which is what an insert skipped by
-            // ON CONFLICT DO NOTHING looks like. Falling through to the driver
-            // then answered with the sequence's current value — an id belonging
-            // to no row this statement wrote, and on PostgreSQL not even to a
-            // row that exists, since the conflicting attempt still consumed a
-            // sequence number. Nothing was inserted, so there is no id.
+            // RETURNING ran and named no row, which is what a statement skipped
+            // by ON CONFLICT DO NOTHING looks like. Falling through to the
+            // driver then answered with the sequence's current value — an id
+            // belonging to no row this statement wrote, and on PostgreSQL not
+            // even to a row that exists, since the conflicting attempt still
+            // consumed a sequence number. Nothing was inserted, so there is no
+            // id.
             if ($rows !== null) {
                 return null;
             }
@@ -259,7 +277,9 @@ trait Execute
      *
      * @param Executable $target The query to run.
      * @return array<int, array<string, mixed>>
-     * @throws QueryException
+     * @throws QueryException If the server rejected the statement.
+     * @throws ConnectionException If the server was never reached, for the
+     *                             reason execute() gives at the same point.
      */
     private function runQuery(Executable $target): array
     {
