@@ -27,6 +27,29 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Full-text search (`MatchAgainst`)**
+
+- **`mustHave()` did not make short words required.** Words of three characters
+  or fewer were added without their `+`, which does not make a word required —
+  it makes it optional, and MySQL then answers with rows containing none of
+  them. Measured against a real FULLTEXT index, `mustHave(['php', 'mysql'])`
+  built `php +mysql` and returned a document about java and mysql with no php in
+  it anywhere. The threshold was MyISAM's `ft_min_word_len` of 4, but InnoDB is
+  the default engine and its `innodb_ft_min_token_size` is 3, so it excluded a
+  length the index does hold. Every word now carries its operator, which also
+  makes `mustHave()` and `mustNot()` treat the same word the same way — the
+  latter never had the rule.
+- **`optional()` let operators through and the query failed outright.** The
+  characters were trimmed only from the ends of each word, and `<` and `@` were
+  not in the trim list at all. A term holding one in the middle kept it, and
+  MySQL rejected the whole expression: `user@example.com` raised `syntax error,
+  unexpected '@'`. Since the words are joined into a single expression, one such
+  term took every other word in the search with it — and `optional()` is the
+  method for words that came from a user. Every operator is now replaced with a
+  space wherever it appears, so `a<b` searches for two words rather than the
+  single word `ab`, and a term that is nothing but operators is dropped rather
+  than left as a gap in the expression.
+
 **Model generator**
 
 - **The namespace was written into the file unchecked.** Whatever was passed to

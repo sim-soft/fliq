@@ -680,6 +680,39 @@ $results = (new ActiveQuery())
 | `naturalLanguageMode()`      | —          | IN NATURAL LANGUAGE MODE                 |
 | `queryExpansion()`           | —          | WITH QUERY EXPANSION                     |
 
+The three mode methods set one value, so the last one called is the one used.
+
+### Words Below the Index Minimum
+
+`mustHave()` puts a `+` on every word. A word shorter than the server's minimum
+token size is not in the index, so requiring it matches nothing and the whole
+search returns no rows — which is the honest answer to "this word must appear"
+for a word the index cannot answer for. The minimum is
+`innodb_ft_min_token_size` (default 3) for InnoDB and `ft_min_word_len` (default
+4) for MyISAM. Use `optional()` for words you want to rank by rather than
+require.
+
+### Terms From User Input
+
+`optional()` strips every character MySQL reads as an operator — `+ - > < ( )
+~ * " @` — from anywhere in the word, not just its ends. Each becomes a space,
+so `a<b` searches for two words rather than the single word `ab`:
+
+```php
+(new MatchAgainst(['title', 'body']))
+    ->optional(['mysql', 'user@example.com'])   // -> 'mysql user example.com'
+    ->booleanMode()
+```
+
+This matters because the words are joined into one expression: without the
+stripping, a single term holding an `@` makes MySQL reject the entire search
+with `syntax error, unexpected '@'`, taking every other word down with it. A
+term that is nothing but operators is dropped rather than left as a gap.
+
+The other builders do not strip, since their operator is the point of the call,
+and `search()` passes your expression through untouched — that is the method to
+use when you want to write boolean syntax by hand.
+
 ### Custom Search Expression
 
 When you want full control over the boolean syntax, use `search()`:

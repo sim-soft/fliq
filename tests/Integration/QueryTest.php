@@ -726,6 +726,72 @@ class QueryTest extends DatabaseTestCase
     }
 
     #[Test]
+    public function fulltextRequiredWordsAllHaveToAppear(): void
+    {
+        // 'PHP' is three characters, so it used to be added without its + and
+        // stopped being required. Measured against this fixture: the search
+        // also returned "Personal Finance for Developers", which has no PHP in
+        // it anywhere. innodb_ft_min_token_size is 3, so the index does hold
+        // the word — the old threshold was MyISAM's ft_min_word_len of 4.
+        $match = (new MatchAgainst(['title', 'body']))
+            ->mustHave(['PHP', 'Developers'])
+            ->booleanMode();
+
+        $query = (new ActiveQuery())
+            ->from('post')
+            ->where($match)
+            ->withConnection('mysql');
+
+        $results = $query->query($query);
+
+        $this->assertGreaterThanOrEqual(1, count($results));
+
+        foreach ($results as $row) {
+            $haystack = $row['title'] . ' ' . $row['body'];
+
+            $this->assertStringContainsStringIgnoringCase('PHP', $haystack);
+            $this->assertStringContainsStringIgnoringCase('Developers', $haystack);
+        }
+    }
+
+    #[Test]
+    public function fulltextRequiringAWordNoRowHasFindsNothing(): void
+    {
+        // The other half of the same fix: no post carries both, so the honest
+        // answer is none. The old expression answered with the MySQL post,
+        // which is the failure a caller would never think to check for.
+        $match = (new MatchAgainst(['title', 'body']))
+            ->mustHave(['PHP', 'Travel'])
+            ->booleanMode();
+
+        $query = (new ActiveQuery())
+            ->from('post')
+            ->where($match)
+            ->withConnection('mysql');
+
+        $this->assertCount(0, $query->query($query));
+    }
+
+    #[Test]
+    public function fulltextTermsCarryingOperatorCharactersStillRun(): void
+    {
+        // optional() takes words that came from a user. An address or any term
+        // holding an @ used to reach the server with the @ intact, and MySQL
+        // rejected the whole expression: "syntax error, unexpected '@'". One
+        // such term took every other word in the search down with it.
+        $match = (new MatchAgainst(['title', 'body']))
+            ->optional(['PHP', 'user@example.com', 'C++'])
+            ->booleanMode();
+
+        $query = (new ActiveQuery())
+            ->from('post')
+            ->where($match)
+            ->withConnection('mysql');
+
+        $this->assertGreaterThanOrEqual(1, count($query->query($query)));
+    }
+
+    #[Test]
     public function fulltextWithAdditionalConditions(): void
     {
         // Fulltext search combined with other WHERE conditions
