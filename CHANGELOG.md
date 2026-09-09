@@ -27,6 +27,31 @@ All notable changes to `simsoft/fliq` are documented here.
 
 ### Fixed
 
+**Model generator**
+
+- **The namespace was written into the file unchecked.** Whatever was passed to
+  `namespace()` went straight into `namespace X;`, so an empty string, a space,
+  or a stray leading, trailing or doubled separator produced a file that does not
+  parse — reported as a parse error in generated code the reader had not written.
+  A value carrying a semicolon was worse than that: `"App; echo 'X';"` produces a
+  file that parses perfectly well and runs the injected statement on every
+  include. The value is now checked against what PHP actually accepts as a
+  namespace, and `generateAll()` checks it before introspecting the first table,
+  so a refusal leaves the output directory as it found it rather than half full.
+- **A connection name holding a quote or a backslash broke the generated file.**
+  The name is interpolated into `protected string $connection = '...';`, and
+  `Connection::add()` accepts any string as a name — so a quote closed the string
+  early and the model no longer parsed. Such a name is now refused with a message
+  naming it, and spaces, which are harmless there, are still accepted.
+- **Files the generator never wrote were reported as created.** `mkdir()` and
+  `file_put_contents()` both had their returns discarded, so a run into a
+  directory that could not be created emitted two PHP warnings and then returned
+  the path as though it had been written. `generateAll()` counts that answer, so
+  it reported every table created with nothing on disk — a scaffolding command
+  reading that count reports success and exits 0. Both failures now raise. A file
+  that already exists is still skipped and still answers `false`; that is a
+  different outcome from a failed write and stayed one.
+
 **MySQLi driver**
 
 - **A second `init_command` failed the whole connection.** The configured list

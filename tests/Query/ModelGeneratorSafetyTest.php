@@ -2,6 +2,7 @@
 
 namespace Query;
 
+use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -41,9 +42,10 @@ class ModelGeneratorSafetyTest extends TestCase
      *
      * @param string $table The table name.
      * @param array<int, array<string, mixed>> $columns The fake columns.
+     * @param string $connectionName The connection name to write into the file.
      * @return TestableModelGenerator
      */
-    private function generator(string $table, array $columns): TestableModelGenerator
+    private function generator(string $table, array $columns, string $connectionName = 'default'): TestableModelGenerator
     {
         foreach ($columns as $index => $column) {
             if (!isset($column['rawType'])) {
@@ -51,7 +53,7 @@ class ModelGeneratorSafetyTest extends TestCase
             }
         }
 
-        $generator = new TestableModelGenerator($table, $columns);
+        $generator = new TestableModelGenerator($table, $columns, $connectionName);
         $generator->namespace('Probe\\Gen');
 
         return $generator;
@@ -375,6 +377,146 @@ class ModelGeneratorSafetyTest extends TestCase
             $code
         );
         $this->assertStringContainsString('public function category(): Relation', $code);
+        $this->assertCodeParses($code);
+    }
+
+    // ------------------------------------------------------------------
+    // THE NAMESPACE REACHES THE FILE UNQUOTED
+    // ------------------------------------------------------------------
+
+    /**
+     * Namespaces PHP will not accept in `namespace X;`.
+     *
+     * @return array<string, array{string}>
+     */
+    public static function unusableNamespaces(): array
+    {
+        $bs = chr(92);
+
+        return [
+            'empty' => [''],
+            'space' => ['My Models'],
+            'trailing separator' => ['App' . $bs . 'Models' . $bs],
+            'leading separator' => [$bs . 'App'],
+            'doubled separator' => ['App' . $bs . $bs . 'Models'],
+            'starts with a digit' => ['9App'],
+            'brace' => ['App{'],
+            'closes the statement' => ["App; echo 'X';"],
+        ];
+    }
+
+    /**
+     * The namespace is written straight into `namespace X;`, and nothing
+     * checked it. Most bad values give a file that does not parse; one of them
+     * gives a file that parses fine and runs whatever followed the semicolon,
+     * on every include.
+     *
+     * @param string $namespace The rejected namespace.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('unusableNamespaces')]
+    public function aNamespacePhpWillNotAcceptIsRejected(string $namespace): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Invalid namespace');
+
+        $this->generator('post', [$this->intColumn('id', true)])->namespace($namespace);
+    }
+
+    /**
+     * Namespaces that are fine and must keep working.
+     *
+     * @return array<string, array{string}>
+     */
+    public static function usableNamespaces(): array
+    {
+        $bs = chr(92);
+
+        return [
+            'single segment' => ['App'],
+            'two segments' => ['App' . $bs . 'Models'],
+            'three segments' => ['Acme' . $bs . 'App' . $bs . 'Models'],
+            'underscored' => ['My_App' . $bs . 'Models_2'],
+        ];
+    }
+
+    /**
+     * @param string $namespace The accepted namespace.
+     * @return void
+     */
+    #[Test]
+    #[DataProvider('usableNamespaces')]
+    public function anOrdinaryNamespaceIsAccepted(string $namespace): void
+    {
+        $code = $this->generator('post', [$this->intColumn('id', true)])->namespace($namespace)->preview();
+
+        $this->assertStringContainsString("namespace $namespace;", $code);
+        $this->assertCodeParses($code);
+    }
+
+    /**
+     * The refusal has to name the value, since generateAll() passes a namespace
+     * the caller may have built rather than typed.
+     */
+    #[Test]
+    public function theNamespaceRefusalSaysWhatWasWrong(): void
+    {
+        try {
+            $this->generator('post', [$this->intColumn('id', true)])->namespace('My Models');
+            $this->fail('an unusable namespace was accepted');
+        } catch (AssertionFailedError $failure) {
+            // fail() throws a RuntimeException subclass, so without this the
+            // catch below reports the failure message as the refusal.
+            throw $failure;
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('My Models', $exception->getMessage());
+            $this->assertStringContainsString('App\\Models', $exception->getMessage());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // THE CONNECTION NAME REACHES THE FILE INSIDE A QUOTED STRING
+    // ------------------------------------------------------------------
+
+    /**
+     * The name is interpolated into `protected string $connection = '...';`, so
+     * a quote in it ends the string early and the file stops parsing.
+     * Connection::add() accepts any string, so this needs nothing unusual of
+     * the caller.
+     */
+    #[Test]
+    public function aConnectionNameHoldingAQuoteIsRejected(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('cannot be written into a generated model');
+
+        new TestableModelGenerator('post', [$this->intColumn('id', true)], "ev'il");
+    }
+
+    /**
+     * A backslash is the other way out of a single-quoted string: a trailing
+     * one escapes the closing quote.
+     */
+    #[Test]
+    public function aConnectionNameHoldingABackslashIsRejected(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('cannot be written into a generated model');
+
+        new TestableModelGenerator('post', [$this->intColumn('id', true)], 'has' . chr(92) . 'backslash');
+    }
+
+    /**
+     * A space is not a problem inside a quoted string, and refusing it would
+     * break connections that already work.
+     */
+    #[Test]
+    public function anOrdinaryConnectionNameIsAccepted(): void
+    {
+        $code = $this->generator('post', [$this->intColumn('id', true)], 'with space')->preview();
+
+        $this->assertStringContainsString("protected string \$connection = 'with space';", $code);
         $this->assertCodeParses($code);
     }
 }

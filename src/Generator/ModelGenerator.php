@@ -40,6 +40,7 @@ class ModelGenerator
      *
      * @param string $table The table name.
      * @param string|null $connectionName The connection name. Null for default.
+     * @throws RuntimeException If the table or connection name cannot be written out.
      */
     public function __construct(string $table, ?string $connectionName = null)
     {
@@ -47,6 +48,8 @@ class ModelGenerator
 
         $this->table = $table;
         $this->connectionName = $connectionName ?? Connection::getDefaultName();
+
+        self::assertConnectionName($this->connectionName);
     }
 
     /**
@@ -70,6 +73,56 @@ class ModelGenerator
         throw new RuntimeException(
             "Invalid table name: '$table'. "
             . 'Only letters, digits, underscores and dollar signs are allowed.'
+        );
+    }
+
+    /**
+     * Reject a namespace PHP will not parse.
+     *
+     * The value is written straight into `namespace X;`, so anything that is
+     * not a namespace is a parse error in a file the reader did not write —
+     * or, for a value carrying a semicolon, a statement of the caller's
+     * choosing that PHP parses perfectly well and runs on every include.
+     * Checked rather than escaped, because there is no escaping that turns a
+     * non-namespace into one.
+     *
+     * @param string $namespace The namespace.
+     * @return void
+     * @throws RuntimeException If the value is not a namespace.
+     */
+    private static function assertNamespace(string $namespace): void
+    {
+        if (preg_match('/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*(\\\\[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*)*$/', $namespace) === 1) {
+            return;
+        }
+
+        throw new RuntimeException(
+            "Invalid namespace: '$namespace'. "
+            . 'Expected a PHP namespace such as App\\Models.'
+        );
+    }
+
+    /**
+     * Reject a connection name that cannot be written as a single-quoted string.
+     *
+     * The name is interpolated into `protected string $connection = '...';`, so
+     * a name holding a quote ends the string early and the file no longer
+     * parses. Connection::add() accepts any string, so this is reachable
+     * without anything unusual on the caller's part.
+     *
+     * @param string $connectionName The connection name.
+     * @return void
+     * @throws RuntimeException If the name cannot be safely written out.
+     */
+    private static function assertConnectionName(string $connectionName): void
+    {
+        if (!str_contains($connectionName, "'") && !str_contains($connectionName, '\\')) {
+            return;
+        }
+
+        throw new RuntimeException(
+            "Connection name '$connectionName' cannot be written into a generated model, "
+            . 'because it contains a quote or a backslash. Rename the connection.'
         );
     }
 
@@ -144,9 +197,12 @@ class ModelGenerator
      *
      * @param string $namespace The PHP namespace.
      * @return static
+     * @throws RuntimeException If the value is not a PHP namespace.
      */
     public function namespace(string $namespace): static
     {
+        self::assertNamespace($namespace);
+
         $this->namespace = $namespace;
         return $this;
     }
@@ -202,6 +258,7 @@ class ModelGenerator
      * Generate the model file.
      *
      * @return string|false The file path written, or false if skipped (a file exists and force=false).
+     * @throws RuntimeException If the directory or the file cannot be written.
      */
     public function generate(): string|false
     {
@@ -216,11 +273,21 @@ class ModelGenerator
         $code = $this->buildClassCode($className, $columns);
 
         $directory = dirname($filePath);
-        if (!is_dir($directory)) {
-            mkdir($directory, 0755, true);
+        if (!is_dir($directory) && !@mkdir($directory, 0755, true) && !is_dir($directory)) {
+            // Both returns used to be discarded, so a directory that could not
+            // be created and a file that was never written produced two PHP
+            // warnings and then a return of the path as though it had been
+            // written. generate() is documented to answer the path it wrote, and
+            // generateAll() counts that answer — so a run into an unwritable
+            // directory reported every table as created while the disk stayed
+            // empty. The second is_dir() re-check is for the concurrent case,
+            // where another process created the directory between the two calls.
+            throw new RuntimeException("Cannot create output directory: $directory");
         }
 
-        file_put_contents($filePath, $code);
+        if (@file_put_contents($filePath, $code) === false) {
+            throw new RuntimeException("Cannot write model file: $filePath");
+        }
 
         return $filePath;
     }
@@ -233,6 +300,7 @@ class ModelGenerator
      * @param string $outputDir The output directory.
      * @param bool $force Whether to overwrite existing files.
      * @return array{created: array<int, string>, skipped: array<int, string>}
+     * @throws RuntimeException If the namespace is not a PHP namespace, or a file cannot be written.
      */
     public static function generateAll(
         ?string $connectionName = null,
@@ -241,6 +309,12 @@ class ModelGenerator
         bool    $force = false
     ): array
     {
+        // Checked here rather than left to the per-table namespace() call, so a
+        // bad namespace fails before the first table is introspected instead of
+        // after — the loop writes as it goes, and a run that stops partway
+        // leaves a directory half full of models.
+        self::assertNamespace($namespace);
+
         $tables = self::listTables($connectionName);
         $created = [];
         $skipped = [];

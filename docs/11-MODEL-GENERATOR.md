@@ -785,6 +785,49 @@ two of the three introspection queries name the table inline and an identifier
 cannot be parameter-bound. Only letters, digits, underscores and dollar signs
 are accepted.
 
+### Namespaces and Connection Names
+
+Both are written into the generated file, so both are checked first.
+
+The namespace goes straight into `namespace X;`. Anything that is not a
+namespace is refused rather than written — `App\Models\` with a trailing
+separator, an empty string, a value with a space in it. A value carrying a
+semicolon is the reason this is a check rather than a warning: `"App; echo 'X';"`
+produces a file that parses perfectly well and runs that statement on every
+include.
+
+```
+Invalid namespace: 'My Models'. Expected a PHP namespace such as App\Models.
+```
+
+`generateAll()` checks it before introspecting the first table, so a mistake in
+the argument leaves nothing behind rather than a directory half full of models.
+
+The connection name is written inside a single-quoted string, so a name holding
+a quote or a backslash would end that string early and break the file.
+`Connection::add()` accepts any string, so this is worth knowing before you name
+a connection:
+
+```
+Connection name 'ev'il' cannot be written into a generated model, because it
+contains a quote or a backslash. Rename the connection.
+```
+
+Spaces are fine — only quotes and backslashes are refused.
+
+### When the File Cannot Be Written
+
+`generate()` returns the path it wrote, or `false` when a file is already there
+and `force()` is off. Anything else is an exception: a directory that cannot be
+created, or a file that cannot be written, raises rather than returning a path.
+
+```
+Cannot create output directory: /read-only/app/Models
+```
+
+This matters most for `generateAll()`, whose `created` count is the only report
+the caller gets. It raises instead of counting files that were never written.
+
 ### Enum Column Comments
 
 MySQL ENUM columns get their valid values listed as inline comments:
