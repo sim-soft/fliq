@@ -2,7 +2,18 @@
 
 All notable changes to `simsoft/fliq` are documented here.
 
-## [Unreleased]
+## [3.0.0] - 2026-09-14
+
+A major version because this release removes APIs and changes behaviour that
+callers may depend on. Every such change is marked **breaking** in the entries
+below — twenty in total. Read the Changed section before upgrading; the common
+cases are `Traits\Debug` and `Grammar::upsertSQL()` being removed, `whereFulltext()`
+rejecting modes it used to silently replace, and `Model::update()` now honouring
+mass assignment rules.
+
+> **Note on 2.0.7.** The `2.0.7` tag exists in the repository but was never given
+> a section here. Its contents are included in the work below rather than
+> reconstructed after the fact, so this entry covers everything since `2.0.6`.
 
 ### Added
 
