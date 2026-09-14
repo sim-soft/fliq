@@ -14,7 +14,8 @@ use Simsoft\DB\Traits\Qualifier;
  */
 abstract class Builder implements Executable
 {
-    use PlaceHolder, Qualifier;
+    use PlaceHolder;
+    use Qualifier;
     use Binds {
         Binds::getBinds as private binds;
     }

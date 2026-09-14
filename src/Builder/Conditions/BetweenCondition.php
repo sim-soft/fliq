@@ -35,7 +35,7 @@ class BetweenCondition extends Clause
         return match (true) {
                 $this->attribute instanceof Raw => (string)$this->attribute,
                 default => $this->queryAttribute($this->attribute),
-            }
+        }
             . ($this->is ? '' : ' NOT')
             . " BETWEEN {$this->getPlaceHolder()} AND {$this->getPlaceHolder()}";
     }

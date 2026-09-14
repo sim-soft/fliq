@@ -35,7 +35,15 @@ use Simsoft\DB\Traits\TemporaryAlias;
  */
 class ActiveQuery implements Executable, Updatable, Deletable
 {
-    use Qualifier, Execute, PlaceHolder, Aggregation, Fetchable, TemporaryAlias, Likeable, Groupable, Joinable;
+    use Qualifier;
+    use Execute;
+    use PlaceHolder;
+    use Aggregation;
+    use Fetchable;
+    use TemporaryAlias;
+    use Likeable;
+    use Groupable;
+    use Joinable;
 
     // SectionBinds supplies getBinds() and clearBinds(), which cover every
     // section; the Binds versions cover the WHERE list alone and are reached
@@ -561,11 +569,10 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function where(
         string|array|callable|Raw|Clause $attribute,
-        mixed  $operator = '=',
-        mixed  $value = null,
+        mixed $operator = '=',
+        mixed $value = null,
         string $logicalOperator = 'AND'
-    ): static
-    {
+    ): static {
         if ($attribute instanceof Closure) {
             return $this->applyClosureCondition($attribute, $logicalOperator);
         }
@@ -687,11 +694,10 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     private function resolveShapedOperator(
         string $attribute,
-        mixed  $operator,
-        mixed  $value,
+        mixed $operator,
+        mixed $value,
         string $logicalOperator
-    ): ?static
-    {
+    ): ?static {
         if (!is_string($operator) || $value === null) {
             return null;
         }
@@ -825,8 +831,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         string|array|callable|Raw|Clause $attribute,
         mixed $operator = '=',
         mixed $value = null
-    ): static
-    {
+    ): static {
         return $this->where($attribute, $operator, $value, 'OR');
     }
 
@@ -1313,13 +1318,12 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string $logicalOperator The logical operator. Either 'AND' or 'OR'
      */
     public function betweenDate(
-        string  $attribute,
+        string $attribute,
         ?string $startDate = null,
         ?string $endDate = null,
-        bool    $is = true,
-        string  $logicalOperator = 'AND'
-    ): static
-    {
+        bool $is = true,
+        string $logicalOperator = 'AND'
+    ): static {
         return $this->onCondition(new BetweenDateCondition($attribute, [$startDate, $endDate], $is), $logicalOperator);
     }
 
@@ -1371,11 +1375,10 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function betweenDateInterval(
         string $attribute,
         string $startDate,
-        int    $interval = 7,
-        bool   $is = true,
+        int $interval = 7,
+        bool $is = true,
         string $logicalOperator = 'AND'
-    ): static
-    {
+    ): static {
         return $this->onCondition(
             (new BetweenDateCondition($attribute, [$startDate, $startDate], $is))->interval($interval),
             $logicalOperator
@@ -2741,12 +2744,11 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function whereFulltext(
         array|string $columns,
-        string       $term,
-        string       $mode = 'plain',
-        string       $language = 'english',
-        string       $logicalOperator = 'AND'
-    ): static
-    {
+        string $term,
+        string $mode = 'plain',
+        string $language = 'english',
+        string $logicalOperator = 'AND'
+    ): static {
         $cols = is_array($columns) ? $columns : [$columns];
         $qualifiedCols = array_map(fn($col) => $this->queryAttribute($col), $cols);
         $sql = $this->getGrammar()->fulltextSearch($qualifiedCols, $mode, $language);
@@ -2766,11 +2768,10 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function orWhereFulltext(
         array|string $columns,
-        string       $term,
-        string       $mode = 'plain',
-        string       $language = 'english'
-    ): static
-    {
+        string $term,
+        string $mode = 'plain',
+        string $language = 'english'
+    ): static {
         return $this->whereFulltext($columns, $term, $mode, $language, 'OR');
     }
 

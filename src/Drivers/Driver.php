@@ -657,8 +657,7 @@ abstract class Driver
      */
     public function __construct(
         protected array $config
-    )
-    {
+    ) {
         $this->config = [...$this->default, ...$this->config];
         $this->validate();
         $this->connect();

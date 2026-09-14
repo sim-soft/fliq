@@ -59,8 +59,7 @@ class Raw implements Executable
     public function __construct(
         protected string $sql,
         protected ?array $binds = null
-    )
-    {
+    ) {
     }
 
     /**

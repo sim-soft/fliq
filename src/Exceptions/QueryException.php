@@ -79,8 +79,7 @@ class QueryException extends RuntimeException
         protected ?array $binds = null,
         int $code = 0,
         ?\Throwable $previous = null
-    )
-    {
+    ) {
         $fullMessage = $message;
         if ($sql !== '' && self::$debug) {
             $fullMessage .= " [SQL: $sql]";

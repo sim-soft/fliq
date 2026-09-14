@@ -33,8 +33,7 @@ class Select extends Builder
         protected string $table,
         protected array $selects = [],
         string|ActiveQuery|Raw $condition = ''
-    )
-    {
+    ) {
         $this->condition($condition);
     }
 

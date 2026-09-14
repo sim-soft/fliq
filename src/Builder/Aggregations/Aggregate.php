@@ -37,8 +37,7 @@ abstract class Aggregate extends Builder
         protected string $table,
         protected string $attribute,
         protected ?string $as = null
-    )
-    {
+    ) {
     }
 
     /**
