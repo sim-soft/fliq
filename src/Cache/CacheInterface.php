@@ -5,7 +5,21 @@ namespace Simsoft\DB\Cache;
 /**
  * CacheInterface.
  *
- * PSR-16 compatible cache interface for query result caching.
+ * Cache interface for query result caching.
+ *
+ * The four methods below are named and shaped after PSR-16, but this is not
+ * PSR-16 and does not claim to be: it omits clear(), getMultiple(),
+ * setMultiple() and deleteMultiple(), and it does not throw on invalid keys.
+ * Neither direction is interchangeable — a class written against this
+ * interface is not a PSR-16 cache, and a PSR-16 cache does not satisfy this
+ * interface without an adapter declaring `implements CacheInterface`. Writing
+ * that adapter is a few lines, since every method here has a PSR-16
+ * counterpart with compatible semantics.
+ *
+ * Only get() and set() are called by the query cache. delete() and has() are
+ * part of the contract for drivers that want them and for callers holding a
+ * driver directly; nothing in the framework invalidates cache entries, so a
+ * cached result stays served until its TTL runs out.
  */
 interface CacheInterface
 {

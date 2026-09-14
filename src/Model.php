@@ -8,9 +8,12 @@ use Simsoft\DB\Builder\Delete;
 use Simsoft\DB\Builder\Insert;
 use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Builder\Update;
+use Simsoft\DB\Exceptions\MassAssignmentException;
 use Simsoft\DB\Exceptions\QueryException;
+use Simsoft\DB\Traits\CastsAttributes;
 use Simsoft\DB\Traits\Error;
 use Simsoft\DB\Traits\HasEvents;
+use Simsoft\DB\Traits\ResolvesRelations;
 use stdClass;
 use Throwable;
 
@@ -21,8 +24,10 @@ use Throwable;
  */
 abstract class Model implements ArrayAccess
 {
+    use CastsAttributes;
     use Error;
     use HasEvents;
+    use ResolvesRelations;
 
     /** @var string|array<int, string> Primary key fields */
     protected string|array $primaryKey = 'id';
@@ -45,11 +50,35 @@ abstract class Model implements ArrayAccess
     /** @var array<int, string> Attributes that are mass assignable */
     protected array $fillable = [];
 
+    /**
+     * @var bool Whether a model declaring neither $fillable nor $guarded rejects
+     *           mass assignment outright.
+     *
+     * A model that declares neither accepts every column except its primary key,
+     * so `$model->fill($request)` writes whatever the request happens to contain.
+     * That is convenient in a prototype and a liability in production, but making
+     * it the default would break existing models silently, at runtime, in exactly
+     * the paths that matter. So it is opt-in: call
+     * `Model::requireAssignmentRules()` during bootstrap and any model that
+     * has not declared its rules throws instead of guessing.
+     */
+    protected static bool $strictAssignment = false;
+
+    /** @var bool Whether the model class declared $fillable or $guarded itself. */
+    private bool $hasAssignmentRules = false;
+
     /** @var array<string, int> Dirty attributes */
     protected array $dirtyAttributes = [];
 
     /**
-     * @var array<string, string> Attributes casts. Supported casts' int, bool, float, string, array
+     * @var array<string, string> Attribute casts.
+     *
+     * Supported: int, integer, bool, boolean, float, double, real, string,
+     * binary, array, json. Any other name throws — a cast the model asked for
+     * and did not get is worse than one it never declared.
+     *
+     * A cast never applies to NULL: a nullable column reads back as null and
+     * can be cleared by assigning null.
      *
      * protected array $casts = [
      *  'attribute1' => 'int',
@@ -109,6 +138,11 @@ abstract class Model implements ArrayAccess
     final public function __construct(array $attributes = [], bool $setNew = true)
     {
         $this->exists = !$setNew;
+
+        // Recorded before the primary key is appended below, which would
+        // otherwise make every model look like it had declared a rule.
+        $this->hasAssignmentRules = $this->guarded !== [] || $this->fillable !== [];
+
         foreach ($attributes as $attribute => $value) {
             $this->$attribute = $value;
         }
@@ -166,7 +200,14 @@ abstract class Model implements ArrayAccess
      */
     public function __set(string $name, mixed $value): void
     {
-        if ($this->isNew() && $value !== null) {
+        $cast = $this->castValue($name, $value);
+
+        // A NULL the caller assigned is a value, not the absence of one. Skipping
+        // it here meant `$model->parent_id = null` on a new record never entered
+        // dirtyAttributes, so insert() left the column out of the statement
+        // entirely and the table DEFAULT won instead — the row came back holding
+        // 5 where the caller had explicitly written null.
+        if ($this->isNew()) {
             $this->dirtyAttributes[$name] = 1;
         }
 
@@ -175,25 +216,12 @@ abstract class Model implements ArrayAccess
                 $this->tableFields[$name] = gettype($value);
             }
 
-            if (!empty($this->tableFields[$name]) && ($this->attributes[$name] ?? null) != $value) {
+            if ($this->isChanged($name, $cast)) {
                 $this->dirtyAttributes[$name] = 1;
             }
         }
 
-        if (array_key_exists($name, $this->casts)) {
-            match ($this->casts[$name]) {
-                'int', 'integer' => $this->attributes[$name] = (int)$value,
-                'bool', 'boolean' => $this->attributes[$name] = $this->castToBoolean($value),
-                'float', 'double', 'real' => $this->attributes[$name] = (float)$value,
-                'string', 'binary' => $this->attributes[$name] = (string)$value,
-                'array' => $this->attributes[$name] = (array)$value,
-                'json' => $this->attributes[$name] = is_string($value) ? $value : json_encode($value),
-                default => $this->attributes[$name] = $value,
-            };
-            return;
-        }
-
-        $this->attributes[$name] = $value;
+        $this->attributes[$name] = $cast;
     }
 
     /**
@@ -204,22 +232,17 @@ abstract class Model implements ArrayAccess
      */
     public function __get(string $name): mixed
     {
-        if (array_key_exists($name, $this->casts)) {
-            $this->attributes[$name] = match ($this->casts[$name]) {
-                'int', 'integer' => (int)($this->attributes[$name] ?? 0),
-                'bool', 'boolean' => $this->castToBoolean($this->attributes[$name] ?? false),
-                'float', 'double', 'real' => (float)($this->attributes[$name] ?? 0.00),
-                'string', 'binary' => (string)($this->attributes[$name] ?? ''),
-                'array' => (array)($this->attributes[$name] ?? []),
-                'json' => is_string($this->attributes[$name] ?? null)
-                    ? json_decode($this->attributes[$name], true) ?? []
-                    : ($this->attributes[$name] ?? []),
-                default => $this->attributes[$name] ?? null,
-            };
+        // Reading assigned into $attributes, so merely LOOKING at an attribute
+        // rewrote the model: a column holding NULL in the database read back as 0
+        // and then reported 0 from toArray(), toJson() and getAttributes(), with
+        // no way left to tell a real zero from a missing value. Reading is now a
+        // read — the stored value is left exactly as the database gave it.
+        if (array_key_exists($name, $this->casts) && array_key_exists($name, $this->attributes)) {
+            return $this->readCast($name, $this->attributes[$name]);
         }
 
         if (array_key_exists($name, $this->attributes)) {
-            return $this->attributes[$name] ?? null;
+            return $this->attributes[$name];
         }
 
         // Return pre-loaded relation (from eager loading or previous lazy load)
@@ -227,8 +250,11 @@ abstract class Model implements ArrayAccess
             return $this->relations[$name];
         }
 
-        // Lazy load: call the relation method and cache the result
-        if (method_exists($this, $name)) {
+        // Lazy load: call the relation method and cache the result.
+        //
+        // Only methods that declare they return a Relation are eligible; see
+        // ResolvesRelations for why method_exists() alone was not enough.
+        if ($this->isRelationMethod($name)) {
             return $this->relations[$name] = $this->{$name}()->fetch();
         }
 
@@ -236,47 +262,48 @@ abstract class Model implements ArrayAccess
     }
 
     /**
-     * Cast a value to boolean, handling PostgreSQL string representations.
+     * Determine whether a property has a value.
      *
-     * PostgreSQL returns boolean columns as 't'/'f' or 'true'/'false' strings
-     * depending on PDO configuration. This method normalizes all formats.
+     * Reads the property to decide, so testing an unloaded relation lazy-loads
+     * it exactly as reading it would; the result is cached, so the query
+     * happens once. Use {@see relationLoaded()} to ask whether a relation is
+     * already in memory without going to the database.
      *
-     * @param mixed $value The value to cast.
-     * @return bool
-     */
-    private function castToBoolean(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        if (is_string($value)) {
-            return !in_array(strtolower($value), ['f', 'false', '0', '', 'no', 'off'], true);
-        }
-
-        return (bool)$value;
-    }
-
-    /**
-     * Determine is attribute empty.
-     *
-     * @param string $name The attribute name.
+     * @param string $name The attribute or relation name.
      * @return bool
      */
     public function __isset(string $name): bool
     {
-        return isset($this->attributes[$name]);
+        // Checking $attributes alone ignored relations, so isset() disagreed
+        // with reading: `$user->profile` answered with a UserProfile while
+        // `isset($user->profile)` was false, and `$user->profile ?? $default`
+        // therefore discarded a loaded object and took the default. Deferring
+        // to __get() keeps the two in step — true exactly when reading the
+        // property answers with something other than null, which is also what
+        // isset() means for an ordinary property holding NULL.
+        return $this->__get($name) !== null;
     }
 
     /**
-     * Allow unset attribute.
+     * Discard an attribute or a loaded relation.
      *
-     * @param string $name The attribute name to be unset.
+     * Unsetting an attribute drops the pending change to it as well: the value
+     * is gone, so there is nothing left to write.
+     *
+     * @param string $name The attribute or relation name to be unset.
      * @return void
      */
     public function __unset(string $name): void
     {
-        unset($this->attributes[$name]);
+        // Only $attributes was cleared, leaving the name in $dirtyAttributes
+        // and in $relations. The stale dirty entry made isDirty('col') and
+        // getDirtyAttributes() name a column the model no longer holds, and
+        // since save() writes array_intersect_key($attributes, $dirty) the
+        // column silently dropped out of the UPDATE — save() returned true
+        // having written nothing, which is indistinguishable from success.
+        // The stale relation meant unset($user->posts) left the loaded posts
+        // readable and still serialized by toArray().
+        unset($this->attributes[$name], $this->dirtyAttributes[$name], $this->relations[$name]);
     }
 
     /**
@@ -508,18 +535,14 @@ abstract class Model implements ArrayAccess
      */
     public static function findByPk(string|int|array $pk): ?static
     {
-        $model = new static();
-        $primaryKeyField = $model->getPrimaryKeyFields();
+        // Both shapes are resolved by the query, so that the same call reaching
+        // the same lookup by a different route behaves the same way. Returning
+        // null for a composite key given a scalar was indistinguishable from
+        // "no such row", which is the one thing a lookup must not be vague
+        // about; the query says which columns it wanted instead.
+        $model = static::find()->findByPk($pk);
 
-        if (is_array($pk)) {
-            return static::find()->findByPk($pk);
-        }
-
-        if (is_string($primaryKeyField)) {
-            return static::find()->findByPk([$primaryKeyField => $pk]);
-        }
-
-        return null;
+        return $model instanceof static ? $model : null;
     }
 
     /**
@@ -549,6 +572,7 @@ abstract class Model implements ArrayAccess
      * Get a model query with its primary keys.
      *
      * @return array<int, array{0: string, 1: string, 2: mixed}>
+     * @throws QueryException If the model exists but a key attribute is missing.
      */
     protected function getPKs(): array
     {
@@ -558,16 +582,43 @@ abstract class Model implements ArrayAccess
             return $keys;
         }
 
-        if (is_array($this->primaryKey)) {
-            foreach ($this->primaryKey as $attribute) {
-                $keys[] = [$attribute, '=', $this->{$attribute}];
-            }
-            return $keys;
+        $attributes = is_array($this->primaryKey) ? $this->primaryKey : [$this->primaryKey];
+
+        foreach ($attributes as $attribute) {
+            $keys[] = [$attribute, '=', $this->requireKeyValue($attribute)];
         }
 
-        $keys[] = [$this->primaryKey, '=', $this->{$this->primaryKey}];
-
         return $keys;
+    }
+
+    /**
+     * Read a primary key value, refusing to proceed without one.
+     *
+     * @param string $attribute The primary key attribute.
+     * @return mixed The key value.
+     * @throws QueryException If the value is null.
+     */
+    private function requireKeyValue(string $attribute): mixed
+    {
+        $value = $this->{$attribute};
+
+        if ($value !== null) {
+            return $value;
+        }
+
+        // A null key built `WHERE id = ?` bound to null, which matches no row
+        // in SQL. update(), delete() and updateCounter() then affected nothing
+        // and returned true — the driver reports a successful statement, not a
+        // matched row — so `unset($user->id); $user->delete();` reported the
+        // record deleted while it was still in the table. Refusing here turns a
+        // silent no-op into an error at the point the key went missing.
+        throw new QueryException(sprintf(
+            'Cannot build a primary key condition for %s: the key attribute "%s" is null.'
+            . ' The model is marked as existing but has no key, so the statement would match no row'
+            . ' while reporting success. Reload it with refresh() or assign the key.',
+            static::class,
+            $attribute
+        ));
     }
 
     /**
@@ -620,6 +671,8 @@ abstract class Model implements ArrayAccess
      */
     protected function filterMassAssignable(array $attributes): array
     {
+        $this->guardUnrestrictedMassAssignment($attributes);
+
         foreach ($this->aliasAttributes as $alias => $attribute) {
             if (array_key_exists($alias, $attributes)) {
                 $attributes[$attribute] = $attributes[$alias];
@@ -640,6 +693,62 @@ abstract class Model implements ArrayAccess
     }
 
     /**
+     * Require every model to declare its mass assignment rules.
+     *
+     * Call this once during bootstrap. A model that declares neither
+     * `$fillable` nor `$guarded` then throws on mass assignment rather than
+     * accepting every column, which turns an easily missed omission into a
+     * failure you find on the first request instead of after a bad write.
+     *
+     * Direct assignment (`$model->column = $value`) is unaffected, as are
+     * `updateAttributes()` and the other documented bypasses.
+     *
+     * @return void
+     */
+    public static function requireAssignmentRules(): void
+    {
+        static::$strictAssignment = true;
+    }
+
+    /**
+     * Go back to accepting models that declare no mass assignment rules.
+     *
+     * The default. Provided so a test or a one-off script can undo
+     * {@see requireAssignmentRules()} without restarting the process.
+     *
+     * @return void
+     */
+    public static function allowUndeclaredAssignment(): void
+    {
+        static::$strictAssignment = false;
+    }
+
+    /**
+     * Reject mass assignment on a model that declared no rules.
+     *
+     * @param array<string, mixed> $attributes The attributes being assigned.
+     * @return void
+     * @throws MassAssignmentException If rules are required but not declared.
+     */
+    private function guardUnrestrictedMassAssignment(array $attributes): void
+    {
+        if (!static::$strictAssignment || $attributes === []) {
+            return;
+        }
+
+        if ($this->hasAssignmentRules) {
+            return;
+        }
+
+        throw new MassAssignmentException(sprintf(
+            '%s declares neither $fillable nor $guarded, so mass assignment cannot be '
+            . 'checked. Declare $fillable with the attributes that may be filled from '
+            . 'external input, or assign the attributes directly.',
+            static::class
+        ));
+    }
+
+    /**
      * Get all attributes.
      *
      * @return array<string, mixed>
@@ -652,7 +761,10 @@ abstract class Model implements ArrayAccess
     /**
      * Convert model to array.
      *
-     * Includes attributes and loaded relations.
+     * Includes attributes and loaded relations. Cast attributes are presented
+     * through their cast, so a 'json' column serializes as the decoded document
+     * rather than the encoded string, and matches what reading the property
+     * gives. {@see getAttributes()} returns the raw stored values instead.
      *
      * @param array<int, string>|null $fields Specific fields to include. Null for all.
      * @return array<string, mixed>
@@ -662,6 +774,12 @@ abstract class Model implements ArrayAccess
         $attributes = $fields === null
             ? $this->attributes
             : array_intersect_key($this->attributes, array_flip($fields));
+
+        foreach (array_keys($this->casts) as $name) {
+            if (array_key_exists($name, $attributes)) {
+                $attributes[$name] = $this->readCast($name, $attributes[$name]);
+            }
+        }
 
         foreach ($this->relations as $name => $related) {
             if ($fields !== null && !in_array($name, $fields)) {
@@ -677,7 +795,8 @@ abstract class Model implements ArrayAccess
     /**
      * Serialize a single relation value for toArray output.
      *
-     * @param mixed $related The relation value (null, Model, or array of Models).
+     * @param mixed $related The relation value: null, a Model, or a list of
+     *                       Models as either an array or a Collection.
      * @return mixed
      */
     private function serializeRelation(mixed $related): mixed
@@ -688,6 +807,16 @@ abstract class Model implements ArrayAccess
 
         if ($related instanceof self) {
             return $related->toArray();
+        }
+
+        // A to-many relation arrives as an array when eager-loaded and as a
+        // Collection when lazy-loaded, and only the array was serialized. The
+        // Collection fell through to "return it unchanged", so toJson() encoded
+        // three posts as the empty object {} — Collection exposes no public
+        // properties for json_encode to find — while the same model loaded with
+        // with('posts') produced the full list.
+        if ($related instanceof Collection) {
+            $related = iterator_to_array($related);
         }
 
         if (!is_array($related)) {
@@ -913,7 +1042,7 @@ abstract class Model implements ArrayAccess
         }
 
         $this->beforeSave();
-        $saved = $isNew ? $this->insert() : $this->update();
+        $saved = $isNew ? $this->insert() : $this->performUpdate();
 
         if ($saved) {
             $this->afterSave();
@@ -977,34 +1106,16 @@ abstract class Model implements ArrayAccess
         $model = new static();
         $table = $model->getTable();
         $connectionName = $model->getConnectionName();
-        $grammar = Connection::grammar($connectionName);
         $inserted = 0;
 
-        $columns = array_keys($records[0]);
         $chunkSize = max(1, $chunkSize);
 
+        // Built here from a Raw, this assembled the same multi-row statement
+        // Insert already builds — minus the identifier validation, and minus the
+        // check that no record names a column the first one does not, whose
+        // value would otherwise be dropped without a word.
         foreach (array_chunk($records, $chunkSize) as $chunk) {
-            $placeholders = '(' . implode(',', array_fill(0, count($columns), '?')) . ')';
-            $allPlaceholders = implode(',', array_fill(0, count($chunk), $placeholders));
-
-            $quotedColumns = array_map(
-                static fn(string $col): string => $grammar->quoteIdentifier($col),
-                $columns
-            );
-
-            $sql = 'INSERT INTO ' . $grammar->quoteIdentifier($table)
-                . ' (' . implode(',', $quotedColumns) . ') VALUES ' . $allPlaceholders;
-
-            $binds = [];
-            foreach ($chunk as $record) {
-                foreach ($columns as $col) {
-                    $binds[] = $record[$col] ?? null;
-                }
-            }
-
-            $raw = new Raw($sql, $binds);
-            $raw->withConnection($connectionName);
-            $raw->execute();
+            (new Insert($table, $chunk))->withConnection($connectionName)->execute();
             $inserted += count($chunk);
         }
 
@@ -1080,6 +1191,11 @@ abstract class Model implements ArrayAccess
      * Attributes already set by direct assignment (and therefore tracked as
      * dirty) are trusted and always included.
      *
+     * The `beforeSave()` hook runs first, so traits that maintain columns
+     * automatically — `Timestamps` and its `updated_at` in particular — apply
+     * here just as they do for `save()`. Events are not fired; call `save()`
+     * when you need those.
+     *
      * To write a guarded attribute deliberately, assign it directly and call
      * `save()`, or use `updateAttributes()` to bypass these rules.
      *
@@ -1088,25 +1204,43 @@ abstract class Model implements ArrayAccess
      */
     public function update(array $attributes = []): bool
     {
-        if ($this->exists()) {
-            $attributes = array_merge(
-                array_intersect_key($this->attributes, $this->dirtyAttributes),
-                $this->filterMassAssignable($attributes)
-            );
-            if ($attributes === []) { // nothing to update
-                return true;
-            }
-
-            $result = (new Update($this->getTable(), $attributes, static::find()->where($this->getPKs())))
-                ->withConnection($this->getConnectionName())->execute();
-
-            if ($result) {
-                $this->dirtyAttributes = [];
-            }
-
-            return $result;
+        if (!$this->exists()) {
+            return false;
         }
-        return false;
+
+        $this->beforeSave();
+
+        return $this->performUpdate($attributes);
+    }
+
+    /**
+     * Write the pending changes for an existing record.
+     *
+     * Split out from update() so that save(), which has already run
+     * beforeSave(), does not run it a second time.
+     *
+     * @param array<string, mixed> $attributes Mass-assignable attributes to apply.
+     * @return bool
+     */
+    private function performUpdate(array $attributes = []): bool
+    {
+        $attributes = array_merge(
+            array_intersect_key($this->attributes, $this->dirtyAttributes),
+            $this->filterMassAssignable($attributes)
+        );
+
+        if ($attributes === []) { // nothing to update
+            return true;
+        }
+
+        $result = (new Update($this->getTable(), $attributes, static::find()->where($this->getPKs())))
+            ->withConnection($this->getConnectionName())->execute();
+
+        if ($result) {
+            $this->dirtyAttributes = [];
+        }
+
+        return $result;
     }
 
     /**
@@ -1192,12 +1326,46 @@ abstract class Model implements ArrayAccess
      *
      * @param string|ActiveQuery|Raw $condition The delete condition.
      * @return bool
+     * @throws QueryException If the condition would not narrow the delete.
      */
     public function deleteAll(string|ActiveQuery|Raw $condition): bool
     {
+        // The type declaration was the whole guard, and it only rules out
+        // null. An empty string, a Raw holding '', or an ActiveQuery with no
+        // conditions all built a bare `DELETE FROM table` and emptied it —
+        // which is precisely the accident this method exists to prevent, and
+        // it arrives through the most ordinary route there is: a filter that
+        // came back empty, so the condition assembled to nothing.
+        $this->requireNarrowingCondition($condition);
+
         return (new Delete($this->getTable(), $condition))
             ->withConnection($this->getConnectionName())
             ->execute();
+    }
+
+    /**
+     * Refuse a condition that would delete every row.
+     *
+     * @param string|ActiveQuery|Raw $condition The condition handed to deleteAll().
+     * @return void
+     * @throws QueryException If the condition contributes no WHERE clause.
+     */
+    private function requireNarrowingCondition(string|ActiveQuery|Raw $condition): void
+    {
+        $narrows = match (true) {
+            $condition instanceof ActiveQuery => $condition->getWhereSQL() !== null,
+            $condition instanceof Raw => $condition->getSQL() !== '',
+            default => trim($condition) !== '',
+        };
+
+        if ($narrows) {
+            return;
+        }
+
+        throw new QueryException(
+            'deleteAll() requires a condition that narrows the delete; the one given was empty. '
+            . 'Call deleteAllUnchecked() to delete every row on purpose.'
+        );
     }
 
     /**
@@ -1343,7 +1511,14 @@ abstract class Model implements ArrayAccess
      */
     protected function isRelationKey(string $key, mixed $value): bool
     {
-        if (!method_exists($this, $key)) {
+        // method_exists() alone let this CALL any method whose name happened to
+        // appear as a key: `saveTogether(['delete' => [...]])` ran delete() and
+        // removed the row, then carried on saving. Payload keys routinely come
+        // from a request body, so the caller does not choose these names.
+        // This is the same hole ResolvesRelations closed for property reads,
+        // and it is closed the same way — only methods that declare they return
+        // a Relation and take no required arguments are eligible.
+        if (!$this->isRelationMethod($key)) {
             return false;
         }
 
@@ -1355,9 +1530,7 @@ abstract class Model implements ArrayAccess
             return false;
         }
 
-        $result = $this->{$key}();
-
-        return $result instanceof Relation;
+        return $this->{$key}() instanceof Relation;
     }
 
     /**
@@ -1388,6 +1561,7 @@ abstract class Model implements ArrayAccess
      * @param string $relationName The relation method name.
      * @param mixed $data The relation data.
      * @return bool
+     * @throws QueryException If a related record refused to save.
      */
     protected function saveRelationData(string $relationName, mixed $data): bool
     {
@@ -1398,44 +1572,10 @@ abstract class Model implements ArrayAccess
         }
 
         if (!$relation->isMultiple()) {
-            return $this->saveHasOneRelation($relation, $data);
+            return $this->saveRelatedItem($relation, $data);
         }
 
         return $this->saveHasManyRelation($relation, $data);
-    }
-
-    /**
-     * Save a hasOne relation with nested support.
-     *
-     * @param Relation $relation The relation instance.
-     * @param mixed $data Array or Model.
-     * @return bool
-     */
-    private function saveHasOneRelation(Relation $relation, mixed $data): bool
-    {
-        if ($data instanceof self) {
-            $relation->save($data);
-            return true;
-        }
-
-        if (!is_array($data)) {
-            return true;
-        }
-
-        $relatedClass = $relation->getRelatedClass();
-        /** @var Model $tempModel */
-        $tempModel = new $relatedClass();
-        [$attributes, $nestedRelations] = $tempModel->separateRelations($data);
-
-        $savedModel = $relation->save($attributes);
-
-        foreach ($nestedRelations as $nestedName => $nestedData) {
-            if (!$savedModel->saveRelationData($nestedName, $nestedData)) {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     /**
@@ -1452,7 +1592,7 @@ abstract class Model implements ArrayAccess
         }
 
         foreach ($data as $item) {
-            if (!$this->saveHasManyItem($relation, $item)) {
+            if (!$this->saveRelatedItem($relation, $item)) {
                 return false;
             }
         }
@@ -1461,13 +1601,17 @@ abstract class Model implements ArrayAccess
     }
 
     /**
-     * Save a single hasMany item with nested support.
+     * Save one related record and then its own nested relations.
+     *
+     * Serves both hasOne and one element of a hasMany. These were two
+     * near-identical private methods; keeping one meaning in one place is the
+     * only way a fix to it cannot reach one arm and miss the other.
      *
      * @param Relation $relation The relation instance.
      * @param mixed $item A Model instance or attributes array.
      * @return bool
      */
-    private function saveHasManyItem(Relation $relation, mixed $item): bool
+    private function saveRelatedItem(Relation $relation, mixed $item): bool
     {
         if ($item instanceof self) {
             $relation->save($item);

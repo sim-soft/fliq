@@ -97,11 +97,13 @@ class UserObserver
      * Handle the model is being created (before INSERT) event.
      *
      * @param User $user The model instance.
-     * @return void Return false to cancel the operation.
+     * @return bool|null Return false to cancel the operation; null to continue.
      */
-    public function creating(User $user): void
+    public function creating(User $user): ?bool
     {
         //
+
+        return null;
     }
 
     /**
@@ -119,11 +121,13 @@ class UserObserver
      * Handle the model is being updated (before UPDATE) event.
      *
      * @param User $user The model instance.
-     * @return void Return false to cancel the operation.
+     * @return bool|null Return false to cancel the operation; null to continue.
      */
-    public function updating(User $user): void
+    public function updating(User $user): ?bool
     {
         //
+
+        return null;
     }
 
     /**
@@ -141,11 +145,13 @@ class UserObserver
      * Handle the model is being saved (before INSERT or UPDATE) event.
      *
      * @param User $user The model instance.
-     * @return void Return false to cancel the operation.
+     * @return bool|null Return false to cancel the operation; null to continue.
      */
-    public function saving(User $user): void
+    public function saving(User $user): ?bool
     {
         //
+
+        return null;
     }
 
     /**
@@ -163,11 +169,13 @@ class UserObserver
      * Handle the model is being deleted (before DELETE) event.
      *
      * @param User $user The model instance.
-     * @return void Return false to cancel the operation.
+     * @return bool|null Return false to cancel the operation; null to continue.
      */
-    public function deleting(User $user): void
+    public function deleting(User $user): ?bool
     {
         //
+
+        return null;
     }
 
     /**
@@ -186,6 +194,11 @@ class UserObserver
 Each method is empty — you fill in the ones you need and delete the ones you
 don't.
 
+The four "before" methods return `?bool` rather than `void`, because returning
+`false` from one cancels the operation. Leave the `return null;` in place when
+you don't want to cancel: a `?bool` method that falls off its end raises a
+TypeError, and `null` means "carry on".
+
 ---
 
 ## Step 2: Add Your Logic
@@ -193,18 +206,22 @@ don't.
 Open the generated file and add your code. For example:
 
 ```php
-public function creating(User $user): void
+public function creating(User $user): ?bool
 {
     /* Auto-generate slug from username */
     $user->slug = strtolower(str_replace(' ', '-', $user->username));
+
+    return null; /* Carry on with the insert */
 }
 
-public function deleting(User $user): void
+public function deleting(User $user): ?bool
 {
     /* Don't allow deleting admin users */
     if ($user->role === 'admin') {
-        return false; /* This cancels to delete */
+        return false; /* This cancels the delete */
     }
+
+    return null;
 }
 ```
 
@@ -282,14 +299,18 @@ This creates an observer with only two methods instead of eight:
 ```php
 class OrderObserver
 {
-    public function creating(Order $order): void
+    public function creating(Order $order): ?bool
     {
         //
+
+        return null;
     }
 
-    public function deleting(Order $order): void
+    public function deleting(Order $order): ?bool
     {
         //
+
+        return null;
     }
 }
 ```
@@ -301,7 +322,7 @@ You can pick any combination from this list:
 `creating`, `created`, `updating`, `updated`, `saving`, `saved`, `deleting`,
 `deleted`
 
-Separate them with commas (no spaces):
+Separate them with commas; surrounding spaces are trimmed:
 
 ```bash
 vendor/bin/fliq make:observer Payment --events=creating,created,saving,saved
@@ -316,9 +337,11 @@ vendor/bin/fliq make:observer Payment --events=creating,created,saving,saved
 ```php
 class PostObserver
 {
-    public function creating(Post $post): void
+    public function creating(Post $post): ?bool
     {
         $post->slug = strtolower(str_replace(' ', '-', $post->title));
+
+        return null;
     }
 }
 ```
@@ -328,12 +351,14 @@ class PostObserver
 ```php
 class UserObserver
 {
-    public function deleting(User $user): void
+    public function deleting(User $user): ?bool
     {
         /* Block deletion of admin accounts */
         if ($user->role === 'admin') {
             return false;
         }
+
+        return null;
     }
 }
 ```

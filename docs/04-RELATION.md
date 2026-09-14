@@ -2,7 +2,9 @@
 
 ## Table of Contents
 - [Declare Relations](#declare-relations)
+  - [What counts as a relation method](#what-counts-as-a-relation-method)
 - [Accessing Related Records](#accessing-related-records)
+  - [When the key is NULL](#when-the-key-is-null)
 - [Filtering Related Records](#filtering-related-records)
 - [Relation Types](#relation-types)
 - [Eager Loading](#eager-loading)
@@ -91,6 +93,35 @@ class Post extends Model
 }
 ```
 
+### What counts as a relation method
+
+A method is treated as a relation only if it is **public**, **not static**, takes
+**no required arguments**, and declares **`Relation`** as its return type.
+Anything else is an ordinary method and reading its name as a property returns
+`null`, the same as any absent attribute.
+
+The return type must not be nullable. `?Relation` and `Relation|null` are
+rejected:
+
+```php
+public function posts(): Relation            // a relation
+
+public function posts(): ?Relation           // NOT — nullable
+public function posts(): Relation|null       // NOT — nullable, spelled out
+public function posts()                      // NOT — no declared type
+public function posts(int $limit): Relation  // NOT — requires an argument
+protected function posts(): Relation         // NOT — not public
+public static function posts(): Relation     // NOT — static
+```
+
+The declaration is what makes the relation usable without checking: PHP enforces
+a non-nullable return type itself, so `$user->posts` and `with('posts')` can rely
+on getting a `Relation` back. A nullable type promises nothing, so it is not
+accepted rather than being accepted and failing later.
+
+`has('posts')` reports an unusable declaration by name; property reads and eager
+loading treat it as an absent attribute.
+
 ## Accessing Related Records
 
 Related records are loaded lazily when accessed as properties:
@@ -110,6 +141,24 @@ foreach ($user->posts as $post) {
 $post = Post::findByPk(1);
 echo $post->author->name; // loads the User
 ```
+
+### When the key is NULL
+
+A relation matches on the parent's local key. If that value is `null` — the
+parent has not been saved yet, or its foreign key column is nullable and unset —
+there is nothing to match on, and the relation is empty:
+
+```php
+$post = new Post();          // not saved, so no id yet
+$post->comments;             // empty Collection, not every comment in the table
+
+$post = Post::findByPk(1);   // saved, but category_id is NULL
+$post->category;             // null, not an arbitrary Category
+```
+
+This is not the same as `WHERE category_id IS NULL`. A missing key means "no
+related records", not "records whose key is also null" — if you want the latter,
+query it explicitly with `Category::find()->isNull('parent_id')`.
 
 ## Filtering Related Records
 
@@ -255,8 +304,8 @@ $users = User::find()
 // Multiple constrained relations
 $users = User::find()
     ->with([
-        'posts' => fn($query) => $query->where('published', true)->limit(5),
-        'profile' => fn($query) => $query->select('user_id', 'avatar', 'bio'),
+        'posts' => fn($query) => $query->where('published', true),
+        'profile' => fn($query) => $query->select('avatar', 'bio'),
     ])
     ->get();
 
@@ -267,6 +316,29 @@ $users = User::find()
 ```
 
 The callback receives the `ActiveQuery` for the related model — use any query builder method.
+
+You do not need to select the foreign key. It is added to the batch after your
+callback runs, and removed again from the models handed back, so `select('title')`
+gives you models holding exactly `title` and every parent still gets its rows.
+
+**`limit()` applies to the batch, not to each parent.** Eager loading fetches the
+related rows for every parent in one query, so a limit caps that one result set:
+`limit(5)` returns five rows in total, and the parents whose rows fall past the
+cap get an empty list — which is indistinguishable from having none. The same is
+true of `offset()`. For "the newest three posts per user", query the posts
+directly and group them yourself, or load them per user:
+
+```php
+/* Not this — 5 posts in total, shared out first-come-first-served */
+User::find()->with(['posts' => fn($query) => $query->limit(5)])->get();
+
+/* This — 5 posts for this user */
+$user = User::findByPk(1);
+$posts = $user->posts()->orderBy('published_at', 'DESC')->limit(5)->fetch();
+```
+
+`orderBy()` inside a constraint is safe, and orders the rows within each parent's
+group as you would expect.
 
 ## Filtering by Relations
 
@@ -311,6 +383,53 @@ $users = User::find()
     ->whereHas('posts', fn($query) => $query->where('published', true))
     ->has('profile')
     ->orderBy('name')
+    ->get();
+```
+
+### The relation name must exist
+
+All four methods resolve the name against the model and throw
+`InvalidArgumentException` if it is not a relation:
+
+```php
+User::find()->has('psots');    // InvalidArgumentException: no method 'psots'
+User::find()->has('getTable'); // InvalidArgumentException: does not return a relation
+```
+
+A filter that cannot be applied would otherwise return *more* rows than asked
+for — the one wrong answer a caller has no way to notice.
+
+### Aliases, self-relations and junction tables
+
+The sub-query correlates to whatever the parent is called in the query it is
+embedded in, so `alias()` works with any relation filter:
+
+```php
+/* SELECT `u`.* FROM `user` `u`
+   WHERE EXISTS (SELECT 1 FROM `post` WHERE `post`.`user_id` = `u`.`id`) */
+User::find()->alias('u')->has('posts')->get();
+```
+
+A self-referencing relation would put the same name on both sides, so the inner
+table is given a `_exists` suffix. Use that name to qualify columns in a
+callback:
+
+```php
+/* SELECT `category`.* FROM `category` WHERE EXISTS
+     (SELECT 1 FROM `category` `category_exists`
+      WHERE `category_exists`.`parent_id` = `category`.`id`) */
+Category::find()->has('children')->get();
+```
+
+For a `viaTable()` (M:N) relation, existence is decided on the junction table —
+the related table itself is not queried, so a callback constrains the junction:
+
+```php
+/* SELECT `post`.* FROM `post` WHERE EXISTS
+     (SELECT 1 FROM `post_tag` WHERE `post_tag`.`post_id` = `post`.`id`
+      AND `post_tag`.`tag_id` < ?) */
+Post::find()
+    ->whereHas('tags', fn($query) => $query->where('tag_id', '<', 3))
     ->get();
 ```
 
@@ -417,6 +536,13 @@ $post = Post::findByPk(1);
 $post->tags()->attach([1, 2, 3]);
 /* INSERT INTO post_tag (post_id, tag_id) VALUES (1,1), (1,2), (1,3) */
 ```
+
+**Re-attaching an existing pair fails.** Pivot tables normally carry a primary
+key or unique index across both columns, so attaching a pair that is already
+there raises a duplicate-key `QueryException`. All the pairs go into one
+multi-row `INSERT`, so a collision on any one of them rolls back the whole
+batch — nothing is attached. Use [`sync()`](#sync--make-pivot-match-exactly-the-given-ids)
+when the IDs may already be attached, or filter them yourself first.
 
 ### `detach()` — Remove pivot table entries (M:N only)
 
@@ -535,7 +661,33 @@ $user->saveTogether([
 | Model from `findByPk()` | Yes (`exists()` = true) | UPDATE |
 | `new Model([...])` | No (`isNew()` = true) | INSERT |
 
-**Transaction safety:** If any save fails (FK violation, unique constraint, etc.), the entire operation rolls back — no partial saves.
+**Transaction safety:** If any save fails, the entire operation rolls back — no partial
+saves. This covers both kinds of failure:
+
+- A **driver error** (FK violation, unique constraint, and so on) raises `QueryException`
+  from the driver.
+- A **refusal** — `validate()` returning false, or a `beforeSave()` hook returning false —
+  raises `QueryException` from `Relation::save()`, carrying the model's own error messages.
+
+Either way the transaction is rolled back and the exception reaches the caller, so the
+parent is never committed without its children.
+
+```php
+try {
+    $user->saveTogether([
+        'username' => 'john',
+        'email'    => 'john@test.com',
+        'posts'    => [['title' => 'First', 'slug' => 'first', 'body' => 'x', 'category_id' => 1, 'status_code' => 1]],
+    ]);
+} catch (QueryException $e) {
+    /* Nothing was written — not the user, not the post. */
+    echo $e->getMessage();
+}
+```
+
+> **Note:** a related model that refuses to save used to be skipped silently, and
+> `saveTogether()` returned `true` having committed the parent alone. It now throws.
+> If you were relying on the old behaviour, validate before calling rather than after.
 
 ### Using Manual Transactions
 
@@ -559,9 +711,9 @@ User::transaction(function () {
 
 | Method | Relation type | What it does |
 |--------|--------------|--------------|
-| `saveTogether(array)` | Any | Saves model + all nested relations in one transaction |
-| `save(Model\|array)` | hasOne / hasMany | Sets FK, saves one model |
-| `saveMany(array)` | hasMany | Sets FK, saves multiple models |
+| `saveTogether(array)` | Any | Saves model + all nested relations in one transaction. Throws `QueryException` and rolls back if any part fails |
+| `save(Model\|array)` | hasOne / hasMany | Sets FK, saves one model. Throws `QueryException` if the model refuses to save |
+| `saveMany(array)` | hasMany | Sets FK, saves multiple models. Throws `QueryException` on the first refusal |
 | `attach(array $ids)` | M:N (viaTable) | INSERT into pivot |
 | `detach(array\|null)` | M:N (viaTable) | DELETE from pivot |
 | `sync(array $ids)` | M:N (viaTable) | Add missing + remove extra from pivot |

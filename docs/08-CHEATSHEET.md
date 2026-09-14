@@ -39,7 +39,7 @@ User::find()->active()->admins()->get();
 | Create               | `$user = new User([...]); $user->save();`       |
 | Update               | `$user->name = 'new'; $user->save();`           |
 | Delete               | `$user->delete()`                               |
-| Exists check         | `User::find()->where('email', $e)->exists()`    |
+| Exists check         | `User::find()->where('email', '=', $e)->hasRecords()` |
 
 ## Query Builder
 
@@ -53,11 +53,17 @@ User::find()->active()->admins()->get();
 | Paginate        | `User::find()->page(2, 25)->get()`                  |
 | Cursor paginate | `User::find()->cursorPaginate(25, $cursor)`         |
 | Pluck column    | `User::find()->pluck('email')`                      |
-| Raw SQL         | `DB::raw('SELECT ...', [...])`                      |
-| Upsert          | `DB::upsert('users', [...], ['email'])`             |
+| Raw SELECT      | `DB::query('SELECT ...', [...])` — returns rows     |
+| Raw statement   | `DB::raw('UPDATE ...', [...])` — returns bool       |
+| Upsert          | `DB::upsert('users', [...], ['email'], null, ['id'])` |
 | Select raw      | `->selectRaw('COUNT(*) AS total')`                  |
+| Select raw + binds | `->selectRaw('IF(score > ?, 1, 0) AS ok', [$n])` |
 | Order by raw    | `->orderByRaw('FIELD(status, 3, 1, 2)')`            |
+| Order by raw + binds | `->orderByRaw('FIELD(status, ?) DESC', [$first])` |
+| Order by expression | `->orderBy(new Raw('FIELD(status, ?) DESC', [$first]))` |
 | Order by desc   | `->orderByDesc('created_at')`                       |
+| Order by many   | `->orderByDesc(['last_name', 'first_name'])`        |
+| Order per column| `->orderBy(['role', 'score' => 'DESC'])`            |
 | Group by raw    | `->groupByRaw('YEAR(created_at)')`                  |
 | Having raw      | `->havingRaw('COUNT(*) > ?', [5])`                  |
 | Where raw       | `->whereRaw('{salary} * 12 > ?', [100000])`         |
@@ -112,6 +118,9 @@ Clamp anything that comes from a URL: `$page = max(1, (int)($_GET['page'] ?? 1))
 
 Aliases: `whereJsonContains`, `whereJsonDoesntContain`, `whereJsonContainsKey`, `whereJsonDoesntContainKey`, `whereJsonLength`
 
+`jsonHas` and `jsonMissing` need a `->key`; a bare column throws. Use
+`->notNull('meta')` to test that the document itself is present.
+
 ## Array Columns
 
 | Task                 | Code                                             |
@@ -125,6 +134,10 @@ Aliases: `whereJsonContains`, `whereJsonDoesntContain`, `whereJsonContainsKey`, 
 Aliases: `whereArrayContains`, `whereArrayOverlaps`, `orWhereArrayContains`,
 `orWhereArrayOverlaps`
 
+Native on PostgreSQL, emulated over a JSON array column on MySQL and SQLite.
+Pass the element type (`'int'`, `'numeric'`, `'date'`, …) for anything but text,
+or the value is compared as text on MySQL and will not match.
+
 ## CASE WHEN Expressions
 
 | Task              | Code                                                                     |
@@ -136,7 +149,7 @@ Aliases: `whereArrayContains`, `whereArrayOverlaps`, `orWhereArrayContains`,
 | ELSE value        | `->else('F')`                                                            |
 | Alias (SELECT)    | `->as('grade')`                                                          |
 | In select()       | `User::find()->select('name', CaseExpression::when(...)->as('grade'))`   |
-| In orderByRaw     | `->orderByRaw((string) CaseExpression::when(...)->then(1)->else(2))`     |
+| In orderBy        | `->orderBy(CaseExpression::when(...)->then(1)->else(2))`                 |
 
 ## Relations
 
@@ -146,6 +159,12 @@ Aliases: `whereArrayContains`, `whereArrayOverlaps`, `orWhereArrayContains`,
 | Has many        | `$this->hasMany(Post::class, ['user_id' => 'id'])`      |
 | Relation filter | `->whereHas('posts', fn($query) => $query->where(...))` |
 | Doesn't have    | `->doesntHave('posts')`                                 |
+
+Relation filters work under `alias()`, and throw `InvalidArgumentException` if
+the name is not a relation on the model. A self-referencing relation names its
+inner table `<table>_exists`; an M:N relation is tested on the junction table,
+so a callback constrains the junction rather than the related table. See
+[Relations](04-RELATION.md#aliases-self-relations-and-junction-tables).
 
 ## Collection
 
@@ -167,13 +186,20 @@ Aliases: `whereArrayContains`, `whereArrayOverlaps`, `orWhereArrayContains`,
 
 ## Aggregations
 
-| Task    | Code                            |
-|---------|---------------------------------|
-| Count   | `User::find()->count()`         |
-| Sum     | `Order::find()->sum('total')`   |
-| Average | `Product::find()->avg('price')` |
-| Min     | `Product::find()->min('price')` |
-| Max     | `Product::find()->max('price')` |
+| Task           | Code                                            |
+|----------------|-------------------------------------------------|
+| Count          | `User::find()->count()`                         |
+| Sum            | `Order::find()->sum('total')`                   |
+| Average        | `Product::find()->avg('price')`                 |
+| Min            | `Product::find()->min('price')`                 |
+| Max            | `Product::find()->max('price')`                 |
+| Distinct count | `User::find()->countDistinct('role')`           |
+| Distinct sum   | `Order::find()->sumDistinct('total')`           |
+| Total pages    | `User::find()->getTotalPages(20)`               |
+| Result alias   | `User::find()->count('*', 'c')` — `null` omits it |
+
+No matching rows gives `0` (`0.0` for `avg()`), never `null`.
+`countDistinct('*')` is a plain count — `COUNT(DISTINCT *)` is not valid SQL.
 
 ## Transactions
 
@@ -205,6 +231,7 @@ User::transaction(function () {
 | `$model->getDirtyAttributes()`         | List of changed attribute names              |
 | `$model->getAttributes()`              | Get all attributes as array                  |
 | `$model->fill([...])`                  | Mass assign (respects guarded/fillable)      |
+| `Model::requireAssignmentRules()`      | Reject models declaring neither (bootstrap)  |
 | `$model->only(['name', 'email'])`      | Get only specified attributes                |
 | `$model->except(['password'])`         | Get all except specified attributes          |
 | `$model->toArray()`                    | Convert to array (includes loaded relations) |
@@ -224,14 +251,31 @@ User::transaction(function () {
 | `$model->increment('views')`           | Atomic increment                             |
 | `$model->decrement('stock', 5)`        | Atomic decrement                             |
 | `$model->delete()`                     | Delete record                                |
-| `$model->deleteAll($condition)`        | Delete all matching condition                |
+| `$model->deleteAll($condition)`        | Delete all matching condition (throws on an empty one) |
+| `$model->deleteAllUnchecked()`         | Delete every row, deliberately               |
 | `$model->refresh()`                    | Reload from database                         |
 | `$model->replicate()`                  | Clone as new unsaved instance                |
 | `$model->hasOne(Model::class, [...])`  | Define has-one relation                      |
 | `$model->hasMany(Model::class, [...])` | Define has-many relation                     |
 | `$model->setRelation('name', $val)`    | Inject preloaded relation                    |
-| `$model->relationLoaded('name')`       | Check if relation is loaded                  |
-| `$model->saveTogether([...])`          | Save model + nested relations in transaction |
+| `$model->relationLoaded('name')`       | Check if relation is loaded (no query)       |
+| `$model->saveTogether([...])`          | Save model + nested relations in transaction (throws + rolls back on any failure) |
+
+### Property Access
+
+| Expression                    | Result                                                 |
+|-------------------------------|--------------------------------------------------------|
+| `$model->column`              | Attribute value, or `null` if absent                   |
+| `$model->relation`            | Loads on first read, then cached                       |
+| `$model->save`                | `null` — only `Relation`-returning methods are called  |
+| `isset($model->column)`       | True unless reading answers `null`                     |
+| `isset($model->relation)`     | Loads the relation, as reading it would                |
+| `unset($model->column)`       | Drops the value and its pending change                 |
+| `unset($model->relation)`     | Drops the loaded relation; next read reloads it        |
+| `$model['column']`            | Same as `$model->column` (`ArrayAccess`)               |
+
+`update()`, `delete()`, `updateAttributes()` and `updateCounter()` throw a
+`QueryException` if the model exists but its primary key is `null`.
 
 ### Static Methods
 
@@ -262,6 +306,11 @@ User::transaction(function () {
 | `$model->getErrors()`                               | Get all errors        |
 | `$model->hasError()`                                | True if errors exist  |
 | `$model->noError()`                                 | True if no errors     |
+| `$model->clearErrors()`                             | Discard all errors    |
+
+Errors accumulate and are always appended, so nothing you add displaces anything
+already recorded. Any keys on the array you pass are discarded —
+`getErrors()` returns a plain list.
 
 ### Scenario Trait (opt-in: `use Scenario`)
 
@@ -303,9 +352,14 @@ User::transaction(function () {
 | Task               | Code                                                   |
 |--------------------|--------------------------------------------------------|
 | N+1 detection      | `QueryMonitor::enable()`                               |
+| N+1 handler        | `QueryMonitor::setHandler(...)` / `::clearHandler()`   |
 | Query logging      | `QueryLogger::enable()`                                |
 | Get logged queries | `QueryLogger::getQueries()`                            |
 | Slowest query      | `QueryLogger::getSlowestQuery()`                       |
+| Log handler        | `QueryLogger::setHandler(...)` / `::clearHandler()`    |
+| Log retention      | `QueryLogger::setLimit(1000)` (`0` = unlimited)        |
+| Handler that fails | Warns; the query is unaffected (both observers)        |
+| SQL in exceptions  | `QueryException::enableDebug()` (dev only)             |
 | Query cache        | `User::find()->where(...)->cache(60)->get()`           |
 | Index suggestions  | `IndexAdvisor::suggestSQL()`                           |
 | Dump and die       | `->dd()`                                               |
@@ -329,19 +383,29 @@ User::transaction(function () {
 | Task                | Code                                                       |
 |---------------------|------------------------------------------------------------|
 | MySQL MATCH AGAINST | `MatchAgainst(['title'])->mustHave(['PHP'])`               |
-| PG plain search     | `->whereFulltext(['title', 'body'], 'database')`           |
-| PG phrase search    | `->whereFulltext('title', 'query builder', 'phrase')`      |
-| PG websearch        | `->whereFulltext('body', '"exact" -exclude', 'websearch')` |
+| Plain search        | `->whereFulltext(['title', 'body'], 'database')`           |
+| Phrase search       | `->whereFulltext('title', 'query builder', 'phrase')`      |
+| Websearch           | `->whereFulltext('body', '"exact" -exclude', 'websearch')` |
 | Or fulltext         | `->orWhereFulltext('body', 'optimization')`                |
 
-## RETURNING (PostgreSQL)
+`whereFulltext()` works on all three engines. Only `websearch` reads operators
+in the term; `plain` never does. `plain`, `phrase` and `websearch` are the only
+modes — anything else raises `InvalidArgumentException` (note `'boolean'` is
+MySQL's name for `websearch`). `$language` is PostgreSQL-only. MySQL needs a
+`FULLTEXT` index on exactly the columns searched; SQLite needs an FTS5 table and
+takes one column per call.
+
+## RETURNING (PostgreSQL, SQLite 3.35+)
 
 | Task              | Code                                         |
 |-------------------|----------------------------------------------|
 | Insert returning  | `(new Insert(...))->returning('id')`         |
 | Update returning  | `(new Update(...))->returning('id', 'name')` |
 | Delete returning  | `(new Delete(...))->returning('id')`         |
+| Every column      | `(new Update(...))->returning()` → `RETURNING *` |
 | Get returned rows | `$builder->getReturningResult()`             |
+
+On MySQL the clause is not emitted and `getReturningResult()` is `null`.
 
 ## Advisory Locks (PostgreSQL)
 

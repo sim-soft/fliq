@@ -397,6 +397,10 @@ The generator looks at your column types and sets up automatic casting:
 | `JSON`, `JSONB`                         | `'json'`    | `$model->metadata` returns `array`         |
 | `VARCHAR`, `TEXT`, `DATE`, `TIMESTAMP`  | _(no cast)_ | `$model->name` returns `string`            |
 
+A cast never applies to `NULL`, so a nullable column still returns `null` rather
+than `0`, `false` or `[]`. See
+[Attribute Casting](03-ACTIVE-RECORD.md#attribute-casting).
+
 ### What Gets Excluded from Fillable
 
 These columns are never added to `$fillable` (they're managed automatically):
@@ -417,6 +421,7 @@ These columns are never added to `$fillable` (they're managed automatically):
 | `created_at` + `updated_at` exist           | Adds `use Timestamps;` trait                   |
 | `created` + `updated` exist                 | Adds `use Timestamps;` trait                   |
 | Column ending with `_id` (e.g., `user_id`)  | Generates a `hasOne` relation method           |
+| `_id` column whose method name is unusable  | Skips that one relation (see below)            |
 | MySQL ENUM type (e.g., `ENUM('a','b','c')`) | Adds a comment listing the valid values        |
 | Always                                      | Adds `$guarded` with the primary key column(s) |
 
@@ -727,6 +732,101 @@ class Post extends Model
     }
 }
 ```
+
+#### When a relation is skipped
+
+A relation is a method on the generated class, so its name has to be one PHP
+will accept and one nothing else has claimed. Three `_id` columns cannot have
+one, and the generator leaves each out rather than writing a file that breaks:
+
+| Column       | Would generate                | Why it is skipped                                                 |
+|--------------|-------------------------------|-------------------------------------------------------------------|
+| `save_id`    | `save(): Relation`            | Overrides `Model::save(bool): bool` with an incompatible signature |
+| `class_id`   | `hasOne(Class::class, ...)`   | `class` is a reserved word — a parse error                         |
+| a second column resolving to a name already used | a duplicate method | `Cannot redeclare`                            |
+
+Everything else on the table is generated as normal; only the one relation is
+missing. Write it by hand, under a name of your choosing:
+
+```php
+public function savedBy(): Relation
+{
+    return $this->hasOne(User::class, ['id' => 'save_id']);
+}
+```
+
+### Table Names PHP Cannot Name a Class After
+
+The class name is derived from the table name, so a table PHP has no legal
+class name for cannot produce a loadable file. Rather than write one that fails
+to parse, the generator refuses and names the table:
+
+```
+Table '2fa_token' produces the class name '2faToken', which is not a valid PHP
+class name. Pass an explicit name with className().
+```
+
+This covers names starting with a digit (legal in MySQL, not in PHP) and names
+that are reserved words (`class`, `list`, `match`, `enum`, and so on). Supply
+the name yourself:
+
+```php
+ModelGenerator::fromTable('2fa_token')
+    ->className('TwoFactorToken')
+    ->generate();
+```
+
+```bash
+vendor/bin/fliq make:model TwoFactorToken --table=2fa_token
+```
+
+The table name itself is also checked before it reaches the database, because
+two of the three introspection queries name the table inline and an identifier
+cannot be parameter-bound. Only letters, digits, underscores and dollar signs
+are accepted.
+
+### Namespaces and Connection Names
+
+Both are written into the generated file, so both are checked first.
+
+The namespace goes straight into `namespace X;`. Anything that is not a
+namespace is refused rather than written — `App\Models\` with a trailing
+separator, an empty string, a value with a space in it. A value carrying a
+semicolon is the reason this is a check rather than a warning: `"App; echo 'X';"`
+produces a file that parses perfectly well and runs that statement on every
+include.
+
+```
+Invalid namespace: 'My Models'. Expected a PHP namespace such as App\Models.
+```
+
+`generateAll()` checks it before introspecting the first table, so a mistake in
+the argument leaves nothing behind rather than a directory half full of models.
+
+The connection name is written inside a single-quoted string, so a name holding
+a quote or a backslash would end that string early and break the file.
+`Connection::add()` accepts any string, so this is worth knowing before you name
+a connection:
+
+```
+Connection name 'ev'il' cannot be written into a generated model, because it
+contains a quote or a backslash. Rename the connection.
+```
+
+Spaces are fine — only quotes and backslashes are refused.
+
+### When the File Cannot Be Written
+
+`generate()` returns the path it wrote, or `false` when a file is already there
+and `force()` is off. Anything else is an exception: a directory that cannot be
+created, or a file that cannot be written, raises rather than returning a path.
+
+```
+Cannot create output directory: /read-only/app/Models
+```
+
+This matters most for `generateAll()`, whose `created` count is the only report
+the caller gets. It raises instead of counting files that were never written.
 
 ### Enum Column Comments
 

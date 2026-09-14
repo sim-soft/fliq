@@ -2,6 +2,7 @@
 
 namespace Simsoft\DB\Traits;
 
+use InvalidArgumentException;
 use Simsoft\DB\Builder\Aggregations\Avg;
 use Simsoft\DB\Builder\Aggregations\Count;
 use Simsoft\DB\Builder\Aggregations\Max;
@@ -84,12 +85,19 @@ trait Aggregation
     /**
      * Get total pages for the current query.
      *
-     * @param int $perPage Maximum records per page.
+     * @param int $perPage Maximum records per page. Must be 1 or greater.
      * @param string $attribute The attribute to count.
-     * @return int
+     * @return int Zero when the query matches no records.
+     * @throws InvalidArgumentException If $perPage is less than 1.
      */
     public function getTotalPages(int $perPage, string $attribute = '*'): int
     {
+        if ($perPage < 1) {
+            throw new InvalidArgumentException(
+                "Records per page must be 1 or greater, $perPage given."
+            );
+        }
+
         return (int)ceil($this->count($attribute) / $perPage);
     }
 

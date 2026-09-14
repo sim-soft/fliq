@@ -38,7 +38,7 @@ Connection::add('pgsql', [
     'timeout'              => 5,
     'statement_cache'      => true,
     'statement_cache_size' => 100,
-    'options'              => [],  /* PDO options override */
+    'options'              => [],  /* PDO options override, bar ATTR_ERRMODE */
 ]);
 ```
 
@@ -145,6 +145,30 @@ $delete->execute();
 $purged = $delete->getReturningResult();
 ```
 
+### Returning every column
+
+Calling `returning()` with no arguments asks for `RETURNING *`, which is useful
+when you want the row as it stands after the write rather than a chosen few
+columns:
+
+```php
+$update = new Update('user', ['status' => 'active']);
+$update->withConnection('pgsql');
+$update->condition("role = 'pending'");
+$update->returning();
+$update->execute();
+
+$rows = $update->getReturningResult();
+/* [['id' => 5, 'name' => 'Alice', 'email' => '...', 'role' => 'pending', 'status' => 'active'], ...] */
+```
+
+`getReturningResult()` distinguishes the two ways a statement can produce no
+rows: it answers `[]` when the clause ran and matched nothing, and `null` when no
+`RETURNING` was asked for at all.
+
+On MySQL, which has no `RETURNING`, the clause is omitted and the statement runs
+without it — `getReturningResult()` stays `null`.
+
 ---
 
 ## INSERT ON CONFLICT
@@ -159,7 +183,36 @@ DB::insertOrIgnore('user', [
     'email' => 'alice@example.com',
     'name' => 'Alice',
 ]);
+
+/* Several rows at once — one statement, each row skipped independently */
+/* INSERT INTO "user" ("email", "name") VALUES (?,?),(?,?) ON CONFLICT DO NOTHING */
+DB::insertOrIgnore('user', [
+    ['email' => 'alice@example.com', 'name' => 'Alice'],
+    ['email' => 'bob@example.com', 'name' => 'Bob'],
+]);
 ```
+
+### Knowing whether the row was inserted
+
+`ON CONFLICT DO NOTHING` reports success whether it wrote a row or skipped one,
+so ask for the row back:
+
+```php
+use Simsoft\DB\Builder\Insert;
+
+$insert = (new Insert('user', ['email' => 'alice@example.com', 'name' => 'Alice']))
+    ->ignore()
+    ->returning('id')
+    ->withConnection('pgsql');
+$insert->execute();
+
+$insert->getReturningResult(); /* [['id' => 42]] inserted, [] skipped */
+$insert->getLastInsertId();    /* '42' inserted, null skipped */
+```
+
+`getLastInsertId()` is null rather than a sequence value when the insert was
+skipped: the conflicting attempt still advances the sequence, so that number
+names no row.
 
 ### Upsert (DO UPDATE)
 
@@ -179,6 +232,44 @@ $upsert = new Upsert(
 );
 $upsert->withConnection('pgsql')->execute();
 ```
+
+### Knowing which row the upsert touched
+
+Ask for it back, the same way `ignore()` does above. The clause is emitted after
+the conflict action:
+
+```php
+/*
+  INSERT INTO "setting" ("group", "key", "value")
+  VALUES (?, ?, ?)
+  ON CONFLICT ("group", "key") DO UPDATE SET "value" = EXCLUDED."value"
+  RETURNING "id"
+*/
+$upsert = (new Upsert('setting', $attributes, ['value'], ['group', 'key']))
+    ->returning('id')
+    ->withConnection('pgsql');
+$upsert->execute();
+
+$upsert->getReturningResult(); /* [['id' => 42]] — inserted or updated */
+$upsert->getLastInsertId();    /* '42', the row this statement wrote */
+```
+
+Without the clause, `getLastInsertId()` falls back to the driver, whose answer on
+PostgreSQL is `lastval()` — the last sequence value this *session* consumed, by
+whatever statement. An upsert that took the `DO UPDATE` branch still consumed one
+on its way there, so the id it reported named no row at all. Ask for the columns
+back and the statement answers for itself.
+
+`returning()` with no arguments asks for every column:
+
+```php
+$upsert->returning();  /* ... DO UPDATE SET "value" = EXCLUDED."value" RETURNING * */
+```
+
+MySQL has no `RETURNING` and needs none: `LAST_INSERT_ID()` is scoped to the
+statement there, and `ON DUPLICATE KEY UPDATE` sets it to the id of the row it
+touched. Calling `returning()` on a MySQL connection is accepted and emits
+nothing, so the same builder code runs on all three engines.
 
 ---
 
@@ -274,6 +365,61 @@ Post::find()
     ->get();
 ```
 
+### The same modes on other engines
+
+`whereFulltext()` works on MySQL and SQLite too, and the three modes mean the
+same thing on each — a term is only read as query syntax in `websearch` mode.
+
+| Mode        | PostgreSQL             | MySQL                       | SQLite (FTS5)   |
+|-------------|------------------------|-----------------------------|-----------------|
+| `plain`     | `plainto_tsquery`      | `IN NATURAL LANGUAGE MODE`  | `MATCH`         |
+| `phrase`    | `phraseto_tsquery`     | quoted, `IN BOOLEAN MODE`   | quoted `MATCH`  |
+| `websearch` | `websearch_to_tsquery` | `IN BOOLEAN MODE`           | `MATCH`         |
+
+```php
+/* Plain: the hyphen is part of the term, not an exclusion, on every engine */
+Post::find()->whereFulltext(['title', 'body'], 'database -systems')->get();
+
+/* Websearch: now the operators are the caller's, and are honoured */
+Post::find()->whereFulltext(['title', 'body'], 'database -systems', 'websearch')->get();
+```
+
+Those three are the whole set. Any other name raises
+`InvalidArgumentException` on every engine, rather than being answered in
+`plain` mode:
+
+```php
+/* InvalidArgumentException: Unsupported full-text search mode 'boolean' for
+   mysql. Supported modes: plain, phrase, websearch. For boolean operators
+   (+, -, "), use 'websearch'. */
+Post::find()->whereFulltext('title', '+PHP -Docker', 'boolean')->get();
+```
+
+`boolean` is worth naming because it is MySQL's own word for the mode, so it is
+the one a MySQL user reaches for. Answered in `plain` mode it returned *more*
+rows than asked for — the `-` was read as punctuation, so the excluded term was
+not excluded. Case and surrounding space are normalised, so `'WebSearch'` and
+`' phrase '` are accepted.
+
+MySQL requires a `FULLTEXT` index over exactly the columns searched. The
+`$language` argument is PostgreSQL-only; MySQL and SQLite ignore it.
+
+SQLite searches one column per call, and only against a table created with
+`CREATE VIRTUAL TABLE ... USING fts5` — passing several columns raises
+`InvalidArgumentException` rather than searching the first and dropping the
+rest. To cover several columns, search each one:
+
+```php
+/* SQLite: InvalidArgumentException — FTS5 matches one column at a time */
+Post::find()->whereFulltext(['title', 'body'], 'database')->get();
+
+/* Search them separately instead */
+Post::find()
+    ->whereFulltext('title', 'database')
+    ->orWhereFulltext('body', 'database')
+    ->get();
+```
+
 ### GIN Index Recommendation
 
 For production performance, create a GIN index:
@@ -318,6 +464,27 @@ User::find()->where('meta->address.city', '=', 'Tokyo')->get();
 /* jsonb_exists(meta -> 'settings', 'theme') */
 User::find()->jsonHas('meta->settings.theme')->get();
 ```
+
+### The Document Root
+
+A column written without `->` addresses the whole document. PostgreSQL spells
+that differently from MySQL's `'$'`, so the grammar emits its own form:
+
+```php
+/* WHERE "user"."meta" @> ?::jsonb  — containment against the document */
+User::find()->jsonContains('meta', ['priority' => 1])->get();
+
+/* WHERE jsonb_array_length("user"."tags") = ? */
+User::find()->whereJsonLength('tags', '=', 2)->get();
+```
+
+`jsonb_array_length` requires an array at the path, at the root as anywhere
+else. MySQL's `JSON_LENGTH` also counts the keys of an object, so a length
+query against a JSON *object* answers on MySQL and errors here.
+
+`jsonHas()` and `jsonMissing()` test for a key, and the root is not one — both
+raise `InvalidArgumentException` if the column has no `->key`. Use
+`notNull('meta')` to test that the document is present.
 
 ---
 
@@ -396,8 +563,13 @@ var_dump($feature->is_enabled); /* bool(true) */
 ```
 
 Values recognized as `false`: `'f'`, `'false'`, `'0'`, `''`, `'no'`, `'off'`
+(case-insensitively).
 
 All other non-empty string values are treated as `true`.
+
+A nullable boolean column reads back as `null`, not `false` — the cast applies
+to the value, not to its absence. Test with `=== null` if the distinction
+matters.
 
 ---
 
@@ -421,6 +593,19 @@ For explicit case-sensitive matching on PG, use `caseSensitive: true`:
 /* WHERE "user"."username" LIKE ? (exact case) */
 User::find()->whereLike('username', 'Alice%', caseSensitive: true)->get();
 ```
+
+> **Watch the family you call.** `whereLike()` is case-insensitive by default,
+> but `like()` is case-**sensitive** by default. On MySQL that difference is
+> usually hidden by the collation; on PostgreSQL it is not, and the two return
+> different rows:
+>
+> ```php
+> User::find()->like('username', 'Alice%')->get();       // LIKE  — exact case
+> User::find()->whereLike('username', 'Alice%')->get();  // ILIKE — any case
+> ```
+>
+> Pass `caseSensitive` explicitly and the two families agree. See
+> [Case sensitivity](02-QUERY-BUILDER.md#case-sensitivity).
 
 ---
 
@@ -533,6 +718,50 @@ while (true) {
 }
 ```
 
+### Channel Names
+
+Channel names are used exactly as given. `listen()`, `unlisten()` and `notify()`
+all address the same channel for the same string, so a name chosen anywhere —
+including one a trigger passes to `pg_notify()` — reaches the subscriber that
+asked for it:
+
+```php
+/* A trigger publishes under the channel name your application uses */
+$driver->listen('order-created');
+/* CREATE TRIGGER ... EXECUTE FUNCTION pg_notify('order-created', ...) */
+```
+
+Two consequences follow from names being literal:
+
+```php
+/* Case-sensitive: these are different channels */
+$driver->listen('OrderCreated');
+$driver->notify('ordercreated', 'x');  /* not delivered */
+
+/* Distinct names stay distinct */
+$driver->listen('tenant-1');
+$driver->notify('tenant1', 'x');       /* not delivered */
+```
+
+A channel name must be 1 to 63 bytes — the server's `NAMEDATALEN` limit. Empty
+and over-long names raise an `InvalidArgumentException` from all three methods
+rather than being silently altered:
+
+```php
+$driver->listen('');                    /* InvalidArgumentException */
+$driver->listen(str_repeat('c', 70));   /* InvalidArgumentException */
+```
+
+The check is done in the driver because the server truncates a long identifier
+instead of refusing it: `LISTEN` on a 70-byte name would quietly subscribe to
+its 63-byte prefix, while `pg_notify()` rejects the same string — so the pair
+could never round trip.
+
+> **Note:** `NOTIFY` is asynchronous. A notification sent by one connection is
+> not guaranteed to be readable by another the instant `notify()` returns, so
+> poll with a timeout — `getNotification(1000)` — rather than treating a single
+> empty non-blocking poll as proof that nothing was sent.
+
 ---
 
 ## EXPLAIN / Query Plans
@@ -577,10 +806,19 @@ $plan = Post::find()
 /* Returns structured plan as JSON array */
 ```
 
-| Parameter  | Values                                | Default  |
+| Parameter  | Values (PostgreSQL)                   | Default  |
 |------------|---------------------------------------|----------|
 | `$analyze` | `true` / `false`                      | `false`  |
 | `$format`  | `'text'`, `'json'`, `'yaml'`, `'xml'` | `'text'` |
+
+Every option goes in one parenthesised list, so `analyze: true` with a format
+emits `EXPLAIN (ANALYZE, FORMAT JSON)`. PostgreSQL rejects the alternative
+spelling `EXPLAIN ANALYZE (FORMAT JSON)` as a syntax error.
+
+The list above is PostgreSQL's. Other drivers name different formats — MySQL has
+`'tree'` and `'traditional'` but no `'yaml'` or `'xml'`, and SQLite has `'text'`
+only — and `$format` is validated against whichever driver the query runs on.
+See [Advanced Features](05-ADVANCED-FEATURES.md#query-execution-plans-explain).
 
 ### Available on All Queries
 

@@ -2,14 +2,16 @@
 
 namespace Simsoft\DB\Traits;
 
-use Simsoft\DB\Builder\Insert;
+use InvalidArgumentException;
 use Simsoft\DB\Builder\Raw;
+use Simsoft\DB\Cache\CacheInterface;
 use Simsoft\DB\Cache\QueryCache;
 use Simsoft\DB\Connection;
 use Simsoft\DB\Drivers\Driver;
 use Simsoft\DB\Exceptions\ConnectionException;
 use Simsoft\DB\Exceptions\QueryException;
 use Simsoft\DB\Interfaces\Executable;
+use Simsoft\DB\Interfaces\ReturnsRows;
 use Simsoft\DB\QueryLogger;
 use Simsoft\DB\QueryMonitor;
 use Throwable;
@@ -62,21 +64,18 @@ trait Execute
      */
     public function dump(): static
     {
+        // The grammar renders the literals, so this reads the same for every
+        // builder. Raw has no Qualifier and so fell to a two-line "Binds: [...]"
+        // form instead — which is not what the documented `dd()` output shows,
+        // and cannot be pasted into a client, though that is the whole point of
+        // dumping it.
         $sql = $this->getSQL();
         $binds = $this->getBinds();
 
-        if ($binds !== null && method_exists($this, 'getReadableSQL')) {
-            echo $this->getReadableSQL($sql, $binds) . PHP_EOL;
-            return $this;
-        }
+        echo ($binds === null
+            ? $sql
+            : Connection::grammar($this->connection)->readableSQL($sql, $binds)) . PHP_EOL;
 
-        if ($binds !== null) {
-            echo $sql . PHP_EOL;
-            echo "Binds: " . json_encode($binds) . PHP_EOL;
-            return $this;
-        }
-
-        echo $sql . PHP_EOL;
         return $this;
     }
 
@@ -97,27 +96,30 @@ trait Execute
      * Returns the database's query plan as an array of rows.
      * Supports EXPLAIN ANALYZE for actual execution statistics.
      *
+     * Each engine names its own formats and spells the request differently, so
+     * the prefix is built by the grammar for the connection this query runs on.
+     * A format the engine cannot produce is rejected rather than dropped: MySQL
+     * used to ignore $format outright and hand back a traditional plan for
+     * `format: 'json'`, and PostgreSQL emitted `EXPLAIN ANALYZE (FORMAT JSON)`,
+     * which the server refuses to parse.
+     *
      * @param bool $analyze Whether to use EXPLAIN ANALYZE (actually executes the query).
-     * @param string $format Output format: 'text', 'json', 'yaml', 'xml'. Default: 'text'.
+     * @param string $format Output format. MySQL: 'text', 'traditional', 'json', 'tree'
+     *                       ('text' or 'tree' with $analyze). PostgreSQL: 'text',
+     *                       'json', 'yaml', 'xml'. SQLite: 'text' only. Default: 'text'.
      * @return array<int, array<string, mixed>> The explain output rows.
+     * @throws InvalidArgumentException If the engine cannot produce this combination.
      */
     public function explain(bool $analyze = false, string $format = 'text'): array
     {
+        $explainPrefix = Connection::grammar($this->connection)->explainSQL($analyze, $format);
+
+        // Built after the prefix so an unsupported format costs nothing, and
+        // after getSQL() so the clause binds it populates are collected.
         $sql = $this->getSQL();
         $binds = $this->getBinds();
 
-        $grammar = Connection::grammar($this->connection);
-        $driverName = $grammar->getDriverName();
-
-        $explainPrefix = match ($driverName) {
-            'pgsql' => 'EXPLAIN' . ($analyze ? ' ANALYZE' : '')
-                . ($format !== 'text' ? ' (FORMAT ' . strtoupper($format) . ')' : ''),
-            'sqlite' => 'EXPLAIN QUERY PLAN',
-            default => 'EXPLAIN' . ($analyze ? ' ANALYZE' : ''),
-        };
-
-        $explainSQL = "$explainPrefix $sql";
-        $raw = new Raw($explainSQL, $binds);
+        $raw = new Raw("$explainPrefix $sql", $binds);
         $raw->withConnection($this->connection);
 
         return $raw->fetchAll();
@@ -142,8 +144,20 @@ trait Execute
      */
     protected function getDriver(string $type = 'write'): Driver
     {
-        $name = $this->connection ?? Connection::getDefaultName();
-        return Connection::get($name, $type);
+        return Connection::get($this->resolveConnectionName(), $type);
+    }
+
+    /**
+     * Resolve the connection name, falling back to the default.
+     *
+     * Always returns a concrete name so that an unset connection and an
+     * explicitly named default resolve to the same value.
+     *
+     * @return string
+     */
+    protected function resolveConnectionName(): string
+    {
+        return $this->connection ?? Connection::getDefaultName();
     }
 
     /**
@@ -153,11 +167,20 @@ trait Execute
      *
      * @param Executable|null $query The SQL query object.
      * @return bool
-     * @throws QueryException
+     * @throws QueryException If the server rejected the statement.
+     * @throws ConnectionException If the server was never reached. Deliberately
+     *                             not wrapped: the statement is not at fault,
+     *                             and reporting it as one sends the caller
+     *                             looking for a fault in SQL that is good.
      */
     public function execute(?Executable $query = null): bool
     {
-        $target = $query ? clone $query : $this;
+        // The query used to be cloned before running, so anything the driver
+        // wrote back onto it — a RETURNING result, on PostgreSQL and SQLite —
+        // landed on the copy and was discarded with it. The caller's own
+        // builder reported no returned row and no last insert id, for a
+        // statement that had run and returned one.
+        $target = $query ?? $this;
 
         try {
             if (QueryMonitor::isEnabled()) {
@@ -182,16 +205,40 @@ trait Execute
     /**
      * Get last insert Id.
      *
-     * @return string|null
+     * Answered from the statement's own RETURNING rows where it has them, and
+     * from the driver otherwise. The distinction matters because the driver's
+     * answer is session-scoped on two of the three engines: PostgreSQL reports
+     * lastval() and SQLite the connection's last id, so a statement that wrote
+     * nothing still gets an id — the sequence number a conflicting attempt
+     * consumed, or whatever the previous statement inserted. Only MySQL is
+     * per-statement and reports nothing when nothing was written.
+     *
+     * The test used to name Insert, which is not the same set as "carries
+     * RETURNING": Upsert did not implement it, so every upsert took the driver
+     * path and an upsert that took the conflict branch reported an id for a row
+     * it had not written.
+     *
+     * @return string|null The id, or null when the statement wrote no row.
      */
     public function getLastInsertId(): ?string
     {
         // Check if the builder has a RETURNING result (PostgreSQL/SQLite)
-        if ($this instanceof Insert && $this->hasReturning()) {
+        if ($this instanceof ReturnsRows && $this->hasReturning()) {
             $rows = $this->getReturningResult();
-            if (!empty($rows) && is_array($rows[0])) {
+            if (!empty($rows) && is_array($rows[0]) && $rows[0] !== []) {
                 $firstValue = reset($rows[0]);
                 return $firstValue !== null ? (string)$firstValue : null;
+            }
+
+            // RETURNING ran and named no row, which is what a statement skipped
+            // by ON CONFLICT DO NOTHING looks like. Falling through to the
+            // driver then answered with the sequence's current value — an id
+            // belonging to no row this statement wrote, and on PostgreSQL not
+            // even to a row that exists, since the conflicting attempt still
+            // consumed a sequence number. Nothing was inserted, so there is no
+            // id.
+            if ($rows !== null) {
+                return null;
             }
         }
 
@@ -212,13 +259,30 @@ trait Execute
      */
     public function query(?Executable $query = null): array
     {
-        $target = $query ? clone $query : $this;
+        $target = $query ?? $this;
 
         $cached = $this->getCachedResult($target);
         if ($cached !== null) {
             return $cached;
         }
 
+        $result = $this->runQuery($target);
+        $this->storeCachedResult($target, $result);
+
+        return $result;
+    }
+
+    /**
+     * Run one query against the read connection, with monitoring and logging.
+     *
+     * @param Executable $target The query to run.
+     * @return array<int, array<string, mixed>>
+     * @throws QueryException If the server rejected the statement.
+     * @throws ConnectionException If the server was never reached, for the
+     *                             reason execute() gives at the same point.
+     */
+    private function runQuery(Executable $target): array
+    {
         try {
             if (QueryMonitor::isEnabled()) {
                 QueryMonitor::recordQuery($target->getSQL());
@@ -231,8 +295,6 @@ trait Execute
                 QueryLogger::logQuery($target->getSQL(), $target->getBinds(), $startTime);
             }
 
-            $this->storeCachedResult($target, $result);
-
             return $result;
         } catch (ConnectionException $exception) {
             throw $exception;
@@ -242,25 +304,46 @@ trait Execute
     }
 
     /**
+     * Read the cache TTL a query was configured with.
+     *
+     * property_exists() reports a protected property as present, but reading
+     * one from outside the declaring class is a fatal Error, not a catchable
+     * exception — so running any cached ActiveQuery through another builder's
+     * query() killed the process outright. The public accessor is used instead,
+     * and a query that has none is simply not cached.
+     *
+     * @param Executable $target The query to read the TTL from.
+     * @return int Seconds, or 0 when the query carries no TTL.
+     */
+    private function resolveCacheTtl(Executable $target): int
+    {
+        return method_exists($target, 'getCacheTtl') ? $target->getCacheTtl() : 0;
+    }
+
+    /**
      * Attempt to retrieve a cached query result.
+     *
+     * A backend that cannot answer is treated as a miss: the rows it failed to
+     * hand over can always be fetched from the database, so an unreachable
+     * Redis turned every cached query into a hard failure for results that were
+     * still perfectly obtainable.
      *
      * @param Executable $target The query to check cache for.
      * @return array<int, array<string, mixed>>|null Cached result or null if not cached.
      */
     private function getCachedResult(Executable $target): ?array
     {
-        $cacheTtl = property_exists($target, 'cacheTtl') ? $target->cacheTtl : 0;
-        if ($cacheTtl <= 0 || !QueryCache::isEnabled()) {
-            return null;
-        }
-
-        $driver = QueryCache::getDriver();
+        $driver = $this->resolveCacheDriver($target);
         if ($driver === null) {
             return null;
         }
 
-        $key = QueryCache::generateKey($target->getSQL(), $target->getBinds());
-        $cached = $driver->get($key);
+        try {
+            $key = QueryCache::generateKey($target->getSQL(), $target->getBinds(), $this->resolveConnectionName());
+            $cached = $driver->get($key);
+        } catch (Throwable) {
+            return null;
+        }
 
         return is_array($cached) ? $cached : null;
     }
@@ -268,23 +351,43 @@ trait Execute
     /**
      * Store a query result in cache if caching is enabled.
      *
+     * A backend that refuses the write has not failed the query, which has
+     * already run and returned its rows. The failure used to propagate out of
+     * query(): a full Redis surfaced to the caller as a QueryException naming
+     * the SELECT, sending them after a statement that was never at fault, and
+     * discarding rows that had already been fetched.
+     *
      * @param Executable $target The query that produced the result.
      * @param array<int, array<string, mixed>> $result The query result to cache.
      * @return void
      */
     private function storeCachedResult(Executable $target, array $result): void
     {
-        $cacheTtl = property_exists($target, 'cacheTtl') ? $target->cacheTtl : 0;
-        if ($cacheTtl <= 0 || !QueryCache::isEnabled()) {
-            return;
-        }
-
-        $driver = QueryCache::getDriver();
+        $driver = $this->resolveCacheDriver($target);
         if ($driver === null) {
             return;
         }
 
-        $key = QueryCache::generateKey($target->getSQL(), $target->getBinds());
-        $driver->set($key, $result, $cacheTtl);
+        try {
+            $key = QueryCache::generateKey($target->getSQL(), $target->getBinds(), $this->resolveConnectionName());
+            $driver->set($key, $result, $this->resolveCacheTtl($target));
+        } catch (Throwable) {
+            return;
+        }
+    }
+
+    /**
+     * Get the cache driver to use for a query, if it is to be cached at all.
+     *
+     * @param Executable $target The query being run.
+     * @return CacheInterface|null Null when this query is not cached.
+     */
+    private function resolveCacheDriver(Executable $target): ?CacheInterface
+    {
+        if ($this->resolveCacheTtl($target) <= 0 || !QueryCache::isEnabled()) {
+            return null;
+        }
+
+        return QueryCache::getDriver();
     }
 }

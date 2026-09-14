@@ -31,6 +31,18 @@ class MySQLiDriver extends Driver
      */
     protected function connect(): void
     {
+        $this->prepareConnect();
+
+        // Built locally and only published once real_connect() has returned.
+        // Assigning the bare mysqli() first left a handle behind when the
+        // connect failed, and that handle satisfied isConnected() — so the
+        // driver called itself connected, and the next statement died with
+        // Error('mysqli object is not fully initialized') rather than saying
+        // the server was unreachable. A property access on it was worse still:
+        // Error('Property access is not allowed yet'), thrown from
+        // lastInsertId(), which is typed to answer false.
+        $connection = null;
+
         try {
             mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
@@ -41,23 +53,28 @@ class MySQLiDriver extends Driver
                 $host = 'p:' . $host;
             }
 
-            $this->connection = new mysqli();
+            $connection = new mysqli();
 
             // Set timeout before connecting
-            $this->connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, (int)$this->config['timeout']);
+            $connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, (int)$this->config['timeout']);
 
-            // Set init command before connecting (joined with semicolons)
-            $initCommands = (array)($this->config['init_command'] ?? []);
-            if ($initCommands) {
-                $this->connection->options(MYSQLI_INIT_COMMAND, implode('; ', $initCommands));
+            // One option call per command. They used to be joined with '; ' and
+            // sent as one string, but MYSQLI_INIT_COMMAND carries a single
+            // statement — the server parses the whole string as one and rejects
+            // the second, so configuring two init commands did not merely skip
+            // the second, it failed the connection outright with a syntax error
+            // naming SQL the caller never wrote as one statement. Setting the
+            // option repeatedly queues them, and all of them run.
+            foreach ((array)($this->config['init_command'] ?? []) as $initCommand) {
+                $connection->options(MYSQLI_INIT_COMMAND, $initCommand);
             }
 
             // Apply user options before connecting
             foreach ((array)($this->config['options'] ?? []) as $option => $value) {
-                $this->connection->options($option, $value);
+                $connection->options($option, $value);
             }
 
-            $this->connection->real_connect(
+            $connection->real_connect(
                 $host,
                 $this->config['username'],
                 $this->config['password'],
@@ -65,8 +82,12 @@ class MySQLiDriver extends Driver
                 $this->config['port']
             );
 
-            $this->connection->set_charset($this->config['charset']);
+            $connection->set_charset($this->config['charset']);
+
+            $this->connection = $connection;
+            $this->markActivity();
         } catch (mysqli_sql_exception $exception) {
+            $this->connection = null;
             $this->addError($exception->getMessage());
         }
     }
@@ -90,6 +111,19 @@ class MySQLiDriver extends Driver
      */
     public function execute(Executable $query): bool
     {
+        $this->reconnectIfNeeded();
+
+        return $this->runWithReconnect(fn(): bool => $this->executeOnce($query));
+    }
+
+    /**
+     * Run one attempt of execute().
+     *
+     * @param Executable $query The query to run.
+     * @return bool
+     */
+    private function executeOnce(Executable $query): bool
+    {
         $conn = $this->getConnection();
         $sql = $query->getSQL();
         $binds = $query->getBinds();
@@ -99,17 +133,49 @@ class MySQLiDriver extends Driver
             if ($result instanceof \mysqli_result) {
                 $result->free();
             }
-            return $result !== false;
+
+            // mysqli_report() is process-global, so a host application or
+            // another library can set MYSQLI_REPORT_OFF at any point and
+            // mysqli then answers false instead of throwing. This path used to
+            // return that false as its own result, and nothing reads the
+            // return of execute() as a failure signal — so a write that the
+            // server had rejected came back as "no exception raised" and the
+            // caller carried on believing the row was there. The bound path
+            // below raises for the same failure, and so does every other
+            // driver; a statement rejected by the server has to say so.
+            if ($result === false) {
+                throw new RuntimeException('Failed to execute statement: ' . $conn->error);
+            }
+
+            $this->markActivity();
+
+            return true;
         }
 
         $stmt = $conn->prepare($sql);
         if ($stmt === false) {
+            // Reachable for the same reason: under MYSQLI_REPORT_OFF prepare()
+            // reports by returning false rather than throwing.
             throw new RuntimeException('Failed to prepare statement: ' . $conn->error);
         }
         $ok = $stmt->execute($binds);
+        $error = $stmt->error !== '' ? $stmt->error : $conn->error;
         $stmt->close();
 
-        return $ok;
+        // The same hole as above, one branch over: a statement that prepares
+        // cleanly can still be rejected when it runs — a duplicate key, a NOT
+        // NULL violation — and under MYSQLI_REPORT_OFF execute() reports that
+        // by returning false. This method used to hand that false back as its
+        // own result, so the most common kind of write failure there is
+        // travelled up as a bool nobody inspects. Measured: an INSERT on a
+        // duplicate primary key wrote nothing and raised nothing.
+        if ($ok === false) {
+            throw new RuntimeException('Failed to execute statement: ' . $error);
+        }
+
+        $this->markActivity();
+
+        return true;
     }
 
     /**
@@ -118,6 +184,19 @@ class MySQLiDriver extends Driver
      * @return array<int, array<string, mixed>>
      */
     public function query(Executable $query): array
+    {
+        $this->reconnectIfNeeded();
+
+        return $this->runWithReconnect(fn(): array => $this->queryOnce($query));
+    }
+
+    /**
+     * Run one attempt of query().
+     *
+     * @param Executable $query The query to run.
+     * @return array<int, array<string, mixed>>
+     */
+    private function queryOnce(Executable $query): array
     {
         $conn = $this->getConnection();
         $stmt = $conn->prepare($query->getSQL());
@@ -129,12 +208,30 @@ class MySQLiDriver extends Driver
         $stmt->execute($binds ?? []);
         $result = $stmt->get_result();
         if ($result === false) {
+            // get_result() answers false for two unrelated things: a statement
+            // that failed, and a statement that ran fine and has no result set
+            // to give — an UPDATE, a DELETE, a SET. Treating both as failure
+            // made `query('SET @x = 1')` throw "Failed to get result: " with an
+            // empty reason, because there was no error to name. The other three
+            // drivers return [] for the same statement. field_count is what
+            // distinguishes them: zero columns means there was never a result
+            // set, and errno is what a real failure sets.
+            $failed = $stmt->errno !== 0 || $stmt->field_count > 0;
+            $error = $stmt->error !== '' ? $stmt->error : $conn->error;
             $stmt->close();
-            throw new RuntimeException('Failed to get result: ' . $conn->error);
+
+            if ($failed) {
+                throw new RuntimeException('Failed to get result: ' . $error);
+            }
+
+            $this->markActivity();
+
+            return [];
         }
         $rows = $result->fetch_all(MYSQLI_ASSOC);
         $result->free();
         $stmt->close();
+        $this->markActivity();
 
         return $rows;
     }
@@ -144,62 +241,89 @@ class MySQLiDriver extends Driver
      */
     public function lastInsertId(): false|string
     {
-        $insertId = $this->getConnection()->insert_id;
+        // "No id to report" is what an absent connection has, and the method is
+        // typed to say so. This alone threw instead — RuntimeException from a
+        // null handle, and Error('Property access is not allowed yet') from a
+        // handle whose connect had failed — while the three PDO-backed drivers
+        // all answer false through normalizeInsertId(). Execute::getLastInsertId()
+        // maps false to null and does not catch, so the same "nothing was
+        // inserted" fact escaped as an exception from a method typed ?string.
+        return $this->normalizeInsertId(function (): string|false {
+            $insertId = $this->getConnection()->insert_id;
 
-        return $insertId > 0 ? (string)$insertId : false;
+            return $insertId > 0 ? (string)$insertId : false;
+        });
     }
 
     /**
      * {@inheritdoc}
      */
-    public function transaction(callable $callback): bool
+    protected function beginTransaction(): void
     {
-        $conn = $this->getConnection();
-        $conn->begin_transaction();
-
-        try {
-            if ($callback() === true) {
-                return $conn->commit();
-            }
-
-            $conn->rollback();
-            return false;
-        } catch (\Throwable $e) {
-            $conn->rollback();
-            throw $e;
-        }
+        $this->getConnection()->begin_transaction();
     }
 
     /**
-     * Check if the connection is still alive.
-     *
-     * @return bool
+     * {@inheritdoc}
      */
-    public function ping(): bool
+    protected function commitTransaction(): bool
     {
-        if ($this->connection === null) {
-            return false;
-        }
-
-        try {
-            // mysqli::ping() is deprecated as of PHP 8.4 — a trivial query
-            // checks liveness the same way, matching the other drivers.
-            return $this->connection->query('SELECT 1') !== false;
-        } catch (\Throwable) {
-            return false;
-        }
+        return $this->getConnection()->commit();
     }
 
     /**
-     * Reconnect if the connection has been lost.
-     *
-     * @return void
+     * {@inheritdoc}
      */
-    public function reconnectIfNeeded(): void
+    protected function rollBackTransaction(): void
     {
-        if ($this->connection === null || !$this->ping()) {
-            $this->connect();
+        $this->getConnection()->rollback();
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function executeRawStatement(string $sql): void
+    {
+        $this->getConnection()->query($sql);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function probeLiveness(): bool
+    {
+        // mysqli::ping() is deprecated as of PHP 8.4 — a trivial query checks
+        // liveness the same way, matching the other drivers.
+        $result = $this->getConnection()->query('SELECT 1');
+        if ($result === false) {
+            return false;
         }
+
+        if ($result instanceof \mysqli_result) {
+            $result->free();
+        }
+
+        return true;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function isConnected(): bool
+    {
+        return $this->connection !== null;
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @throws \Simsoft\DB\Exceptions\ConnectionException If the server is still unreachable.
+     */
+    protected function forceReconnect(): void
+    {
+        $this->connection = null;
+        $this->connect();
+        $this->assertReconnected();
     }
 
     /**

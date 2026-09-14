@@ -89,13 +89,26 @@ $collection = User::find()->get();
 $active = $collection->filter(fn($user) => $user->status === 'active');
 
 count($collection); // 100 (still all records)
-count($active);     // 60 (note: count() is the DB total, not filtered)
+count($active);     // 100 — count() is the DB total, the filter is not applied
 
 iterator_to_array($collection); // 100 items
 iterator_to_array($active);     // 60 items
 ```
 
 > **Note:** `count()` always returns the DB COUNT(*), not the filtered count. Use `count(iterator_to_array($collection))` to get the filtered count.
+
+Filters compose. Each `filter()` adds to the ones already applied rather than
+replacing them, so a record must satisfy every callback to survive:
+
+```php
+$collection = User::find()->get();
+
+$strict = $collection
+    ->filter(fn($user) => $user->score > 40)
+    ->filter(fn($user) => $user->role === 'member');
+
+// Keeps only users who are BOTH scoring over 40 AND members.
+```
 
 ## Map
 
@@ -118,9 +131,18 @@ $apiData = $collection->map(fn($user) => [
 ]);
 ```
 
+Maps compose too — a second `map()` receives what the first one produced:
+
+```php
+$shouting = $collection
+    ->map(fn($user) => $user->name)
+    ->map(fn($name) => strtoupper($name));
+```
+
 ## Chaining Filter and Map
 
-Both are lazy — they only run during iteration:
+Both are lazy — they only run during iteration. They run in the order you added
+them, so each stage sees what the stage before it produced:
 
 ```php
 $collection = User::find()->get();
@@ -133,6 +155,21 @@ $activeAdminNames = $collection
 foreach ($activeAdminNames as $name) {
     echo $name;
 }
+```
+
+Order matters once a `map()` changes the shape of a record — a `filter()` after
+it receives the mapped value, not the original model:
+
+```php
+/* The filter receives an int, because the map ran first */
+$highScores = $collection
+    ->map(fn($user) => $user->score)
+    ->filter(fn($score) => $score > 40);
+
+/* The filter receives a User, because it comes first */
+$scoresOfHighScorers = $collection
+    ->filter(fn($user) => $user->score > 40)
+    ->map(fn($user) => $user->score);
 ```
 
 ## Reduce
@@ -278,6 +315,21 @@ foreach ($collection->batch(1000) as $batch) {
 }
 ```
 
+`batch()` applies `filter()` and `map()` like every other read does. The size is
+how many rows are fetched per query, not how many come back — a batch drawn
+from a filtered collection holds only the records that survived the filter, so
+it can be shorter than the size you asked for (and a page where nothing
+survives is skipped rather than yielded empty):
+
+```php
+$active = User::find()->get()->filter(fn($user) => $user->status === 'active');
+
+foreach ($active->batch(100) as $batch) {
+    // Fetches 100 rows per query; $batch holds only the active ones.
+    sendBatchEmail($batch);
+}
+```
+
 ## Each with Custom Chunk Size
 
 Returns a generator that iterates one record at a time using a specific chunk size for fetching:
@@ -388,9 +440,9 @@ fclose($file);
 | `page(int $page, int $perPage)` | `array` | ❌ | Get a specific page (applies filter/map) |
 | `chunk(int $size)` | `static` | ✅ | Set internal fetch chunk size |
 | `each(int $size)` | `Generator` | ✅ | One-at-a-time with custom chunk |
-| `batch(int $size)` | `Generator` | ✅ | Yield arrays of N records |
-| `filter(callable)` | `static` | ✅ | Keep records where callback returns true |
-| `map(callable)` | `static` | ✅ | Transform each record |
+| `batch(int $size)` | `Generator` | ✅ | Yield arrays of up to N records (applies filter/map) |
+| `filter(callable)` | `static` | ✅ | Keep records where callback returns true (composes) |
+| `map(callable)` | `static` | ✅ | Transform each record (composes) |
 | `reduce(callable, $initial)` | `mixed` | ❌ | Combine all records into a single result |
 | `indexBy(string\|callable)` | `array` | ❌ | Index by attribute or callback |
 | `groupBy(string\|callable)` | `array` | ❌ | Group by attribute or callback |

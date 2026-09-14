@@ -4,51 +4,65 @@ A detailed feature comparison between FLIQ and popular PHP ORM/Active Record lib
 
 ## Benchmark Results
 
-Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php benchmarks/run.php` to reproduce.
+Measured on PHP 8.4.16, MySQL 8.0.30, single machine (no network latency). Run
+`php benchmarks/run.php` to reproduce. Timings are the median of seven runs; the
+query-building and memory figures were stable across all of them, while the
+database numbers varied by roughly ±40% run to run, so treat them as an order of
+magnitude rather than a measurement.
 
 ### Query Building (no DB execution, 10,000 iterations)
 
 | Operation                                   | Time per query |      Memory      |
 |---------------------------------------------|:--------------:|:----------------:|
-| Simple SELECT (`where('status', 1)`)        |     6.9μs      | 448 bytes/object |
-| Complex WHERE (5 conditions)                |     9.1μs      |        —         |
-| JOIN + GROUP BY + HAVING + ORDER BY + LIMIT |     9.3μs      |        —         |
+| Simple SELECT (`where('status', 1)`)        |     5.6μs      | 640 bytes/object |
+| Complex WHERE (5 conditions)                |     11.4μs     |        —         |
+| JOIN + GROUP BY + HAVING + ORDER BY + LIMIT |     11.4μs     |        —         |
 
-### Database Execution (MySQL, 1,000 iterations)
+### Database Execution (MySQL)
 
-| Operation                        | Time per query |
-|----------------------------------|:--------------:|
-| `findByPk(1)`                    |     1.09ms     |
-| `find()->where()->first()`       |     1.15ms     |
-| `find()->get()->all()` (10 rows) |     1.26ms     |
+Against `resources/sample_db.sql`, whose `user` table holds 10 rows, 8 of them
+matching the `status_code = 1` the benchmark filters on. The first two run 1,000
+iterations, the third 100.
+
+| Operation                       | Time per query |
+|---------------------------------|:--------------:|
+| `findByPk(1)`                   |     0.82ms     |
+| `find()->where()->first()`      |     0.77ms     |
+| `find()->get()->all()` (8 rows) |     0.95ms     |
 
 ### Model Hydration
 
 | Operation             |     Time     |  Memory   |
 |-----------------------|:------------:|:---------:|
-| 1,000 models hydrated | 0.67ms total |   543KB   |
-| Per model             |    0.67μs    | 536 bytes |
+| 1,000 models hydrated | 0.48ms total |   606KB   |
+| Per model             |    0.48μs    | 600 bytes |
 
 ### Memory Footprint
 
 | Object                       |   Size    |
 |------------------------------|:---------:|
-| ActiveQuery instance         | 448 bytes |
-| Model instance               | 536 bytes |
+| ActiveQuery instance         | 640 bytes |
+| Model instance               | 600 bytes |
 | Peak memory (full benchmark) |   6 MB    |
 
 ## Performance
 
-> **Disclaimer:** The comparison values for other ORMs are estimates based on architecture analysis (object count, abstraction layers) and published community benchmarks. They are not measured on the same machine. Run your own benchmarks for production decisions.
+> **Disclaimer:** Only the FLIQ column is measured. The values for other ORMs are estimates based on architecture analysis (object count, abstraction layers) and published community benchmarks — they are not measured on the same machine, and the same caveat applies to the ❌/✅ marks in the feature tables below. Run your own benchmarks, against the versions you actually use, for production decisions.
 
 | Metric                     |   FLIQ    | Eloquent | Doctrine | Yii3 AR | Cycle ORM | Propel ORM |
 |----------------------------|:---------:|:--------:|:--------:|:-------:|:---------:|:----------:|
-| Query builder overhead     | ~1 object | 5-10 obj | 20+ obj  | 3-5 obj | 10-15 obj |  5-8 obj   |
-| Memory per simple query    |   ~2KB    |   ~8KB   |  ~50KB   |  ~6KB   |   ~30KB   |   ~10KB    |
-| Install size               |  ~100KB   |   ~5MB   |  ~10MB   |  ~2MB   |   ~8MB    |    ~3MB    |
+| Query builder overhead     | 2 objects | 5-10 obj | 20+ obj  | 3-5 obj | 10-15 obj |  5-8 obj   |
+| Memory per simple query    |  ~1.2KB   |   ~8KB   |  ~50KB   |  ~6KB   |   ~30KB   |   ~10KB    |
+| Source size                |  ~650KB   |   ~5MB   |  ~10MB   |  ~2MB   |   ~8MB    |    ~3MB    |
 | Dependencies               |     0     |   30+    |   15+    |   8+    |    20+    |    ~10     |
-| Zero-allocation query path |     ✅     |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
+| No per-condition objects   |     ✅     |    ❌     |    ❌     |    ❌    |     ❌     |     ❌      |
 | Prepared statement caching |     ✅     |    ❌     |    ✅     |    ❌    |     ❌     |     ❌      |
+
+A built query holds two objects — the `ActiveQuery` and its grammar — and stays
+at two however many conditions you add, because conditions are compiled into the
+SQL string rather than accumulated as a node tree. That is the sense in which the
+query path is cheap; it is not literally allocation-free, and a simple built
+query retains ~1.2KB.
 
 ## Architecture
 
@@ -113,6 +127,6 @@ Measured on PHP 8.4, MySQL 8.0, single machine (no network latency). Run `php be
 
 ## Summary
 
-FLIQ is purpose-built for developers who want Active Record simplicity with maximum performance. It trades broad database support (no MSSQL/Oracle) and ecosystem size for a dramatically smaller footprint, zero dependencies, and the fastest query compilation path available in PHP.
+FLIQ is purpose-built for developers who want Active Record simplicity with maximum performance. It trades broad database support (no MSSQL/Oracle) and ecosystem size for a smaller footprint, zero runtime dependencies, and a query compilation path that stays at two objects no matter how large the query gets.
 
 If you need a Data Mapper pattern, schema migrations, or MSSQL/Oracle support, consider Doctrine or Cycle ORM. If you need a massive plugin ecosystem, Eloquent is the pragmatic choice. For everything else, FLIQ gets out of your way and lets you ship.

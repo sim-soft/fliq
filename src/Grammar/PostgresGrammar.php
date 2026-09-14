@@ -2,6 +2,8 @@
 
 namespace Simsoft\DB\Grammar;
 
+use InvalidArgumentException;
+
 /**
  * PostgreSQL Grammar.
  *
@@ -9,12 +11,17 @@ namespace Simsoft\DB\Grammar;
  */
 class PostgresGrammar implements Grammar
 {
+    use EscapesStringLiteral, ExplainFormat, FulltextMode, JsonKeyPath;
+
+    /** @var array<int, string> Plan formats PostgreSQL accepts in the option list. */
+    private const EXPLAIN_FORMATS = ['text', 'json', 'yaml', 'xml'];
+
     /**
      * {@inheritdoc}
      */
     public function quoteIdentifier(string $identifier): string
     {
-        return "\"$identifier\"";
+        return '"' . str_replace('"', '""', $identifier) . '"';
     }
 
     /**
@@ -42,29 +49,30 @@ class PostgresGrammar implements Grammar
     /**
      * {@inheritdoc}
      *
-     * @param array<int, string> $columns
-     * @param array<int, string> $updateColumns
+     * @param array<int, string> $assignments
      * @param array<int, string> $conflictColumns
      */
-    public function upsertSQL(string $table, array $columns, array $updateColumns, string $placeholders, array $conflictColumns = []): string
+    public function onConflictSQL(array $assignments, array $conflictColumns): string
     {
-        $quotedColumns = array_map(fn($col) => $this->quoteIdentifier($col), $columns);
+        $target = implode(', ', array_map(fn($col) => $this->quoteIdentifier($col), $conflictColumns));
 
-        $sql = "INSERT INTO $table ("
-            . implode(', ', $quotedColumns)
-            . ") VALUES ($placeholders)";
+        return " ON CONFLICT ($target) DO UPDATE SET " . implode(', ', $assignments);
+    }
 
-        $updates = [];
-        foreach ($updateColumns as $col) {
-            $quoted = $this->quoteIdentifier($col);
-            $updates[] = "$quoted = EXCLUDED.$quoted";
-        }
+    /**
+     * {@inheritdoc}
+     */
+    public function excludedColumnSQL(string $column): string
+    {
+        return 'EXCLUDED.' . $this->quoteIdentifier($column);
+    }
 
-        // Use explicit conflict columns if provided, otherwise fall back to first column
-        $targets = !empty($conflictColumns) ? $conflictColumns : [$columns[0]];
-        $conflictTarget = implode(', ', array_map(fn($col) => $this->quoteIdentifier($col), $targets));
-
-        return $sql . " ON CONFLICT ($conflictTarget) DO UPDATE SET " . implode(', ', $updates);
+    /**
+     * {@inheritdoc}
+     */
+    public function requiresConflictTarget(): bool
+    {
+        return true;
     }
 
     /**
@@ -77,22 +85,52 @@ class PostgresGrammar implements Grammar
 
     /**
      * {@inheritdoc}
+     *
+     * PostgreSQL takes its options in one parenthesised, comma-separated list.
+     * ANALYZE may be written bare, but once a parenthesised list follows it the
+     * statement no longer parses — `EXPLAIN ANALYZE (FORMAT JSON) SELECT …`
+     * fails with a syntax error at "FORMAT". Both options go in the one list.
+     */
+    public function explainSQL(bool $analyze, string $format): string
+    {
+        $normalised = $this->normaliseExplainFormat($format, self::EXPLAIN_FORMATS);
+
+        $options = [];
+        if ($analyze) {
+            $options[] = 'ANALYZE';
+        }
+        if ($normalised !== 'text') {
+            $options[] = 'FORMAT ' . strtoupper($normalised);
+        }
+
+        return $options === [] ? 'EXPLAIN' : 'EXPLAIN (' . implode(', ', $options) . ')';
+    }
+
+    /**
+     * {@inheritdoc}
      */
     public function jsonExtract(string $column, string $path, bool $asText = true): string
     {
+        // An empty path is the document root. MySQL and SQLite already read it
+        // that way ('$'); here explode('.', '') yields [''], which navigates to
+        // a key named '' instead and matches nothing.
+        if ($path === '') {
+            return $asText ? "$column #>> '{}'" : $column;
+        }
+
         $parts = explode('.', $path);
         $operator = $asText ? '->>' : '->';
 
         // For nested paths: column->'key1'->'key2'->>'leaf'
         if (count($parts) === 1) {
-            return "$column $operator '$parts[0]'";
+            return "$column $operator " . $this->stringLiteral($parts[0]);
         }
 
         $expr = $column;
         $lastIndex = count($parts) - 1;
         foreach ($parts as $idx => $part) {
             $op = ($idx === $lastIndex) ? $operator : '->';
-            $expr .= " $op '$part'";
+            $expr .= " $op " . $this->stringLiteral($part);
         }
 
         return $expr;
@@ -103,16 +141,21 @@ class PostgresGrammar implements Grammar
      */
     public function jsonContains(string $column, string $path): string
     {
+        // Containment against the whole document, matching MySQL's '$'.
+        if ($path === '') {
+            return "$column @> ?::jsonb";
+        }
+
         // PostgreSQL: column->'path' @> ?::jsonb
         $parts = explode('.', $path);
 
         if (count($parts) === 1) {
-            return "$column -> '$parts[0]' @> ?::jsonb";
+            return "$column -> " . $this->stringLiteral($parts[0]) . ' @> ?::jsonb';
         }
 
         $expr = $column;
         foreach ($parts as $part) {
-            $expr .= " -> '$part'";
+            $expr .= ' -> ' . $this->stringLiteral($part);
         }
 
         return "$expr @> ?::jsonb";
@@ -123,15 +166,23 @@ class PostgresGrammar implements Grammar
      */
     public function jsonLength(string $column, string $path): string
     {
+        // Length of the document itself. jsonb_array_length requires an array
+        // here, as it does at any other path — that divergence from MySQL's
+        // JSON_LENGTH, which also counts object keys, is not specific to the
+        // root and is documented on the method.
+        if ($path === '') {
+            return "jsonb_array_length($column)";
+        }
+
         $parts = explode('.', $path);
 
         if (count($parts) === 1) {
-            return "jsonb_array_length($column -> '$parts[0]')";
+            return "jsonb_array_length($column -> " . $this->stringLiteral($parts[0]) . ')';
         }
 
         $expr = $column;
         foreach ($parts as $part) {
-            $expr .= " -> '$part'";
+            $expr .= ' -> ' . $this->stringLiteral($part);
         }
 
         return "jsonb_array_length($expr)";
@@ -178,7 +229,7 @@ class PostgresGrammar implements Grammar
 
         return "INSERT INTO $table ("
             . implode(', ', $quotedColumns)
-            . ") VALUES ($placeholders) ON CONFLICT DO NOTHING";
+            . ") VALUES $placeholders ON CONFLICT DO NOTHING";
     }
 
     /**
@@ -213,22 +264,31 @@ class PostgresGrammar implements Grammar
     /**
      * {@inheritdoc}
      */
+    public function supportsStatementModifiers(): bool
+    {
+        return false;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function jsonKeyExists(string $column, string $path): string
     {
+        $this->assertJsonKeyPath($path);
         $parts = explode('.', $path);
 
         if (count($parts) === 1) {
-            return "jsonb_exists($column, '$parts[0]')";
+            return "jsonb_exists($column, " . $this->stringLiteral($parts[0]) . ')';
         }
 
         // For nested paths, navigate to the parent then check key
         $lastKey = array_pop($parts);
         $expr = $column;
         foreach ($parts as $part) {
-            $expr .= " -> '$part'";
+            $expr .= ' -> ' . $this->stringLiteral($part);
         }
 
-        return "jsonb_exists($expr, '$lastKey')";
+        return "jsonb_exists($expr, " . $this->stringLiteral($lastKey) . ')';
     }
 
     /**
@@ -249,16 +309,21 @@ class PostgresGrammar implements Grammar
      */
     public function fulltextSearch(array $columns, string $mode = 'plain', string $language = 'english'): string
     {
+        $mode = $this->normaliseFulltextMode($mode);
+
+        // The text search config is a literal, not a bindable parameter.
+        $config = $this->stringLiteral($language);
+
         $tsvectors = array_map(
-            fn($col) => "to_tsvector('$language', $col)",
+            fn($col) => "to_tsvector($config, $col)",
             $columns
         );
         $tsvector = count($tsvectors) === 1 ? $tsvectors[0] : implode(' || ', $tsvectors);
 
         $queryFunc = match ($mode) {
-            'phrase' => "phraseto_tsquery('$language', ?)",
-            'websearch' => "websearch_to_tsquery('$language', ?)",
-            default => "plainto_tsquery('$language', ?)",
+            'phrase' => "phraseto_tsquery($config, ?)",
+            'websearch' => "websearch_to_tsquery($config, ?)",
+            default => "plainto_tsquery($config, ?)",
         };
 
         return "$tsvector @@ $queryFunc";
@@ -277,6 +342,7 @@ class PostgresGrammar implements Grammar
      */
     public function arrayContains(string $column, string $type = 'text'): string
     {
+        $type = $this->validateArrayType($type);
         return "$column @> ARRAY[?]::$type" . '[]';
     }
 
@@ -285,8 +351,30 @@ class PostgresGrammar implements Grammar
      */
     public function arrayOverlaps(string $column, int $count, string $type = 'text'): string
     {
+        $type = $this->validateArrayType($type);
         $placeholders = implode(',', array_fill(0, $count, '?'));
         return "$column && ARRAY[$placeholders]::$type" . '[]';
+    }
+
+    /**
+     * Validate a cast type used in an array expression.
+     *
+     * The type is a bare SQL keyword rather than a literal, so it cannot be
+     * quoted or bound — it is restricted to a simple identifier instead.
+     *
+     * @param string $type The element type.
+     * @return string The validated type.
+     * @throws InvalidArgumentException If the type is not a simple identifier.
+     */
+    private function validateArrayType(string $type): string
+    {
+        if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_ ]*$/', $type) !== 1) {
+            throw new InvalidArgumentException(
+                "Invalid array element type: '$type'."
+            );
+        }
+
+        return $type;
     }
 
     /**

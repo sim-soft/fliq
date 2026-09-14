@@ -55,14 +55,20 @@ class QueryCache
     }
 
     /**
-     * Generate a cache key from SQL and bind values.
+     * Generate a cache key from the connection, SQL, and bind values.
+     *
+     * The connection name is part of the key because the same statement means
+     * different things on different databases. Without it, a query against one
+     * connection would serve rows cached from another — a data leak between
+     * tenants when connections are how they are kept apart.
      *
      * @param string $sql The SQL statement.
      * @param array<int, mixed>|null $binds The bind values.
+     * @param string $connection The resolved connection name.
      * @return string
      */
-    public static function generateKey(string $sql, ?array $binds): string
+    public static function generateKey(string $sql, ?array $binds, string $connection = ''): string
     {
-        return 'query:' . md5($sql . serialize($binds));
+        return 'query:' . md5($connection . "\0" . $sql . serialize($binds));
     }
 }

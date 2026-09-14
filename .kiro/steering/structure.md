@@ -15,7 +15,7 @@ src/                        # Simsoft\DB\ namespace
 ├── Generator/              # ModelGenerator, ObserverGenerator
 ├── Grammar/                # Grammar.php (abstract), MySQLGrammar, PostgresGrammar, SQLiteGrammar
 ├── Interfaces/             # Executable, Updatable, Deletable
-├── Traits/                 # Aggregation, Binds, Condition, Debug, Error, Execute, Fetchable,
+├── Traits/                 # Aggregation, Binds, Condition, Error, Execute, Fetchable,
 │                           # HasEvents, Ignore, LowPriority, PlaceHolder, Qualifier,
 │                           # Scenario, SoftDeletes, Timestamps
 ├── Collection.php          # Query result collection

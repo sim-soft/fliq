@@ -156,6 +156,57 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
+### Passing several conditions at once
+
+`where()` accepts two array shapes. A **list of triplets**, each
+`[attribute, operator, value]`, joined with `AND`:
+
+```php
+/* WHERE `user`.`score` >= ? AND `user`.`id` IN (?,?) */
+$users = User::find()->where([
+    ['score', '>=', 150],
+    ['id', 'IN', [1, 2]],
+])->get();
+```
+
+Or a **map** of `attribute => value`, where an array value means `IN`. The map
+form is wrapped in parentheses, so it stays one unit next to an `OR`:
+
+```php
+/* WHERE (`user`.`role` = ? AND `user`.`id` IN (?,?)) */
+$users = User::find()->where(['role' => 'admin', 'id' => [1, 2]])->get();
+```
+
+An entry whose value list is empty adds no condition, and the rest of the
+group still applies — the same rule `in()` follows:
+
+```php
+/* WHERE (`user`.`role` = ?) — the empty id filter contributes nothing */
+$users = User::find()->where(['role' => 'admin', 'id' => []])->get();
+```
+
+In the list form every entry must be a full triplet; a shorter one throws an
+`InvalidArgumentException` naming its position. In the map form a `null` value
+is bound as a value rather than becoming an `IS NULL` check — use
+[`isNull()`](#null-conditions) for that.
+
+`orWhere()` takes everything `where()` takes — both array shapes, a closure, a
+`Raw`, and a clause object — and differs only in joining with `OR`:
+
+```php
+/* WHERE `user`.`id` = ? OR `user`.`score` >= ? AND `user`.`id` IN (?,?) */
+$users = User::find()
+    ->where('id', 10)
+    ->orWhere([
+        ['score', '>=', 150],
+        ['id', 'IN', [1, 2]],
+    ])
+    ->get();
+```
+
+The list form is not wrapped, and does not need to be: SQL binds `AND` tighter
+than `OR`, so the triplets already group as one unit against the `OR`.
+
 ### Which operators can I use?
 
 The middle argument of `where()` is the **comparison operator**. Only these are
@@ -199,6 +250,42 @@ values with `?`:
 $users = User::find()->where(new Raw('{score} <=> ?', [50]))->get();
 ```
 
+### Operators that take more than one value
+
+`IN`, `NOT IN`, `BETWEEN` and `NOT BETWEEN` need a right-hand side that isn't a
+single value, so pass an array:
+
+```php
+/* WHERE `user`.`id` IN (?,?,?) */
+$users = User::find()->where('id', 'IN', [1, 2, 3])->get();
+
+/* WHERE `user`.`id` BETWEEN ? AND ? */
+$users = User::find()->where('id', 'BETWEEN', [2, 4])->get();
+```
+
+These are the same conditions [`in()`](#in-clauses) and
+[`between()`](#between-clauses) build, and those methods read better when you
+know the operator up front. The operator form is there for when the operator
+itself is a variable.
+
+A range needs exactly two bounds, and a set needs an array, a subquery or a
+`Raw` expression — anything else throws an `InvalidArgumentException` naming the
+attribute rather than producing SQL the server rejects. An empty set adds no
+condition at all, matching `in()`.
+
+`IS` and `IS NOT` compare against null and take no value:
+
+```php
+/* WHERE `user`.`deleted_at` IS NULL */
+$users = User::find()->where('deleted_at', 'IS', null)->get();
+```
+
+`where('col', null)` and `where('col', '=', null)` mean the same thing, as do
+`where('col', '!=', null)`, `where('col', '<>', null)` and
+`where('col', 'IS NOT', null)`. The dedicated
+[null methods](#null-conditions) are clearer if you aren't choosing the
+operator dynamically.
+
 ### The two-argument shortcut
 
 When you only pass two arguments, FLIQ assumes you meant `=`:
@@ -210,6 +297,41 @@ User::find()->where('status', '=', 'active'); /* identical */
 
 So `where('status', 'active')` is *not* treated as the operator `'active'` —
 the shortcut is applied first. Both forms are safe.
+
+### Joining a condition with OR
+
+Most condition methods take a trailing logical operator saying how to join the
+condition to the one before it. It defaults to `AND`:
+
+```php
+/* WHERE `user`.`role` = ? AND `user`.`deleted_at` IS NULL */
+User::find()->where('role', '=', 'admin')->isNull('deleted_at');
+
+/* WHERE `user`.`role` = ? OR `user`.`deleted_at` IS NULL */
+User::find()->where('role', '=', 'admin')->isNull('deleted_at', 'OR');
+```
+
+Every such method also has an `or`-prefixed variant that reads better and means
+exactly the same thing:
+
+```php
+/* WHERE `user`.`role` = ? OR `user`.`deleted_at` IS NULL */
+User::find()->where('role', '=', 'admin')->orIsNull('deleted_at');
+```
+
+Only `AND` and `OR` are accepted, in any case. The operator is written into the
+SQL rather than bound as a parameter, so anything else is refused rather than
+passed through to the server:
+
+```php
+// InvalidArgumentException: Invalid logical operator: 'XOR'.
+//                           Allowed operators: AND, OR.
+User::find()->where('role', '=', 'admin')->isNull('deleted_at', 'XOR');
+```
+
+Never build this argument from request data. It selects between two fixed
+keywords, so there is nothing a user needs to choose here; if a filter is
+optional, use [`when()`](#conditional-clauses) or the `or` variant instead.
 
 ## Null Conditions
 
@@ -269,6 +391,44 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
+The right-hand side can also be a subquery or a `Raw` expression:
+
+```php
+/* WHERE `user`.`id` IN (SELECT `post`.`user_id` FROM `post`) */
+$authors = (new ActiveQuery())
+    ->from('user')
+    ->in('id', (new ActiveQuery())->from('post')->select('user_id'))
+    ->on('mysql')
+    ->get();
+```
+
+### Empty lists
+
+An empty list is a set with nothing in it, not an absent condition:
+
+```php
+/* WHERE 1 = 0 — matches no rows */
+$users = (new ActiveQuery())->from('user')->in('id', [])->on('mysql')->get();
+
+/* WHERE 1 = 1 — matches every row */
+$users = (new ActiveQuery())->from('user')->notIn('id', [])->on('mysql')->get();
+```
+
+This matters when the list is computed. An allow-list that filters down to
+nothing narrows the query to nothing, rather than dropping the restriction and
+returning the whole table:
+
+```php
+$visibleIds = $this->idsTheUserMaySee(); // may legitimately be []
+
+// Returns nothing when the user may see nothing.
+$posts = Post::find()->whereIn('id', $visibleIds)->get();
+```
+
+Note this differs from `like()`, where an empty array of patterns *is* skipped —
+a search with no terms is an absent filter, whereas membership of an empty set
+has a defined answer.
+
 ## Between Clauses
 
 Methods: `between()`, `notBetween()`, `orBetween()`, `orNotBetween()`
@@ -312,9 +472,36 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
+At least one of the two dates is required. Passing neither throws
+`InvalidArgumentException`, since there is no range to test.
+
+The negated forms match the exact complement — a row outside the range is
+before the start *or* after the end, so they build a disjunction and wrap it in
+parentheses. The parentheses matter: `AND` binds tighter than `OR`, so without
+them a neighbouring condition would attach to only one half of the range.
+
+```php
+/* WHERE (created_at < ? OR created_at > ?) */
+$users = (new ActiveQuery())
+    ->from('user')
+    ->notBetweenDate('created_at', '2024-01-01', '2024-12-31')
+    ->on('mysql')
+    ->get();
+
+/* WHERE created_at < ? -- open-ended, so a single comparison */
+$users = (new ActiveQuery())
+    ->from('user')
+    ->notBetweenDate('created_at', '2024-01-01', null)
+    ->on('mysql')
+    ->get();
+```
+
 ### Between Date Interval
 
 Methods: `betweenDateInterval()`, `notBetweenDateInterval()`, `orBetweenDateInterval()`
+
+The window is half-open: it includes the start date and excludes the day the
+interval lands on, so consecutive windows tile without overlapping.
 
 ```php
 /* WHERE created_at >= ? AND created_at < ? + INTERVAL 7 DAY */
@@ -323,11 +510,20 @@ $users = (new ActiveQuery())
     ->betweenDateInterval('created_at', '2024-01-01', 7)
     ->on('mysql')
     ->get();
+
+/* WHERE (created_at < ? OR created_at >= ? + INTERVAL 7 DAY) */
+$users = (new ActiveQuery())
+    ->from('user')
+    ->notBetweenDateInterval('created_at', '2024-01-01', 7)
+    ->on('mysql')
+    ->get();
 ```
 
 ## Exists Clauses
 
 Methods: `exists()`, `notExists()`, `orExists()`, `orNotExists()`
+
+Each takes a sub-query and adds an `EXISTS` condition to the current query:
 
 ```php
 /* WHERE EXISTS (SELECT * FROM orders WHERE orders.user_id = user.id) */
@@ -339,6 +535,19 @@ $users = (new ActiveQuery())
     ->on('mysql')
     ->get();
 ```
+
+To ask instead whether the query itself matches anything, use `hasRecords()`.
+It fetches at most one row, so the cost does not grow with the number of
+matches:
+
+```php
+if (User::find()->where('email', '=', $email)->hasRecords()) {
+    throw new RuntimeException('That address is already registered.');
+}
+```
+
+> **Note:** `hasRecords()` is the row-existence check. `exists()` is the SQL
+> `EXISTS` sub-query condition above, and always takes a query argument.
 
 ## Regex / Contains
 
@@ -470,6 +679,39 @@ $results = (new ActiveQuery())
 | `booleanMode()`              | —          | IN BOOLEAN MODE (default)                |
 | `naturalLanguageMode()`      | —          | IN NATURAL LANGUAGE MODE                 |
 | `queryExpansion()`           | —          | WITH QUERY EXPANSION                     |
+
+The three mode methods set one value, so the last one called is the one used.
+
+### Words Below the Index Minimum
+
+`mustHave()` puts a `+` on every word. A word shorter than the server's minimum
+token size is not in the index, so requiring it matches nothing and the whole
+search returns no rows — which is the honest answer to "this word must appear"
+for a word the index cannot answer for. The minimum is
+`innodb_ft_min_token_size` (default 3) for InnoDB and `ft_min_word_len` (default
+4) for MyISAM. Use `optional()` for words you want to rank by rather than
+require.
+
+### Terms From User Input
+
+`optional()` strips every character MySQL reads as an operator — `+ - > < ( )
+~ * " @` — from anywhere in the word, not just its ends. Each becomes a space,
+so `a<b` searches for two words rather than the single word `ab`:
+
+```php
+(new MatchAgainst(['title', 'body']))
+    ->optional(['mysql', 'user@example.com'])   // -> 'mysql user example.com'
+    ->booleanMode()
+```
+
+This matters because the words are joined into one expression: without the
+stripping, a single term holding an `@` makes MySQL reject the entire search
+with `syntax error, unexpected '@'`, taking every other word down with it. A
+term that is nothing but operators is dropped rather than left as a gap.
+
+The other builders do not strip, since their operator is the point of the call,
+and `search()` passes your expression through untouched — that is the method to
+use when you want to write boolean syntax by hand.
 
 ### Custom Search Expression
 
@@ -641,13 +883,18 @@ Use `->` to separate column from path, and `.` for nested keys:
 ```php
 /* MySQL:      WHERE JSON_CONTAINS(`user`.`tags`, ?, '$')
    PostgreSQL: WHERE "user"."tags" @> ?::jsonb
-   SQLite:     WHERE EXISTS (SELECT 1 FROM json_each("user"."tags") WHERE json_each.value = ?) */
+   SQLite:     WHERE EXISTS (SELECT 1 FROM json_each("user"."tags", '$')
+                             WHERE json_each.value = json_extract(?, '$')) */
 User::find()->jsonContains('tags', 'php')->get();
 
 // Nested path
-/* MySQL: WHERE JSON_CONTAINS(`user`.`meta`, ?, '$.skills') */
+/* MySQL:      WHERE JSON_CONTAINS(`user`.`meta`, ?, '$.skills')
+   PostgreSQL: WHERE "user"."meta" -> 'skills' @> ?::jsonb */
 User::find()->jsonContains('meta->skills', 'docker')->get();
 ```
+
+A column written without `->` addresses the whole document rather than a key
+inside it, which is what `jsonContains('tags', ...)` above relies on.
 
 ### `jsonNotContains()` — Value NOT in JSON array
 
@@ -660,15 +907,27 @@ User::find()->jsonNotContains('tags', 'spam')->get();
 
 ```php
 /* MySQL:      WHERE JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.address')
-   PostgreSQL: WHERE "user"."meta" -> 'address' IS NOT NULL */
+   PostgreSQL: WHERE jsonb_exists("user"."meta", 'address')
+   SQLite:     WHERE json_type("user"."meta", '$.address') IS NOT NULL */
 User::find()->jsonHas('meta->address')->get();
 ```
 
 ### `jsonMissing()` — JSON path does not exist
 
 ```php
-/* MySQL: WHERE NOT JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.phone') */
+/* MySQL:      WHERE NOT JSON_CONTAINS_PATH(`user`.`meta`, 'one', '$.phone')
+   PostgreSQL: WHERE NOT jsonb_exists("user"."meta", 'phone') */
 User::find()->jsonMissing('meta->phone')->get();
+```
+
+Both methods test for a **key**, so the column must carry one:
+
+```php
+// Throws InvalidArgumentException — the document root is not a key.
+User::find()->jsonHas('meta')->get();
+
+// To test that the document itself is present, ask for the column instead.
+User::find()->notNull('meta')->get();
 ```
 
 ### `jsonLength()` — Check JSON array length
@@ -800,24 +1059,57 @@ $users = (new ActiveQuery())
 PostgreSQL supports native array column types (`text[]`, `int[]`, `varchar[]`).
 FLIQ provides fluent query methods for array containment and overlap checks.
 
+On MySQL and SQLite the same calls work against a JSON array column, so a query
+written once selects the same rows on all three engines.
+
 ### `arrayContains()` — Column contains a value
 
 ```php
-/* PostgreSQL: WHERE "user"."tags" @> ARRAY[?]::text[] */
+/* PostgreSQL: WHERE "user"."tags" @> ARRAY[?]::text[]
+   MySQL:      WHERE JSON_CONTAINS(`user`.`tags`, JSON_ARRAY(CAST(? AS CHAR)), '$')
+   SQLite:     WHERE EXISTS (SELECT 1 FROM json_each("user"."tags") WHERE json_each.value = ?) */
 User::find()->arrayContains('tags', 'php')->get();
 
 /* Integer array column */
+/* MySQL: WHERE JSON_CONTAINS(`user`.`role_ids`, JSON_ARRAY(CAST(? AS SIGNED)), '$') */
 User::find()->arrayContains('role_ids', 5, 'int')->get();
 ```
 
 ### `arrayOverlaps()` — Column has any of the given values
 
 ```php
-/* PostgreSQL: WHERE "user"."tags" && ARRAY[?, ?]::text[] */
+/* PostgreSQL: WHERE "user"."tags" && ARRAY[?, ?]::text[]
+   MySQL:      WHERE JSON_OVERLAPS(`user`.`tags`, JSON_ARRAY(CAST(? AS CHAR),CAST(? AS CHAR))) */
 User::find()->arrayOverlaps('tags', ['php', 'python'])->get();
 
 /* Integer array */
 User::find()->arrayOverlaps('department_ids', [1, 3, 5], 'int')->get();
+
+/* No values overlaps nothing — the condition is 0 = 1 and binds no value */
+User::find()->arrayOverlaps('tags', [])->get();
+```
+
+### The element type argument
+
+The third argument names the type of a single element. On PostgreSQL it is the
+cast in `ARRAY[?]::type[]`. On MySQL it decides how the bound value is compared:
+PDO sends every value as a string, so without it the integer `5` would be
+compared as `"5"` and would not match a stored `[1, 5]`.
+
+| `$type`                              | MySQL comparison |
+|--------------------------------------|------------------|
+| `text`, `varchar`, anything else      | as text          |
+| `int`, `integer`, `bigint`, `int4`, … | as an integer    |
+| `numeric`, `decimal`, `float`, …      | as a number      |
+| `date`                                | as a date        |
+| `timestamp`, `datetime`               | as a timestamp   |
+
+```php
+/* Matches a stored [1, 5] */
+User::find()->arrayContains('role_ids', 5, 'int')->get();
+
+/* Does NOT match a stored [1, 5] — 5 is compared as the text "5" */
+User::find()->arrayContains('role_ids', 5)->get();
 ```
 
 ### Or Variants
@@ -933,15 +1225,29 @@ CaseExpression::whenRaw('age >= ? AND age < ?', [18, 30])->then('young')
 
 ### Use in ORDER BY
 
+Pass the expression itself. Its WHEN and THEN values are bound, and `orderBy()`
+collects them along with the SQL:
+
 ```php
 /* Sort admins first, editors second, others last */
 User::find()
-    ->orderByRaw(
-        (string) CaseExpression::when('role', '=', 'admin')->then(1)
+    ->orderBy(
+        CaseExpression::when('role', '=', 'admin')->then(1)
             ->andWhen('role', '=', 'editor')->then(2)
             ->else(3)
     )
     ->get();
+```
+
+Casting it to a string leaves those values behind, so if you do that, hand them
+over yourself — and read them *after* the cast, since the expression collects
+them while it builds:
+
+```php
+$order = CaseExpression::when('role', '=', 'admin')->then(1)->else(2);
+$sql = (string) $order;
+
+User::find()->orderByRaw($sql, $order->getBinds())->get();
 ```
 
 ### Method Reference
@@ -1014,21 +1320,68 @@ $users = (new ActiveQuery())
     ->get();
 ```
 
+An empty array of patterns adds no condition, so a search form submitted blank
+returns unfiltered results rather than failing. Any other conditions still
+apply on their own:
+
+```php
+/* WHERE `user`.`status_code` = ? — the like contributes nothing */
+$terms = [];
+$users = User::find()->where('status_code', 1)->like('username', $terms)->get();
+```
+
+This matches `in()`, which likewise skips an empty value list. Filter the
+result set yourself if an empty search should instead return nothing.
+
+### Case sensitivity
+
+There are two families, and **they have opposite defaults**:
+
+| Family | Methods | Default |
+|--------|---------|---------|
+| Base | `like()`, `orLike()`, `notLike()`, `orNotLike()` | case-**sensitive** |
+| Where | `whereLike()`, `orWhereLike()`, `whereNotLike()`, `orWhereNotLike()` | case-**insensitive** |
+
+They share an implementation and differ only in that default, so the same call
+through each does not produce the same SQL:
+
+```php
+/* WHERE `user`.`username` LIKE ? */
+User::find()->like('username', 'Alice%')->get();
+
+/* WHERE LOWER(`user`.`username`) LIKE LOWER(?) */
+User::find()->whereLike('username', 'Alice%')->get();
+```
+
+On MySQL this often makes no difference, because the usual collations are
+already case-insensitive. **On PostgreSQL it does**: `LIKE` and `ILIKE` are
+genuinely different operators there, so the two calls above return different
+rows. Pass `caseSensitive` explicitly whenever it matters:
+
+```php
+User::find()->like('username', 'Alice%', caseSensitive: false)->get();   // ILIKE on PG
+User::find()->whereLike('username', 'Alice%', caseSensitive: true)->get(); // LIKE on PG
+```
+
+Case-insensitive matching compiles per engine: `ILIKE` / `NOT ILIKE` on
+PostgreSQL, and `LOWER(col) LIKE LOWER(?)` everywhere else. Note that the
+`LOWER()` form cannot use a plain index on the column — add a functional index
+on `LOWER(col)` if such a search needs to be fast.
+
 ## Ordering, Grouping, Limit & Offset
 
 ```php
-/* SELECT `t`.`first_name`, `t`.`last_name`, COUNT(*) AS count FROM `user` `t`
-   GROUP BY `t`.`first_name`, `t`.`last_name`
-   HAVING `count` > ?
-   ORDER BY `t`.`first_name` ASC, `t`.`last_name` DESC
+/* SELECT `t`.`role`, COUNT(*) AS total FROM `user` `t`
+   GROUP BY `t`.`role`
+   HAVING COUNT(*) > ?
+   ORDER BY `t`.`role` ASC
    LIMIT 30, 20 */
 $users = (new ActiveQuery())
     ->from('user t')
-    ->select('first_name', 'last_name', new Raw('COUNT(*) AS count'))
-    ->groupBy('first_name', 'last_name')
-    ->having('count', '>', 1)
-    ->orderBy('first_name')
-    ->orderBy('last_name', 'DESC')
+    ->select('role', new Raw('COUNT(*) AS total'))
+    ->groupBy('role')
+    ->having(new Raw('COUNT(*)'), '>', 1)
+    ->orderBy('role')
     ->limit(20, 30)
     ->on('mysql')
     ->get();
@@ -1040,6 +1393,22 @@ $users = (new ActiveQuery())
         'first_name' => 'ASC',
         'last_name' => 'DESC',
     ])
+    ->on('mysql')
+    ->get();
+
+/* SELECT `user`.* FROM `user` ORDER BY `user`.`last_name` DESC, `user`.`first_name` DESC */
+// A plain list takes the direction argument, so several columns can share one.
+$users = (new ActiveQuery())
+    ->from('user')
+    ->orderByDesc(['last_name', 'first_name'])
+    ->on('mysql')
+    ->get();
+
+/* SELECT `user`.* FROM `user` ORDER BY `user`.`role` ASC, `user`.`score` DESC */
+// The two shapes may be mixed: a keyed entry uses its own direction.
+$users = (new ActiveQuery())
+    ->from('user')
+    ->orderBy(['role', 'score' => 'DESC'])
     ->on('mysql')
     ->get();
 
@@ -1057,6 +1426,76 @@ $users = (new ActiveQuery())
     ->on('mysql')
     ->get();
 ```
+
+### `HAVING`: one expression, several conditions
+
+`GROUP BY` takes a list, but `HAVING` takes a single boolean expression. Repeated
+calls are joined with `AND`, or with `OR` through `orHaving()` and
+`orHavingRaw()` — the same way `where()` and `orWhere()` build the `WHERE`
+clause:
+
+```php
+/* HAVING COUNT(*) > ? AND MAX(`score`) > ? */
+$q->groupBy('role')
+  ->having(new Raw('COUNT(*)'), '>', 1)
+  ->having(new Raw('MAX(score)'), '>', 80);
+
+/* HAVING COUNT(*) > ? OR MAX(`score`) > ? */
+$q->groupBy('role')
+  ->having(new Raw('COUNT(*)'), '>', 5)
+  ->orHaving(new Raw('MAX(score)'), '>', 90);
+```
+
+#### Filtering on an aggregate
+
+A plain string attribute is qualified with the table alias, as everywhere else
+in the builder. That is what you want for a real column, but a `SELECT` alias is
+not one — `having('total', '>', 1)` builds `` `t`.`total` > ? `` and the server
+answers `Unknown column 't.total' in 'having clause'`. Repeat the aggregate in a
+`Raw`, or name the alias through `havingRaw()`:
+
+```php
+/* HAVING COUNT(*) > ? */
+$q->select('role', new Raw('COUNT(*) AS total'))
+  ->groupBy('role')
+  ->having(new Raw('COUNT(*)'), '>', 1);
+
+/* HAVING total > ? — MySQL resolves the select alias here */
+$q->select('role', new Raw('COUNT(*) AS total'))
+  ->groupBy('role')
+  ->havingRaw('total > ?', [1]);
+```
+
+Alias resolution in `HAVING` is a MySQL extension; the standard, and Postgres,
+require the expression. Prefer the `Raw` aggregate form if you target both.
+
+#### Comparing against a `Raw` expression
+
+A `Raw` attribute given alone is used as the whole condition. Given an operator
+and a value it becomes the left-hand side of a comparison, with the value bound:
+
+```php
+$q->where(new Raw('score > 90'));              /* WHERE score > 90 */
+$q->where(new Raw('score'), '>', 90);          /* WHERE score > ?  — binds 90 */
+$q->groupBy('role')->having(new Raw('COUNT(*)'), '>', 2);
+```
+
+This holds for `where()` and `having()` alike. As always with `Raw`, the
+expression is emitted verbatim — never build one from user input; put the value
+in the operand, where it is bound.
+
+### `IS` and `IS NOT` compare against `NULL`
+
+Both operators take `NULL` on the right, not a value, in `where()` and
+`having()`:
+
+```php
+$q->where('deleted_at', 'IS', null);      /* WHERE `u`.`deleted_at` IS NULL */
+$q->where('deleted_at', 'IS NOT', null);  /* WHERE `u`.`deleted_at` IS NOT NULL */
+```
+
+Given anything else they throw `InvalidArgumentException`, since `col IS ?` is
+not a shape the server accepts. Use `=` or `!=` to compare a value.
 
 ### Sort direction: `ASC` or `DESC` only
 
@@ -1078,9 +1517,10 @@ This makes a sort direction taken straight from a URL safe to pass through:
 User::find()->orderBy('created_at', $_GET['sort'] ?? 'ASC')->get();
 ```
 
-Both forms are guarded the same way, including the array form
-(`orderBy(['id' => 'DESC'])`). For a sort expression the keywords can't
-express, use `orderByRaw()`.
+Every form is guarded the same way: the keyed array (`orderBy(['id' => 'DESC'])`)
+and the list array, whose direction comes from the argument
+(`orderBy(['id', 'score'], $_GET['sort'] ?? 'ASC')`). For a sort expression the
+keywords can't express, use `orderByRaw()`.
 
 ### Limit and page numbers must make sense
 
@@ -1161,6 +1601,83 @@ $posts = (new ActiveQuery())
     ->get();
 ```
 
+### Joining a Sub-query
+
+Pass `[alias => query]` as the table. The sub-query may be an `ActiveQuery` or a
+`Raw`; either way its bind values are kept and handed over in the position the
+`JOIN` occupies, which is after `FROM` and before `WHERE`:
+
+```php
+/* SELECT `u`.`id` FROM `user` `u`
+   INNER JOIN (SELECT `post`.`user_id` FROM `post` WHERE `post`.`view_count` > ?) AS `p`
+     ON `p`.`user_id` = `u`.`id`
+   WHERE `u`.`score` > ?
+   — binds [100, 50] */
+$popular = (new ActiveQuery())
+    ->from('post')
+    ->select('user_id')
+    ->where('view_count', '>', 100);
+
+$users = (new ActiveQuery())
+    ->from('user u')
+    ->select('id')
+    ->join(['p' => $popular], ['user_id' => 'id'])
+    ->where('score', '>', 50)
+    ->on('mysql')
+    ->get();
+```
+
+The same array form works with `leftJoin()`, `rightJoin()` and the rest. The ON
+mapping is keyed by the sub-query's own column, as with a plain table.
+
+### Joins Without an ON Clause
+
+A `CROSS JOIN` pairs every row with every row, so it takes no key mapping —
+omit the second argument:
+
+```php
+/* SELECT `user`.* FROM `user` CROSS JOIN `size` */
+$combinations = (new ActiveQuery())
+    ->from('user')
+    ->crossJoin('size')
+    ->on('mysql')
+    ->get();
+
+/* Aliases still apply: ... CROSS JOIN `size` AS `s` */
+$combinations = (new ActiveQuery())
+    ->from('user')
+    ->crossJoin('size s')
+    ->on('mysql')
+    ->get();
+```
+
+Any join type called without keys omits the `ON` clause the same way.
+
+### Scoping Conditions to a Joined Table
+
+An unqualified column name resolves against the FROM table, so constraining a
+joined table normally means prefixing each column. `withAlias()` swaps the
+alias for the duration of a callback so those columns can be named plainly:
+
+```php
+/* SELECT `u`.`id` FROM `user` `u`
+   INNER JOIN `post` AS `p` ON `p`.`user_id` = `u`.`id`
+   WHERE `p`.`view_count` > ? AND `u`.`status_code` = ? */
+$users = (new ActiveQuery())
+    ->from('user u')
+    ->select('u.id')
+    ->join('post p', ['p.user_id' => 'u.id'])
+    ->withAlias('p', fn($query) => $query->where('view_count', '>', 0))
+    ->where('status_code', 1)
+    ->on('mysql')
+    ->get();
+```
+
+The alias applies only inside the callback — `status_code` above still
+resolves to `` `u` ``. It covers `select()`, `where()`, `groupBy()`,
+`having()`, and `orderBy()`, and is restored even if the callback throws.
+Names already carrying a prefix are left alone.
+
 ### Raw Expressions in Joins
 
 Use `{attribute}` placeholders inside `Raw` expressions — they resolve to the main table's qualified column:
@@ -1238,6 +1755,59 @@ $vipTotal = Order::find()
     ->sum('total');
 ```
 
+### Empty result sets
+
+An aggregate over zero rows returns `0` (`0.0` for `avg()`), not `null`. SQL's
+`SUM()`, `MIN()`, `MAX()` and `AVG()` all yield `NULL` when nothing matches; the
+builder normalises that so the return type is always numeric.
+
+```php
+$noRows = User::find()->where('username', 'nobody');
+
+$noRows->count();  // 0
+$noRows->sum('score');  // 0
+$noRows->max('score');  // 0
+$noRows->avg('score');  // 0.0
+```
+
+### `countDistinct('*')`
+
+`COUNT(DISTINCT *)` is not valid SQL, so `countDistinct()` drops the `DISTINCT`
+keyword when the attribute is `*` and behaves like a plain `count()`. Pass a
+column name to actually count distinct values:
+
+```php
+$query->countDistinct();        // COUNT(*) — same as count()
+$query->countDistinct('*');     // COUNT(*) — same as count()
+$query->countDistinct('role');  // COUNT(DISTINCT `user`.`role`)
+```
+
+### Result alias
+
+Every aggregate takes a second argument naming the result column — `'total'` for
+the counts, `'sum'`, `'avg'`, `'min'`, `'max'` for the rest. Pass your own, or
+`null` to omit the `AS` clause. The return value is the same either way:
+
+```php
+$query->count();             // SELECT COUNT(*) AS `total` ...
+$query->count('*', 'c');     // SELECT COUNT(*) AS `c` ...
+$query->count('*', null);    // SELECT COUNT(*) ...
+```
+
+### Total pages
+
+`getTotalPages()` counts the matching rows and divides by the page size,
+rounding up. It throws `InvalidArgumentException` if the page size is below 1,
+and returns `0` when nothing matches:
+
+```php
+User::find()->getTotalPages(20);                  // ceil(count / 20)
+User::find()->where('role', 'admin')->getTotalPages(10);
+User::find()->getTotalPages(20, 'department_id'); // counts that column instead
+
+User::find()->getTotalPages(0);  // InvalidArgumentException
+```
+
 ## Sub-queries
 
 Use an array with alias as key for sub-query FROM:
@@ -1280,16 +1850,29 @@ For the full method reference, see the [Collections guide](06-COLLECTIONS.md).
 
 Use raw SQL fragments within the fluent builder for expressions that can't be built with methods.
 
+Every one of these takes an optional second argument holding the values for any
+placeholders the expression contains. Put user input there rather than into the
+SQL — see [Security](#security-how-your-values-are-protected) below.
+
 ### `selectRaw()` — Raw SELECT expression
 
 ```php
-/* SELECT `user`.`name`, COUNT(*) AS total FROM `user` GROUP BY `user`.`department_id` */
+/* SELECT `user`.`department_id`, COUNT(*) AS total FROM `user`
+   GROUP BY `user`.`department_id` */
 $users = User::find()
-    ->select('name')
+    ->select('department_id')
     ->selectRaw('COUNT(*) AS total')
     ->groupBy('department_id')
     ->get();
+
+/* With a bound value: SELECT IF(`score` > ?, 1, 0) AS passed */
+$users = User::find()
+    ->selectRaw('IF(`score` > ?, 1, 0) AS passed', [$threshold])
+    ->get();
 ```
+
+Select only the columns you group by, or aggregates of the rest — MySQL's
+default `only_full_group_by` and PostgreSQL both reject anything else.
 
 ### `orderByRaw()` — Raw ORDER BY expression
 
@@ -1297,6 +1880,22 @@ $users = User::find()
 /* SELECT `user`.* FROM `user` ORDER BY FIELD(status, 3, 1, 2) */
 $users = User::find()
     ->orderByRaw('FIELD(status, 3, 1, 2)')
+    ->get();
+
+/* With a bound value */
+$users = User::find()
+    ->orderByRaw('FIELD(`status`, ?) DESC', [$first])
+    ->get();
+```
+
+`orderBy()` also accepts a `Raw` expression directly, emitted as written rather
+than quoted as a column name. No direction is appended — an expression that
+wants one says so itself:
+
+```php
+$users = User::find()
+    ->orderBy(new Raw('FIELD(`status`, ?) DESC', [$first]))
+    ->orderBy('id')
     ->get();
 ```
 
@@ -1381,12 +1980,18 @@ checks these against fixed lists instead:
 | Sort direction              | [`ASC`/`DESC` only](#sort-direction-asc-or-desc-only); anything else becomes `ASC` |
 | Limit / offset / page       | [Must be non-negative](#limit-and-page-numbers-must-make-sense); invalid ones throw |
 | Table names                 | Validated when the table is set              |
+| Column names                | Quoted and escaped, but not checked against a list |
 
 ### The part you own: column names
 
-Column names are quoted but **not** validated against a list, because they can
-legitimately be `*`, `user.*`, `COUNT(*)`, or a JSON path. So if a column name
-comes from user input, check it yourself against columns you expect:
+Column names are quoted, and any quote character inside the name is escaped so
+it cannot break out and become SQL. But they are **not** validated against a
+list of known columns, because they can legitimately be `*`, `user.*`, or a
+JSON path — there is no single pattern to check against.
+
+So a hostile column name can't inject SQL, but it can still reach the database
+as a bad query. If a column name comes from user input, check it yourself
+against the columns you expect:
 
 ```php
 /* Don't hand a URL parameter straight to the builder */
@@ -1414,6 +2019,22 @@ User::find()->whereRaw('{salary} * 12 > ?', [$_GET['min']])->get();
 /* UNSAFE — the value becomes part of the SQL */
 User::find()->whereRaw('{salary} * 12 > ' . $_GET['min'])->get();
 ```
+
+Identifiers cannot be bound — `?` only stands in for values, never for a table
+or column name. When one has to come from user input, match it against a list
+you control rather than escaping it:
+
+```php
+/* SAFE — the input selects a column, it never becomes one */
+$columns = ['name' => 'user.name', 'joined' => 'user.created_at'];
+$column = $columns[$_GET['sort'] ?? ''] ?? 'user.id';
+
+User::find()->orderByRaw("$column DESC")->get();
+```
+
+The same applies to anything else the database parses as syntax rather than
+data: sort directions, operators, and SQL keywords. Everything else — every
+actual value — belongs in a bind.
 
 ### Mass assignment
 
@@ -1626,7 +2247,23 @@ DB::table('orders')
     ->where('total', '>', 100)
     ->join('user', ['id' => 'orders.user_id'])
     ->dd();
+
+// Output:
+// SELECT `orders`.* FROM `orders` INNER JOIN `user` ON `user`.`id` = `orders`.`user_id`
+// WHERE `orders`.`total` > '100'
 ```
+
+The `100` comes back quoted because that is how the value is sent. Except on
+SQLite, `PDOStatement::execute()` binds every value as a string, so the server
+compares `'100'` and not the number — and against a text column those differ.
+The rendering shows what ran rather than what you typed, which is the point of
+looking at it. SQLite's driver binds by type and its dumps show numbers bare,
+for the same reason.
+
+Values are escaped for the connection's own engine, so the output can be pasted
+into a client as-is. It is still a debugging aid, not a way to build SQL: use
+the builder, or [`Raw`](#raw-expressions) with binds, for anything you intend to
+execute.
 
 ### `dump()` — Dump Without Stopping
 
@@ -1675,15 +2312,31 @@ $plan = User::find()
 
 ```php
 /* PostgreSQL: EXPLAIN (FORMAT JSON) SELECT ... */
+/* MySQL:      EXPLAIN FORMAT=JSON SELECT ...   */
 $plan = Post::find()
     ->whereFulltext(['title', 'body'], 'optimization')
     ->explain(format: 'json');
 ```
 
-| Parameter  | Values                                | Default  |
-|------------|---------------------------------------|----------|
-| `$analyze` | `true` / `false`                      | `false`  |
-| `$format`  | `'text'`, `'json'`, `'yaml'`, `'xml'` | `'text'` |
+| Parameter  | Values                    | Default  |
+|------------|---------------------------|----------|
+| `$analyze` | `true` / `false`          | `false`  |
+| `$format`  | depends on the driver     | `'text'` |
+
+Each engine names its own formats, so `$format` is validated against the driver
+the query runs on. A format the engine cannot produce raises an
+`InvalidArgumentException` rather than silently returning a plan in a different
+shape:
+
+| Driver         | `$format`                              | With `analyze: true` |
+|----------------|----------------------------------------|----------------------|
+| **MySQL**      | `'text'`, `'traditional'`, `'json'`, `'tree'` | `'text'`, `'tree'` |
+| **PostgreSQL** | `'text'`, `'json'`, `'yaml'`, `'xml'`  | same                 |
+| **SQLite**     | `'text'`                               | not supported        |
+
+MySQL's `EXPLAIN ANALYZE` always reports the tree format and rejects
+`FORMAT=JSON` beside it. SQLite has no `EXPLAIN ANALYZE` — `EXPLAIN QUERY PLAN`
+describes the plan without executing the statement.
 
 Works on any builder:
 
@@ -1694,5 +2347,5 @@ $plan = (new ActiveQuery())
     ->from('order')
     ->join('user', ['id' => '!order.user_id'])
     ->where('!order.total', '>', 100)
-    ->explain(analyze: true, format: 'json');
+    ->explain(analyze: true);
 ```

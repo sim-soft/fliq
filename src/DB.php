@@ -52,7 +52,11 @@ class DB
     public static function table(string|array|Model $name, ?string $connection = null): ActiveQuery
     {
         if ($name instanceof Model) {
-            return $name::find();
+            $query = $name::find();
+
+            // Only override when one was given: the model already carries its
+            // own connection, and passing null through would discard it.
+            return $connection === null ? $query : $query->withConnection($connection);
         }
 
         return (new ActiveQuery())
@@ -303,21 +307,30 @@ class DB
     /**
      * Perform INSERT ... ON DUPLICATE KEY UPDATE (upsert).
      *
+     * PostgreSQL and SQLite need the conflicting columns named, and reject a
+     * target that is no unique constraint. Pass $conflictColumns whenever the
+     * key is not the first inserted column — without it the facade could only
+     * express a single-column conflict, so an upsert against a composite key
+     * failed outright on those engines while working on MySQL, which needs no
+     * target at all.
+     *
      * @param string|Model $table Table name or model.
      * @param array<string, mixed> $attributes Column => value pairs to insert.
-     * @param array<int|string, mixed> $updateColumns Columns to update on duplicate. Numeric array uses VALUES(), assoc sets explicit values.
+     * @param array<int|string, mixed> $updateColumns Columns to update on duplicate. Numeric array uses the inserted value, assoc sets explicit values.
      * @param string|null $connection Connection name override.
+     * @param array<int, string> $conflictColumns Columns forming the unique constraint. Ignored by MySQL.
      * @return Executable|bool
      */
     public static function upsert(
         string|Model $table,
         array        $attributes,
         array        $updateColumns = [],
-        ?string      $connection = null
+        ?string      $connection = null,
+        array        $conflictColumns = []
     ): Executable|bool
     {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
-        $builder = new Upsert($tableName, $attributes, $updateColumns);
+        $builder = new Upsert($tableName, $attributes, $updateColumns, $conflictColumns);
 
         return self::executeOrReturn($builder, $connectionName);
     }

@@ -5,8 +5,10 @@ namespace Query;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Cache\ArrayCache;
 use Simsoft\DB\Cache\QueryCache;
+use Simsoft\DB\Connection;
 
 class CacheTest extends TestCase
 {
@@ -140,5 +142,63 @@ class CacheTest extends TestCase
         $cache->set('forever', 'value', 0);
         $this->assertSame('value', $cache->get('forever'));
         $this->assertTrue($cache->has('forever'));
+    }
+
+    #[Test]
+    public function queryCacheGenerateKeySeparatesConnections(): void
+    {
+        // The same statement means different things on different databases.
+        $sql = 'SELECT * FROM user';
+
+        $this->assertNotSame(
+            QueryCache::generateKey($sql, null, 'db_a'),
+            QueryCache::generateKey($sql, null, 'db_b')
+        );
+
+        // The same connection still shares a key.
+        $this->assertSame(
+            QueryCache::generateKey($sql, null, 'db_a'),
+            QueryCache::generateKey($sql, null, 'db_a')
+        );
+    }
+
+    #[Test]
+    public function cachedResultsDoNotLeakBetweenConnections(): void
+    {
+        // Two databases holding the same table with different rows. Caching a
+        // query on one must not serve those rows to the other.
+        Connection::reset();
+        Connection::add('cache_a', ['driver' => 'sqlite', 'database' => ':memory:']);
+        Connection::add('cache_b', ['driver' => 'sqlite', 'database' => ':memory:']);
+
+        foreach (['cache_a' => 'from_a', 'cache_b' => 'from_b'] as $name => $value) {
+            $driver = Connection::get($name);
+            $driver->execute(new Raw('CREATE TABLE cache_probe (id INTEGER PRIMARY KEY, name TEXT)'));
+            $driver->execute(new Raw('INSERT INTO cache_probe (id, name) VALUES (1, ?)', [$value]));
+        }
+
+        QueryCache::setDriver(new ArrayCache());
+
+        $read = static function (string $connection): string {
+            $query = new ActiveQuery()
+                ->from('cache_probe')
+                ->select('name')
+                ->withConnection($connection)
+                ->cache(60);
+
+            $rows = iterator_to_array($query->getArray());
+
+            return (string)$rows[0]['name'];
+        };
+
+        // Warm the cache on the first connection, then read the second.
+        $this->assertSame('from_a', $read('cache_a'));
+        $this->assertSame('from_b', $read('cache_b'));
+
+        // Both remain correct on a second, now-cached read.
+        $this->assertSame('from_a', $read('cache_a'));
+        $this->assertSame('from_b', $read('cache_b'));
+
+        Connection::reset();
     }
 }

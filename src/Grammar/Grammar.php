@@ -2,6 +2,8 @@
 
 namespace Simsoft\DB\Grammar;
 
+use InvalidArgumentException;
+
 /**
  * Grammar interface.
  *
@@ -16,6 +18,32 @@ interface Grammar
      * @return string
      */
     public function quoteIdentifier(string $identifier): string;
+
+    /**
+     * Render a value the way it would have to be written as a SQL literal.
+     *
+     * For display only — `dump()`, `dd()` and `getFullSQL()`. Values reach the
+     * server as bound parameters; nothing built here is executed. Engines spell
+     * their literals differently (MySQL treats backslash as an escape inside
+     * one, PostgreSQL and SQLite do not), so this belongs to the grammar.
+     *
+     * @param mixed $value The value to render.
+     * @return string The value as a SQL literal.
+     */
+    public function literal(mixed $value): string;
+
+    /**
+     * Interpolate bind values into a statement for display.
+     *
+     * For display only — see {@see literal()}. A statement with more
+     * placeholders than binds keeps the remaining placeholders as written.
+     *
+     * @param string $sql The statement, with placeholders.
+     * @param array<int, mixed> $values The bind values, in statement order.
+     * @param string $placeHolder The placeholder to replace. Default: '?'.
+     * @return string
+     */
+    public function readableSQL(string $sql, array $values, string $placeHolder = '?'): string;
 
     /**
      * Build LIMIT/OFFSET clause.
@@ -34,16 +62,42 @@ interface Grammar
     public function insertIgnoreSQL(): string;
 
     /**
-     * Build UPSERT (insert or update on conflict) SQL.
+     * Build the clause that turns an INSERT into an upsert.
      *
-     * @param string $table The quoted table name.
-     * @param array<int, string> $columns The column names.
-     * @param array<int, string> $updateColumns Columns to update on conflict.
-     * @param string $placeholders The VALUES placeholders.
-     * @param array<int, string> $conflictColumns Columns that form the unique constraint for conflict detection.
-     * @return string
+     * The assignments are built by the caller, which is the only place that
+     * knows whether each column takes the inserted value or one the caller
+     * supplied. All this adds is the engine's wrapper around them —
+     * `ON DUPLICATE KEY UPDATE` for MySQL, `ON CONFLICT (...) DO UPDATE SET`
+     * for the engines that need a conflict target named.
+     *
+     * @param array<int, string> $assignments Ready-built `col = expr` clauses.
+     * @param array<int, string> $conflictColumns Columns forming the unique constraint.
+     * @return string The clause, including its leading space.
      */
-    public function upsertSQL(string $table, array $columns, array $updateColumns, string $placeholders, array $conflictColumns = []): string;
+    public function onConflictSQL(array $assignments, array $conflictColumns): string;
+
+    /**
+     * How the engine refers to the row that was being inserted.
+     *
+     * MySQL spells it `VALUES(col)`, PostgreSQL `EXCLUDED.col`, SQLite
+     * `excluded.col`. Used to build the assignment for a column that takes the
+     * value the INSERT carried rather than one the caller named.
+     *
+     * @param string $column The unquoted column name.
+     * @return string The reference, quoted for this engine.
+     */
+    public function excludedColumnSQL(string $column): string;
+
+    /**
+     * Whether an upsert on this engine must name the conflicting columns.
+     *
+     * MySQL reacts to any unique key and takes no conflict target; PostgreSQL
+     * and SQLite require one, and reject a target that is not backed by a
+     * unique constraint.
+     *
+     * @return bool
+     */
+    public function requiresConflictTarget(): bool;
 
     /**
      * Get the driver name identifier.
@@ -51,6 +105,20 @@ interface Grammar
      * @return string
      */
     public function getDriverName(): string;
+
+    /**
+     * Build the keyword prefix that turns a statement into a plan request.
+     *
+     * Each engine spells this differently and accepts a different set of
+     * formats, so the caller names what it wants and the grammar decides
+     * whether that is expressible here.
+     *
+     * @param bool $analyze Whether to actually run the statement and report real timings.
+     * @param string $format The requested output format.
+     * @return string The prefix to place before the statement.
+     * @throws \InvalidArgumentException If the engine cannot produce this combination.
+     */
+    public function explainSQL(bool $analyze, string $format): string;
 
     /**
      * Build a JSON path extraction expression.
@@ -120,7 +188,8 @@ interface Grammar
      *
      * @param string $table The quoted table name.
      * @param array<int, string> $columns The column names.
-     * @param string $placeholders The VALUES placeholders.
+     * @param string $placeholders The VALUES placeholders, parenthesised per row
+     *                             — "(?,?)" for one row, "(?,?),(?,?)" for two.
      * @return string|null Full SQL if grammar overrides default behavior, null to use default.
      */
     public function insertIgnoreFullSQL(string $table, array $columns, string $placeholders): ?string;
@@ -149,11 +218,26 @@ interface Grammar
     public function supportsReturning(): bool;
 
     /**
+     * Whether the engine accepts MySQL's statement modifiers.
+     *
+     * LOW_PRIORITY, IGNORE and QUICK are MySQL keywords with no equivalent
+     * elsewhere. Emitted anyway they are not merely rejected: PostgreSQL parses
+     * "UPDATE IGNORE \"user\"" as an update of a table named ignore aliased
+     * "user", so the statement runs and writes to the wrong table where one by
+     * that name exists.
+     *
+     * @return bool
+     */
+    public function supportsStatementModifiers(): bool;
+
+    /**
      * Build a JSON key exists expression.
      *
      * @param string $column The JSON column name (quoted).
-     * @param string $path The JSON path.
+     * @param string $path The JSON path. Must not be empty: the document root
+     *                     is not a key, so there is nothing to test for.
      * @return string The SQL expression.
+     * @throws InvalidArgumentException If the path is empty.
      */
     public function jsonKeyExists(string $column, string $path): string;
 
@@ -169,9 +253,10 @@ interface Grammar
      * Build a full-text search expression.
      *
      * @param array<int, string> $columns The columns to search.
-     * @param string $mode The search mode (e.g., 'plain', 'phrase', 'websearch').
+     * @param string $mode The search mode: 'plain', 'phrase' or 'websearch'.
      * @param string $language The text search language/config.
      * @return string The SQL expression with a ? placeholder for the search term.
+     * @throws \InvalidArgumentException If the mode is not one of the three supported.
      */
     public function fulltextSearch(array $columns, string $mode = 'plain', string $language = 'english'): string;
 

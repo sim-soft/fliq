@@ -3,6 +3,7 @@
 namespace Simsoft\DB\Builder;
 
 use Simsoft\DB\Connection;
+use Simsoft\DB\Interfaces\ReturnsRows;
 use Simsoft\DB\Traits\Condition;
 use Simsoft\DB\Traits\Ignore;
 use Simsoft\DB\Traits\LowPriority;
@@ -10,15 +11,22 @@ use Simsoft\DB\Traits\LowPriority;
 /**
  * Delete Query Builder Class.
  */
-class Delete extends Builder
+class Delete extends Builder implements ReturnsRows
 {
     use LowPriority, Ignore, Condition;
 
     /** @var bool */
     protected bool $quick = false; // used by delete operation only
 
-    /** @var array<int, string> Columns to return via RETURNING clause */
-    protected array $returningColumns = [];
+    /**
+     * @var array<int, string>|null Columns to return via RETURNING clause,
+     *                              null when no clause was asked for.
+     *
+     * An empty array is a request — returning() with no arguments means
+     * RETURNING *, which is why it cannot double as the "never asked" marker
+     * the way it used to.
+     */
+    protected ?array $returningColumns = null;
 
     /** @var array<int, array<string, mixed>>|null Rows returned by RETURNING clause */
     protected ?array $returningResult = null;
@@ -45,6 +53,7 @@ class Delete extends Builder
     public function quick(): self
     {
         $this->quick = true;
+        $this->invalidateSQL();
         return $this;
     }
 
@@ -59,6 +68,7 @@ class Delete extends Builder
     public function returning(string ...$columns): static
     {
         $this->returningColumns = array_values($columns);
+        $this->invalidateSQL();
         return $this;
     }
 
@@ -69,7 +79,7 @@ class Delete extends Builder
      */
     public function hasReturning(): bool
     {
-        return !empty($this->returningColumns) || $this->returningResult !== null;
+        return $this->returningColumns !== null || $this->returningResult !== null;
     }
 
     /**
@@ -101,14 +111,19 @@ class Delete extends Builder
         $sql = implode(' ', array_filter([
             'DELETE',
             $this->lowPriorityModifier(),
-            $this->quick ? 'QUICK' : null,
+            // QUICK is MySQL's, like LOW_PRIORITY and IGNORE: a MyISAM index
+            // hint elsewhere read as the name of the table being deleted from.
+            $this->quick && $this->supportsModifiers() ? 'QUICK' : null,
             $this->ignoreModifier(),
-            'FROM ' . $this->quote($this->table),
+            'FROM ' . $this->quoteTable($this->table),
             $this->getCondition(),
         ]));
 
-        // Append RETURNING clause if columns specified
-        if (!empty($this->returningColumns)) {
+        // Append RETURNING clause if one was asked for. Tested against null, not
+        // emptiness: returning() with no arguments asks for RETURNING * and
+        // leaves an empty array behind, which an empty() test read as no request
+        // at all and dropped on the floor.
+        if ($this->returningColumns !== null) {
             $grammar = Connection::grammar($this->connection);
             if ($grammar->supportsReturning()) {
                 $sql .= ' ' . $grammar->returningColumnsSQL($this->returningColumns);

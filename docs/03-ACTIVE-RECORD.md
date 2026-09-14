@@ -189,6 +189,28 @@ $user->updateAll(['status' => 0], User::find()->where('last_login', '<', '2024-0
 
 /* Delete all matching records */
 $user->deleteAll(User::find()->where('status', 0));
+
+/* The condition may also be a string or a Raw — all three build the same statement */
+$user->deleteAll('`status` = 0');
+$user->deleteAll(new Raw('`status` = ?', [0]));
+```
+
+**`deleteAll()` refuses an empty condition.** A filter that came back empty is the
+ordinary way a bulk delete turns into a full-table delete, so a condition that
+contributes no `WHERE` — `''`, whitespace, an empty `Raw`, or an `ActiveQuery` with no
+filters — raises `QueryException` rather than emptying the table:
+
+```php
+$user->deleteAll('');                        /* QueryException */
+$user->deleteAll(new Raw(''));               /* QueryException */
+$user->deleteAll(User::find());              /* QueryException — no where() */
+$user->deleteAll(User::find()->limit(10));   /* QueryException — limit does not narrow */
+```
+
+To delete every row on purpose, say so:
+
+```php
+$user->deleteAllUnchecked();                 /* DELETE FROM `user` */
 ```
 
 ### Refresh from Database
@@ -242,6 +264,35 @@ $user->save();
 > these rules and write every attribute given to them. Never hand them
 > unvalidated external input.
 
+### Models that declare neither
+
+A model that declares neither `$fillable` nor `$guarded` accepts **every column
+except its primary key**. `$model->fill($request)` then writes whatever the
+request happens to contain, including columns you never intended to expose. This
+is convenient while prototyping and a liability in production, and it is easy to
+miss because nothing complains.
+
+`requireAssignmentRules()` turns that omission into an exception:
+
+```php
+// Once, during bootstrap
+Model::requireAssignmentRules();
+
+// A model with no $fillable and no $guarded now throws
+(new Industry())->fill(['name' => 'Mining']);
+// MassAssignmentException: Industry declares neither $fillable nor $guarded...
+```
+
+Models that declare either one are unaffected, as is direct assignment
+(`$model->column = $value`) and everything in the bypass list above. Call
+`Model::allowUndeclaredAssignment()` to switch back.
+
+This is opt-in rather than the default deliberately. Enabling it for everyone
+would break existing undeclared models silently, at runtime, in exactly the
+write paths that matter most — worse than the exposure it closes. Switching it
+on yourself surfaces those models on the first request, in development, where
+you can fix them.
+
 ## Composite Primary Keys
 
 For tables with composite primary keys, define `$primaryKey` as an array:
@@ -294,11 +345,131 @@ class User extends Model
         'is_active' => 'bool',
         'salary' => 'float',
         'name' => 'string',
+        'preferences' => 'json',
     ];
 }
 ```
 
-Supported cast types: `int`, `integer`, `bool`, `boolean`, `float`, `double`, `real`, `string`, `binary`, `array`.
+Supported cast types: `int`, `integer`, `bool`, `boolean`, `float`, `double`,
+`real`, `string`, `binary`, `array`, `json`.
+
+Any other name throws `InvalidArgumentException` — a cast the model asked for
+and did not get is worse than one it never declared.
+
+### Casts and NULL
+
+A cast describes the column's type, not whether it has a value. `NULL` passes
+through untouched in both directions, so a nullable column reads back as `null`
+and can be cleared by assigning `null`:
+
+```php
+$user = User::findByPk(1);
+
+var_dump($user->age);   /* NULL when the column is NULL — not 0 */
+
+$user->age = null;      /* UPDATE `user` SET `age` = NULL */
+$user->save();
+```
+
+### `array` and `json`
+
+Both store the value JSON-encoded, so it binds as a normal parameter, and decode
+it on the way out. They differ only in what they promise on read: `array` always
+answers with an array, `json` stays faithful to the document, which may
+legitimately be a scalar.
+
+```php
+$user->preferences = ['theme' => 'dark', 'tags' => ['a', 'b']];
+$user->save();          /* the column holds {"theme":"dark","tags":["a","b"]} */
+
+$user = User::findByPk(1);
+$user->preferences['theme'];   /* 'dark' */
+```
+
+A value that cannot be encoded — a resource, `NAN`, invalid UTF-8 — throws
+rather than being written as an empty string. A column holding malformed JSON is
+handed back as the raw string, so the corruption stays visible instead of
+reading as an empty array.
+
+### Reading is a read
+
+Reading a cast attribute presents the value through its cast without altering
+what the model holds. `toArray()` and `toJson()` present the same cast values;
+`getAttributes()` returns the raw stored values:
+
+```php
+$setting = Setting::findByPk(1);
+
+$setting->metadata;                  /* ['priority' => 1, ...] — decoded */
+$setting->toArray()['metadata'];     /* ['priority' => 1, ...] — decoded */
+$setting->getAttributes()['metadata']; /* '{"priority":1,...}' — as stored */
+```
+
+## Property Access
+
+A model resolves a property read in this order: a cast attribute, a plain
+attribute, an already-loaded relation, then a relation method to lazy-load.
+Anything else reads as `null`.
+
+```php
+$user = User::findByPk(1);
+
+$user->email;        /* attribute */
+$user->posts;        /* relation — lazy-loaded on first read, then cached */
+$user->no_such_col;  /* null */
+```
+
+Only methods that declare `Relation` as their return type and take no required
+arguments are eligible for lazy loading. Every other method name — including
+`save`, `delete` and `refresh` — reads as `null`:
+
+```php
+$user->delete;   /* null — a property read, not a call */
+$user->delete(); /* the actual delete */
+```
+
+`isset()` agrees with reading. It is `true` whenever reading the property
+answers with something other than `null`, relations included:
+
+```php
+$user->profile ?? $default;   /* the loaded profile, not $default */
+isset($user->deleted_at);     /* false when the column holds NULL */
+```
+
+Testing an unloaded relation with `isset()` loads it, exactly as reading it
+would. Use `relationLoaded()` to ask whether a relation is already in memory
+without going to the database.
+
+Unsetting an attribute discards any pending change to it, so a value you have
+removed is not written on the next `save()`:
+
+```php
+$user->score = 500;
+unset($user->score);
+
+$user->isDirty('score');  /* false */
+$user->save();            /* leaves score as the database has it */
+```
+
+`unset()` on a loaded relation discards the loaded value; the next read
+lazy-loads it again.
+
+### Models must keep their primary key
+
+`update()`, `delete()`, `updateAttributes()` and `updateCounter()` all identify
+the row by primary key. If a model is marked as existing but its key attribute
+is `null`, the statement would match no row while the driver still reported
+success — so FLIQ throws a `QueryException` instead:
+
+```php
+$user = User::findByPk(1);
+unset($user->id);
+
+$user->delete(); /* QueryException: the key attribute "id" is null */
+```
+
+Reload with `refresh()`, or assign the key, before writing. A record that does
+not exist yet is unaffected: `update()` and `delete()` return `false` as before.
 
 ## Lifecycle Hooks
 
@@ -387,12 +558,20 @@ User::on('saved', function (User $user) {
 
 Group all event handlers for a model into one class:
 
+The four "before" events can cancel, so type them `?bool` and return `null` to
+carry on. A `void` method that returns a value is a fatal error, and a `?bool`
+method that falls off its end raises a TypeError — so the `return null;` stays
+even when the method never cancels. The "after" events cannot cancel and are
+typed `void`.
+
 ```php
 class UserObserver
 {
-    public function creating(User $user): void
+    public function creating(User $user): ?bool
     {
         $user->slug = strtolower($user->name);
+
+        return null;
     }
 
     public function created(User $user): void
@@ -400,11 +579,12 @@ class UserObserver
         EmailService::sendWelcome($user->email);
     }
 
-    public function deleting(User $user): bool|null
+    public function deleting(User $user): ?bool
     {
         if ($user->hasActiveSubscription()) {
             return false; // cancel
         }
+
         return null;
     }
 
@@ -464,7 +644,8 @@ Use hooks for model internals. Use events for app-level concerns.
 | `updateAttributes([...])`  | Direct UPDATE on a single record | Events, hooks, dirty tracking, validation, **mass assignment protection** |
 | `updateAll([...], $query)` | Bulk UPDATE on multiple records  | Events, hooks, dirty tracking, validation, **mass assignment protection** |
 | `updateCounter('col', 1)`  | Atomic increment/decrement       | Events, hooks, dirty tracking, validation                                 |
-| `deleteAll($condition)`    | Bulk DELETE                      | Events, hooks                                                             |
+| `deleteAll($condition)`    | Bulk DELETE (rejects an empty condition) | Events, hooks                                                     |
+| `deleteAllUnchecked()`     | Bulk DELETE of every row         | Events, hooks                                                             |
 | `insertBatch([...])`       | Bulk INSERT                      | Events, hooks, dirty tracking, validation, **mass assignment protection** |
 | `updateBatch([...])`       | Bulk CASE WHEN UPDATE            | Events, hooks, dirty tracking, validation, **mass assignment protection** |
 
@@ -517,6 +698,47 @@ DB::transaction('mysql', function () {
 
 Both approaches auto-rollback if an exception is thrown or if the callback
 returns `false` (or doesn't return `true`).
+
+### Nesting transactions
+
+You can call `transaction()` from inside another one. This matters when a
+method that manages its own transaction gets called by another method that
+does the same — you don't have to know whether a transaction is already open.
+
+```php
+User::transaction(function () {
+    $user = new User(['username' => 'ann']);
+    $user->save();
+
+    // Some service method that wraps its own work in a transaction.
+    User::transaction(function () {
+        $log = new AuditLog(['action' => 'user.created']);
+        $log->save();
+
+        return false; // undoes only the audit log
+    });
+
+    return true; // the user is still saved
+});
+```
+
+The rules:
+
+- Only the outermost call opens a real transaction. Inner calls use
+  **savepoints**.
+- An inner rollback undoes **only its own work**. The outer transaction
+  continues.
+- An outer rollback undoes **everything**, including work that inner calls
+  "committed". Nothing is durable until the outermost call commits.
+- An exception thrown anywhere rolls back every level and propagates.
+
+Use `getTransactionLevel()` on the driver if you need to know the current
+depth — `0` means no transaction is open.
+
+> **Note:** If the database connection drops while a transaction is open, FLIQ
+> throws a `ConnectionException` rather than silently reconnecting. Reconnecting
+> would discard the work so far and let the remaining statements commit on their
+> own, which would turn an atomic block into a partial write.
 
 ## Serialization
 
@@ -624,7 +846,23 @@ $post->title = 'Updated';
 $post->save();
 /* updated_at = '2025-05-11 10:35:00' (auto-updated) */
 // created_at unchanged
+
+$post->update(['title' => 'Updated again']);
+/* updated_at = '2025-05-11 10:40:00' — update() maintains it too */
 ```
+
+Both `save()` and `update()` run `beforeSave()`, so the trait applies either
+way. Assigning the column yourself takes precedence — the trait only fills in
+what you have not set:
+
+```php
+$post->updated_at = '2024-01-01 00:00:00';
+$post->save(); // keeps your value
+```
+
+The methods listed under
+[Methods That Do NOT Fire Events](#methods-that-do-not-fire-events) skip hooks
+entirely, so they leave `updated_at` alone. Set it yourself when using those.
 
 Override column names or disable one:
 

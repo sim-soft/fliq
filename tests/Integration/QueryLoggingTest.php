@@ -20,6 +20,7 @@ class QueryLoggingTest extends DatabaseTestCase
         parent::setUp();
         QueryLogger::disable();
         QueryLogger::reset();
+        QueryLogger::setLimit(QueryLogger::DEFAULT_LIMIT);
         QueryMonitor::disable();
         QueryMonitor::reset();
     }
@@ -28,6 +29,7 @@ class QueryLoggingTest extends DatabaseTestCase
     {
         QueryLogger::disable();
         QueryLogger::reset();
+        QueryLogger::setLimit(QueryLogger::DEFAULT_LIMIT);
         QueryMonitor::disable();
         QueryMonitor::reset();
     }
@@ -72,6 +74,74 @@ class QueryLoggingTest extends DatabaseTestCase
 
         $queries = QueryLogger::getQueries();
         $this->assertCount(0, $queries);
+    }
+
+    #[Test]
+    public function loggerDropsOldestQueriesBeyondItsLimit(): void
+    {
+        // The log used to grow without bound, so a long-running worker kept
+        // every query it had ever run until it ran out of memory.
+        QueryLogger::setLimit(5);
+        QueryLogger::enable();
+
+        for ($i = 1; $i <= 12; ++$i) {
+            User::findByPk(1);
+        }
+
+        $this->assertCount(5, QueryLogger::getQueries(), 'log grew past its limit');
+        $this->assertEquals(7, QueryLogger::getDroppedCount());
+
+        // Totals still describe every query, not just the retained ones
+        $this->assertEquals(12, QueryLogger::getQueryCount());
+        $this->assertGreaterThan(0, QueryLogger::getTotalTime());
+    }
+
+    #[Test]
+    public function loggerLimitOfZeroKeepsEverything(): void
+    {
+        QueryLogger::setLimit(0);
+        QueryLogger::enable();
+
+        for ($i = 1; $i <= 8; ++$i) {
+            User::findByPk(1);
+        }
+
+        $this->assertCount(8, QueryLogger::getQueries());
+        $this->assertEquals(0, QueryLogger::getDroppedCount());
+    }
+
+    #[Test]
+    public function loggerLoweringTheLimitTrimsImmediately(): void
+    {
+        QueryLogger::enable();
+
+        for ($i = 1; $i <= 6; ++$i) {
+            User::findByPk(1);
+        }
+        $this->assertCount(6, QueryLogger::getQueries());
+
+        QueryLogger::setLimit(2);
+
+        $this->assertCount(2, QueryLogger::getQueries());
+        $this->assertEquals(6, QueryLogger::getQueryCount());
+    }
+
+    #[Test]
+    public function loggerResetClearsDroppedTotals(): void
+    {
+        QueryLogger::setLimit(2);
+        QueryLogger::enable();
+
+        for ($i = 1; $i <= 5; ++$i) {
+            User::findByPk(1);
+        }
+        $this->assertEquals(3, QueryLogger::getDroppedCount());
+
+        QueryLogger::reset();
+
+        $this->assertEquals(0, QueryLogger::getDroppedCount());
+        $this->assertEquals(0, QueryLogger::getQueryCount());
+        $this->assertEquals(0.0, QueryLogger::getTotalTime());
     }
 
     #[Test]
@@ -179,6 +249,119 @@ class QueryLoggingTest extends DatabaseTestCase
         // Reset handler
         QueryLogger::setHandler(function () {
         });
+    }
+
+    // ------------------------------------------------------------------
+    // Writes
+    //
+    // Everything above runs a SELECT, which goes through Execute::query() and
+    // its private runQuery(). INSERT, UPDATE and DELETE take a different method
+    // — execute() — that carries its own copy of the same monitor and logger
+    // calls. That copy was reached by no test at all, so a write could have
+    // stopped being logged or monitored without anything saying so.
+    // ------------------------------------------------------------------
+
+    #[Test]
+    public function loggerRecordsWritesNotJustReads(): void
+    {
+        QueryLogger::enable();
+
+        $setting = new Setting([
+            'group' => 'logging_probe',
+            'key' => 'written',
+            'value' => 'one',
+        ]);
+        $this->assertTrue($setting->save());
+
+        $queries = QueryLogger::getQueries();
+        $this->assertCount(1, $queries, 'the INSERT was logged');
+        $this->assertStringContainsStringIgnoringCase('insert', $queries[0]['sql']);
+        $this->assertArrayHasKey('binds', $queries[0]);
+        $this->assertGreaterThanOrEqual(0, $queries[0]['time'], 'timed, like a read');
+
+        $setting->delete();
+    }
+
+    #[Test]
+    public function loggerCountsEveryWriteInATotal(): void
+    {
+        QueryLogger::enable();
+
+        $setting = new Setting([
+            'group' => 'logging_probe',
+            'key' => 'counted',
+            'value' => 'one',
+        ]);
+        $setting->save();
+        $setting->value = 'two';
+        $setting->save();
+        $setting->delete();
+
+        $this->assertEquals(3, QueryLogger::getQueryCount(), 'insert, update and delete');
+        $this->assertGreaterThanOrEqual(0, QueryLogger::getTotalTime());
+    }
+
+    #[Test]
+    public function loggerCustomHandlerSeesWrites(): void
+    {
+        $captured = [];
+
+        QueryLogger::enable();
+        QueryLogger::setHandler(function ($sql, $binds, $timeMs) use (&$captured) {
+            $captured[] = $sql;
+        });
+
+        $setting = new Setting([
+            'group' => 'logging_probe',
+            'key' => 'handled',
+            'value' => 'one',
+        ]);
+        $setting->save();
+        $setting->delete();
+
+        QueryLogger::clearHandler();
+
+        $this->assertCount(2, $captured);
+        $this->assertStringContainsStringIgnoringCase('insert', $captured[0]);
+        $this->assertStringContainsStringIgnoringCase('delete', $captured[1]);
+    }
+
+    #[Test]
+    public function monitorSeesRepeatedWrites(): void
+    {
+        // N+1 is usually read-shaped, but a write repeated in a loop is the
+        // same defect and the monitor is meant to catch it.
+        $warnings = [];
+
+        QueryMonitor::enable(3);
+        QueryMonitor::setHandler(function ($pattern, $count, $origin) use (&$warnings) {
+            $warnings[] = ['pattern' => $pattern, 'count' => $count];
+        });
+
+        $written = [];
+        for ($i = 1; $i <= 3; ++$i) {
+            $setting = new Setting([
+                'group' => 'logging_probe',
+                'key' => "monitored_$i",
+                'value' => 'one',
+            ]);
+            $setting->save();
+            $written[] = $setting;
+        }
+
+        // The three DELETEs repeat a pattern of their own and are reported too,
+        // so the INSERT warning is picked out by name rather than by position.
+        foreach ($written as $setting) {
+            $setting->delete();
+        }
+
+        $inserts = array_values(array_filter(
+            $warnings,
+            fn(array $w): bool => stripos($w['pattern'], 'insert') !== false
+        ));
+
+        $this->assertCount(1, $inserts, 'the repeated INSERT was reported');
+        $this->assertEquals(3, $inserts[0]['count']);
     }
 
     // ------------------------------------------------------------------

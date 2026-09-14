@@ -512,31 +512,47 @@ class TestableModelGenerator extends ModelGenerator
     /**
      * @param string $table The table name.
      * @param array<int, array<string, mixed>> $columns
+     * @param string $connectionName The connection name to write into the file.
      */
-    public function __construct(string $table, array $columns)
+    public function __construct(string $table, array $columns, string $connectionName = 'default')
     {
         $this->fakeColumns = $columns;
-        $this->setTable($table);
+        $this->setTable($table, $connectionName);
     }
 
     /**
      * Set the table name directly (bypasses parent constructor).
      *
+     * The connection name is put through the real check rather than assigned
+     * straight to the property. The parent constructor is what normally runs
+     * it, and this double replaces the parent constructor — so assigning
+     * directly would make the double the one place the check does not happen,
+     * which is the opposite of what a test of that check needs.
+     *
      * @param string $table The table name.
+     * @param string $connectionName The connection name.
      * @return void
      */
-    private function setTable(string $table): void
+    private function setTable(string $table, string $connectionName): void
     {
         $reflection = new \ReflectionClass(ModelGenerator::class);
+
+        $reflection->getMethod('assertConnectionName')->invoke(null, $connectionName);
+
         $prop = $reflection->getProperty('table');
         $prop->setValue($this, $table);
 
         $connProp = $reflection->getProperty('connectionName');
-        $connProp->setValue($this, 'default');
+        $connProp->setValue($this, $connectionName);
     }
 
     /**
      * Override preview to use fake columns instead of introspecting.
+     *
+     * The class name is resolved by the real method rather than a copy of it.
+     * A double that derives the name its own way cannot show what the real
+     * generator does with a name PHP will not accept — which is the whole of
+     * what ModelGeneratorSafetyTest is checking.
      *
      * @return string
      */
@@ -544,22 +560,10 @@ class TestableModelGenerator extends ModelGenerator
     {
         $reflection = new \ReflectionClass(ModelGenerator::class);
 
-        $tableMethod = $reflection->getMethod('tableToClassName');
-        $className = $tableMethod->invoke($this, $this->getTable());
+        $resolve = $reflection->getMethod('resolveClassName');
+        $className = $resolve->invoke($this);
 
         $buildMethod = $reflection->getMethod('buildClassCode');
         return $buildMethod->invoke($this, $className, $this->fakeColumns);
-    }
-
-    /**
-     * Get the table name.
-     *
-     * @return string
-     */
-    private function getTable(): string
-    {
-        $reflection = new \ReflectionClass(ModelGenerator::class);
-        $prop = $reflection->getProperty('table');
-        return $prop->getValue($this);
     }
 }

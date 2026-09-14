@@ -285,6 +285,38 @@ class QueryTest extends DatabaseTestCase
     }
 
     #[Test]
+    public function totalPagesRejectsNonPositivePerPage(): void
+    {
+        // perPage 0 used to raise DivisionByZeroError and a negative perPage
+        // returned a negative page count, both from an unguarded division.
+        $rejections = [
+            'zero' => static fn() => User::find()->getTotalPages(0),
+            'negative' => static fn() => User::find()->getTotalPages(-5),
+        ];
+
+        foreach ($rejections as $case => $attempt) {
+            try {
+                $attempt();
+                $this->fail("perPage $case was accepted");
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    #[Test]
+    public function totalPagesCountsPages(): void
+    {
+        // 10 users over 3 per page is 4 pages, the last one partial
+        $this->assertEquals(4, User::find()->getTotalPages(3));
+        $this->assertEquals(1, User::find()->getTotalPages(10));
+        $this->assertEquals(1, User::find()->getTotalPages(100));
+
+        // A query matching nothing has no pages
+        $this->assertEquals(0, User::find()->where('username', '__no_such_user__')->getTotalPages(3));
+    }
+
+    #[Test]
     public function countWithCondition(): void
     {
         $count = User::find()->where('status_code', 1)->count();
@@ -435,6 +467,53 @@ class QueryTest extends DatabaseTestCase
 
         // 2 admins + 2 editors = 4
         $this->assertCount(4, $results);
+    }
+
+    /**
+     * A SELECT of one column from user, restricted by score.
+     *
+     * @param string $operator The comparison operator.
+     * @param int $score The score to compare against.
+     * @return ActiveQuery
+     */
+    private function scoredIds(string $operator, int $score): ActiveQuery
+    {
+        return (new ActiveQuery())
+            ->select('id')
+            ->from('user')
+            ->where('score', $operator, $score)
+            ->withConnection('mysql');
+    }
+
+    #[Test]
+    public function unionAllKeepsDuplicateRows(): void
+    {
+        // Both halves select the same 8 rows; UNION ALL must return all 16.
+        $query = $this->scoredIds('>', 40);
+        $results = $query->unionAll($this->scoredIds('>', 40))->query($query);
+
+        $this->assertCount(16, $results);
+    }
+
+    #[Test]
+    public function unionDistinctRemovesDuplicateRows(): void
+    {
+        $query = $this->scoredIds('>', 40);
+        $results = $query->unionDistinct($this->scoredIds('>', 40))->query($query);
+
+        $this->assertCount(8, $results);
+    }
+
+    #[Test]
+    public function unionHalvesKeepTheirOwnBinds(): void
+    {
+        // Asymmetric halves: 2 rows score above 90 and all 10 score above 30.
+        // The bound values cannot be swapped between the halves without the
+        // total changing, so the count alone pins the pairing.
+        $query = $this->scoredIds('>', 90);
+        $results = $query->unionAll($this->scoredIds('>', 30))->query($query);
+
+        $this->assertCount(12, $results);
     }
 
     // ------------------------------------------------------------------
@@ -644,6 +723,72 @@ class QueryTest extends DatabaseTestCase
         foreach ($results as $row) {
             $this->assertStringContainsStringIgnoringCase('PHP', $row['title']);
         }
+    }
+
+    #[Test]
+    public function fulltextRequiredWordsAllHaveToAppear(): void
+    {
+        // 'PHP' is three characters, so it used to be added without its + and
+        // stopped being required. Measured against this fixture: the search
+        // also returned "Personal Finance for Developers", which has no PHP in
+        // it anywhere. innodb_ft_min_token_size is 3, so the index does hold
+        // the word — the old threshold was MyISAM's ft_min_word_len of 4.
+        $match = (new MatchAgainst(['title', 'body']))
+            ->mustHave(['PHP', 'Developers'])
+            ->booleanMode();
+
+        $query = (new ActiveQuery())
+            ->from('post')
+            ->where($match)
+            ->withConnection('mysql');
+
+        $results = $query->query($query);
+
+        $this->assertGreaterThanOrEqual(1, count($results));
+
+        foreach ($results as $row) {
+            $haystack = $row['title'] . ' ' . $row['body'];
+
+            $this->assertStringContainsStringIgnoringCase('PHP', $haystack);
+            $this->assertStringContainsStringIgnoringCase('Developers', $haystack);
+        }
+    }
+
+    #[Test]
+    public function fulltextRequiringAWordNoRowHasFindsNothing(): void
+    {
+        // The other half of the same fix: no post carries both, so the honest
+        // answer is none. The old expression answered with the MySQL post,
+        // which is the failure a caller would never think to check for.
+        $match = (new MatchAgainst(['title', 'body']))
+            ->mustHave(['PHP', 'Travel'])
+            ->booleanMode();
+
+        $query = (new ActiveQuery())
+            ->from('post')
+            ->where($match)
+            ->withConnection('mysql');
+
+        $this->assertCount(0, $query->query($query));
+    }
+
+    #[Test]
+    public function fulltextTermsCarryingOperatorCharactersStillRun(): void
+    {
+        // optional() takes words that came from a user. An address or any term
+        // holding an @ used to reach the server with the @ intact, and MySQL
+        // rejected the whole expression: "syntax error, unexpected '@'". One
+        // such term took every other word in the search down with it.
+        $match = (new MatchAgainst(['title', 'body']))
+            ->optional(['PHP', 'user@example.com', 'C++'])
+            ->booleanMode();
+
+        $query = (new ActiveQuery())
+            ->from('post')
+            ->where($match)
+            ->withConnection('mysql');
+
+        $this->assertGreaterThanOrEqual(1, count($query->query($query)));
     }
 
     #[Test]

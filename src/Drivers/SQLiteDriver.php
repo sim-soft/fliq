@@ -5,7 +5,10 @@ namespace Simsoft\DB\Drivers;
 use PDO;
 use PDOException;
 use PDOStatement;
+use Simsoft\DB\Exceptions\ConnectionException;
+use Simsoft\DB\Interfaces\CachesStatements;
 use Simsoft\DB\Interfaces\Executable;
+use Simsoft\DB\Interfaces\ReturnsRows;
 
 /**
  * SQLite database driver.
@@ -13,7 +16,7 @@ use Simsoft\DB\Interfaces\Executable;
  * Connection implementation using PHP PDO with SQLite driver.
  * Supports both file-based and in-memory databases.
  */
-class SQLiteDriver extends Driver
+class SQLiteDriver extends Driver implements CachesStatements
 {
     /** @var array<int, string> Required configuration keys */
     protected array $required = ['database'];
@@ -21,6 +24,8 @@ class SQLiteDriver extends Driver
     /** @var array<string, mixed> Default configuration values */
     protected array $default = [
         'database' => ':memory:',
+        'statement_cache' => true,
+        'statement_cache_size' => 100,
     ];
 
     /** @var PDO|null The PDO connection instance */
@@ -29,22 +34,34 @@ class SQLiteDriver extends Driver
     /** @var array<string, PDOStatement> Prepared statement cache */
     private array $statementCache = [];
 
-    /** @var int Maximum cached statements */
+    /** @var int Maximum cached statements before eviction */
     private int $maxCacheSize = 100;
+
+    /** @var bool Whether statement caching is enabled */
+    private bool $cacheEnabled = true;
 
     /**
      * {@inheritdoc}
      */
     protected function connect(): void
     {
+        $this->prepareConnect();
+
         try {
+            // Read before connecting, as the other PDO-backed drivers do. This
+            // driver declared neither key and read neither, so a config that
+            // set them was accepted in full and obeyed in none of it: caching
+            // stayed on and the cache grew past the size that was asked for.
+            $this->cacheEnabled = (bool)($this->config['statement_cache'] ?? true);
+            $this->maxCacheSize = (int)($this->config['statement_cache_size'] ?? 100);
+
             $dsn = 'sqlite:' . $this->config['database'];
 
-            $this->connection = new PDO($dsn, null, null, array_replace([
+            $this->connection = new PDO($dsn, null, null, $this->mergePdoOptions([
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES => false,
-            ], (array)($this->config['options'] ?? [])));
+            ], $this->config['options'] ?? []));
 
             // Enable WAL mode for better concurrency (file-based only)
             if ($this->config['database'] !== ':memory:') {
@@ -53,9 +70,46 @@ class SQLiteDriver extends Driver
 
             // Enable foreign keys (off by default in SQLite)
             $this->connection->exec('PRAGMA foreign_keys=ON');
+
+            $this->markActivity();
         } catch (PDOException $exception) {
             $this->addError($exception->getMessage());
         }
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * SQLite talks to a local file rather than a server, so there is no
+     * connection to lose and nothing here should ever run. An in-memory
+     * database exists only inside its connection, so reopening one would hand
+     * back an empty database rather than the caller's data — better to say so.
+     *
+     * @throws ConnectionException If the database is in-memory, or the file
+     *                             could no longer be opened.
+     */
+    protected function forceReconnect(): void
+    {
+        if ($this->config['database'] === ':memory:') {
+            throw new ConnectionException(
+                'The connection to an in-memory SQLite database was lost. '
+                . 'Its contents existed only in that connection and cannot be recovered.'
+            );
+        }
+
+        // Statements are bound to the connection that prepared them.
+        $this->statementCache = [];
+        $this->connection = null;
+        $this->connect();
+        $this->assertReconnected();
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function isConnected(): bool
+    {
+        return $this->connection !== null;
     }
 
     /**
@@ -77,18 +131,70 @@ class SQLiteDriver extends Driver
      */
     public function execute(Executable $query): bool
     {
+        $this->reconnectIfNeeded();
+
+        return $this->runWithReconnect(fn(): bool => $this->executeOnce($query));
+    }
+
+    /**
+     * Run one attempt of execute().
+     *
+     * @param Executable $query The query to run.
+     * @return bool
+     */
+    private function executeOnce(Executable $query): bool
+    {
         $conn = $this->requireConnection();
 
         $sql = $query->getSQL();
         $binds = $query->getBinds();
 
+        // SQLite has supported RETURNING since 3.35, and the grammar says so, so
+        // the clause was emitted and the rows it produced were left in the
+        // statement and thrown away. getReturningResult() answered null for a
+        // statement that had returned rows, which is the same answer it gives
+        // for one that returned none.
+        if ($this->capturesReturning($query)) {
+            $stmt = $this->prepareStatement($sql);
+            $this->bindTypedValues($stmt, $binds ?? []);
+            $result = $stmt->execute();
+            $query->setReturningResult($stmt->fetchAll());
+            $this->markActivity();
+
+            return $result;
+        }
+
         if ($binds === null) {
-            return $conn->exec($sql) !== false;
+            $result = $conn->exec($sql) !== false;
+            $this->markActivity();
+
+            return $result;
         }
 
         $stmt = $this->prepareStatement($sql);
         $this->bindTypedValues($stmt, $binds);
-        return $stmt->execute();
+        $result = $stmt->execute();
+        $this->markActivity();
+
+        return $result;
+    }
+
+    /**
+     * Whether this statement carries a RETURNING clause whose rows to keep.
+     *
+     * The three builders were named here individually, which was the set that
+     * declared the methods rather than the set that can carry the clause. Upsert
+     * was not among them and so had its rows dropped — leaving its caller with
+     * SQLite's connection-scoped last id, which after a skipped upsert names
+     * whatever the previous statement inserted.
+     *
+     * @param Executable $query The query about to run.
+     * @return bool
+     * @phpstan-assert-if-true ReturnsRows $query
+     */
+    private function capturesReturning(Executable $query): bool
+    {
+        return $query instanceof ReturnsRows && $query->hasReturning();
     }
 
     /**
@@ -98,14 +204,19 @@ class SQLiteDriver extends Driver
      */
     public function query(Executable $query): array
     {
+        $this->reconnectIfNeeded();
+
         $sql = $query->getSQL();
         $binds = $query->getBinds();
 
-        $stmt = $this->prepareStatement($sql);
-        $this->bindTypedValues($stmt, $binds ?? []);
-        $stmt->execute();
+        return $this->runWithReconnect(function () use ($sql, $binds): array {
+            $stmt = $this->prepareStatement($sql);
+            $this->bindTypedValues($stmt, $binds ?? []);
+            $stmt->execute();
+            $this->markActivity();
 
-        return $stmt->fetchAll();
+            return $stmt->fetchAll();
+        });
     }
 
     /**
@@ -113,47 +224,55 @@ class SQLiteDriver extends Driver
      */
     public function lastInsertId(): false|string
     {
-        return $this->requireConnection()->lastInsertId();
+        return $this->normalizeInsertId(fn(): string|false => $this->requireConnection()->lastInsertId());
     }
 
     /**
      * {@inheritdoc}
      */
-    public function transaction(callable $callback): bool
+    protected function beginTransaction(): void
     {
-        $conn = $this->requireConnection();
-        $conn->beginTransaction();
-
-        try {
-            if ($callback() === true) {
-                return $conn->commit();
-            }
-
-            $conn->rollBack();
-            return false;
-        } catch (\Throwable $e) {
-            $conn->rollBack();
-            throw $e;
-        }
+        $this->requireConnection()->beginTransaction();
     }
 
     /**
-     * Check if the connection is still alive.
-     *
-     * @return bool
+     * {@inheritdoc}
      */
-    public function ping(): bool
+    protected function commitTransaction(): bool
     {
-        if ($this->connection === null) {
+        return $this->requireConnection()->commit();
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function rollBackTransaction(): void
+    {
+        $this->requireConnection()->rollBack();
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function executeRawStatement(string $sql): void
+    {
+        $this->requireConnection()->exec($sql);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function probeLiveness(): bool
+    {
+        $stmt = $this->requireConnection()->query('SELECT 1');
+        if ($stmt === false) {
             return false;
         }
 
-        try {
-            $this->connection->query('SELECT 1');
-            return true;
-        } catch (\Throwable) {
-            return false;
-        }
+        $stmt->fetchAll();
+        $stmt->closeCursor();
+
+        return true;
     }
 
     /**
@@ -191,6 +310,10 @@ class SQLiteDriver extends Driver
     {
         $conn = $this->requireConnection();
 
+        if (!$this->cacheEnabled) {
+            return $conn->prepare($sql);
+        }
+
         if (isset($this->statementCache[$sql])) {
             return $this->statementCache[$sql];
         }
@@ -223,6 +346,48 @@ class SQLiteDriver extends Driver
     public function clearStatementCache(): void
     {
         $this->statementCache = [];
+    }
+
+    /**
+     * Enable statement caching.
+     *
+     * @return void
+     */
+    public function enableStatementCache(): void
+    {
+        $this->cacheEnabled = true;
+    }
+
+    /**
+     * Disable statement caching and clear existing cache.
+     *
+     * @return void
+     */
+    public function disableStatementCache(): void
+    {
+        $this->cacheEnabled = false;
+        $this->statementCache = [];
+    }
+
+    /**
+     * Check if statement caching is enabled.
+     *
+     * @return bool
+     */
+    public function isStatementCacheEnabled(): bool
+    {
+        return $this->cacheEnabled;
+    }
+
+    /**
+     * Set the maximum statement cache size.
+     *
+     * @param int $size Maximum number of cached statements.
+     * @return void
+     */
+    public function setStatementCacheSize(int $size): void
+    {
+        $this->maxCacheSize = $size;
     }
 
     /**

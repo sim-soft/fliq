@@ -8,6 +8,7 @@ use Simsoft\DB\Builder\Update;
 use Simsoft\DB\Collection;
 use Simsoft\DB\CursorPaginator;
 use Simsoft\DB\EagerLoader;
+use Simsoft\DB\Exceptions\QueryException;
 use Simsoft\DB\Model;
 use Simsoft\DB\Paginator;
 
@@ -27,7 +28,12 @@ trait Fetchable
      */
     public function first(): mixed
     {
-        $result = $this->limit(1)->query($this);
+        // Limiting a clone rather than $this. The limit used to be written onto
+        // the receiver, so it outlived the call: after $q->first(), the same $q
+        // answered every later all(), getArray(), each() and cursor() with a
+        // single row, and reported no error while doing it.
+        $query = (clone $this)->limit(1);
+        $result = $this->query($query);
         if (!$result) {
             return $this->modelClass ? null : [];
         }
@@ -46,18 +52,57 @@ trait Fetchable
     }
 
     /**
-     * Find by primary key attributes.
+     * Find by primary key.
      *
-     * @param array<string, mixed> $pk Array of attribute => value pairs.
+     * Takes a scalar for a single-column key, or attribute => value pairs for a
+     * composite one — the same two shapes Model::findByPk() takes, because the
+     * documented way to combine a primary-key lookup with eager loading is to
+     * start from the query: `User::find()->with('posts')->findByPk(1)`. That
+     * chain was a TypeError, since only the model-level method accepted the
+     * scalar, and every route to eager loading has to go through the query.
+     *
+     * @param string|int|array<string, mixed> $pk The primary key value, or attribute => value pairs.
      * @return mixed
+     * @throws QueryException If a scalar is given for a composite primary key.
      */
-    public function findByPk(array $pk): mixed
+    public function findByPk(string|int|array $pk): mixed
     {
+        $pk = is_array($pk) ? $pk : [$this->singlePrimaryKeyField() => $pk];
+
         $keys = [];
         foreach ($pk as $attribute => $key) {
             $keys[] = [$attribute, '=', $key];
         }
         return $this->where($keys)->first();
+    }
+
+    /**
+     * The name of the model's primary key column, when it has exactly one.
+     *
+     * @return string
+     * @throws QueryException If there is no model, or its key spans several columns.
+     */
+    private function singlePrimaryKeyField(): string
+    {
+        if (!$this->modelClass) {
+            throw new QueryException('findByPk() needs a model to know which column is the primary key.');
+        }
+
+        /** @var Model $model */
+        $model = is_string($this->modelClass) ? new $this->modelClass() : $this->modelClass;
+        $field = $model->getPrimaryKeyFields();
+
+        // Naming the columns rather than just refusing: a composite key is
+        // exactly the case where the caller cannot guess what shape to pass.
+        if (!is_string($field)) {
+            throw new QueryException(sprintf(
+                '%s has a composite primary key (%s), so findByPk() needs an array of attribute => value pairs.',
+                $model::class,
+                implode(', ', $field)
+            ));
+        }
+
+        return $field;
     }
 
     /**
@@ -283,9 +328,15 @@ trait Fetchable
      */
     public function updateAll(array $attributes = []): bool
     {
-        $table = $this->getTable() ?? '';
-        // Strip any quoting characters (backticks for MySQL, double quotes for PG/SQLite)
-        $table = trim($table, '`"');
+        $table = $this->getTable();
+
+        // A query selecting from a sub-query has no table to write back to.
+        // The sub-query SQL used to be passed to Update as though it were one,
+        // producing an UPDATE against a table named after a whole SELECT.
+        if ($table === null) {
+            throw new QueryException('Cannot update a query that selects from a sub-query.', '');
+        }
+
         $update = new Update($table, $attributes, $this);
         $update->withConnection($this->connection);
         return (bool)$update->execute();
@@ -294,14 +345,22 @@ trait Fetchable
     /**
      * Check if any records exist matching the current conditions.
      *
-     * Uses SELECT 1 LIMIT 1 for efficiency.
+     * Fetches at most one row, so the cost does not grow with the match count.
+     *
+     * Named hasRecords() rather than exists(): ActiveQuery declares its own
+     * exists(ActiveQuery|Raw $query) for the SQL EXISTS sub-query condition,
+     * and a class method silently wins over a trait method of the same name.
+     * The trait's no-argument version was therefore unreachable — calling it
+     * as documented raised ArgumentCountError, not a false.
      *
      * @return bool
      */
-    public function exists(): bool
+    public function hasRecords(): bool
     {
-        $result = $this->limit(1)->query($this);
-        return !empty($result);
+        // Limiting a clone, so a caller can keep using the query afterwards.
+        $query = (clone $this)->limit(1);
+
+        return !empty($this->query($query));
     }
 
     /**
@@ -338,13 +397,61 @@ trait Fetchable
     /**
      * Get results as an unbuffered cursor for memory-efficient iteration.
      *
-     * Fetches one row at a time without buffering the full result set.
-     * Works with PDO-based drivers (MySQL, PostgreSQL, SQLite).
+     * Fetches one row at a time without buffering the full result set, so the
+     * memory cost stays flat however many rows match. Works with PDO-based
+     * drivers (MySQL, PostgreSQL, SQLite); on a driver without PDO underneath
+     * it falls back to {@see all()}, which buffers.
+     *
+     * **While a cursor is open, MySQL will not run another query on the same
+     * connection.** That is what streaming means: the server is still sending
+     * rows. A lazy relation read, a write, or any other query issued from
+     * inside the loop fails with "Cannot execute queries while other unbuffered
+     * queries are active". Collect what you need and act after the loop, use a
+     * separate connection, or use {@see each()}, which buffers a chunk at a
+     * time and has no such restriction.
+     *
+     * Neither eager loading nor caching can be combined with a cursor: see
+     * below.
      *
      * @return Generator
+     * @throws QueryException If relations were requested with with(), or a
+     *                        cache TTL was set with cache().
      */
     public function cursor(): Generator
     {
+        // with() batches the related rows in a second query once the parents
+        // are known, and a cursor never knows them all at once — nor could it
+        // run that query while streaming. This was ignored on PDO drivers and
+        // honoured on mysqli, which falls back to all(), so the same code
+        // returned models with relations loaded or without depending on the
+        // driver, and said nothing either way. Refusing is the only answer
+        // that is the same everywhere.
+        if (!empty($this->eagerLoad)) {
+            throw new QueryException(
+                'cursor() cannot eager load ' . implode(', ', $this->eagerLoad)
+                . ': relations are batched in a second query, which a cursor cannot run while it streams.'
+                . ' Use each() or all() to eager load, or drop with() and read the relations after the loop.',
+                ''
+            );
+        }
+
+        // Caching stores the whole result set, which is the one thing a cursor
+        // exists not to do — so the two cannot both be honoured, and which one
+        // won came down to the driver. On PDO the cache was never consulted and
+        // the rows streamed; on mysqli, which falls back to all(), the set was
+        // materialised, sent to the cache, and served from it on the next call.
+        // The same code therefore read the database on one driver and returned
+        // rows from before the last UPDATE on the other, and over 20k rows cost
+        // 17.9 MB against PDO's 0.5 MB. Refusing is the only answer that is the
+        // same everywhere.
+        if ($this->getCacheTtl() > 0) {
+            throw new QueryException(
+                'cursor() cannot cache: caching stores the whole result set, which is the one thing'
+                . ' a cursor exists not to do. Use all() to cache the rows, or drop cache() to stream them.',
+                ''
+            );
+        }
+
         $driver = $this->getDriver('read');
 
         if (!method_exists($driver, 'getPdo')) {
@@ -353,26 +460,65 @@ trait Fetchable
         }
 
         $pdo = $driver->getPdo();
-        $sql = $this->getSQL();
-        $binds = $this->getBinds();
 
-        // Use unbuffered queries for MySQL; other drivers are unbuffered by default
-        $options = [];
-        if ($pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) === 'mysql') {
-            $options[\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY] = false;
+        // MySQL buffers by default, and buffering is a property of the
+        // connection, not of one statement. This was passed to prepare() as a
+        // statement option, where PDO accepts it and ignores it — so cursor()
+        // was quietly buffering the whole result set the entire time. Measured
+        // over 20k rows it cost more memory than getArray(), which at least
+        // says it loads everything. The other PDO drivers stream already.
+        $buffered = $pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) === 'mysql'
+            && $pdo->getAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY);
+
+        if ($buffered) {
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         }
 
-        $stmt = $pdo->prepare($sql, $options);
-        $stmt->execute($binds);
+        $stmt = $pdo->prepare($this->getSQL());
 
+        try {
+            $stmt->execute($this->getBinds());
+
+            yield from $this->streamRows($stmt);
+        } finally {
+            // finally, not a trailing statement: a caller that breaks out of
+            // the loop, or throws inside it, never reaches the end of the
+            // generator body. Leaving the statement open holds the result set
+            // and leaves the connection unable to run anything else, and
+            // leaving the attribute off changes every later query on a
+            // connection the caller shares. PHP runs this on break, on
+            // exception, and when an abandoned generator is collected.
+            $stmt->closeCursor();
+
+            if ($buffered) {
+                $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+            }
+        }
+    }
+
+    /**
+     * Yield the rows of an executed statement, hydrated and keyed as configured.
+     *
+     * Split out so cursor() can wrap the whole stream in one try/finally.
+     *
+     * @param \PDOStatement $stmt The executed statement.
+     * @return Generator
+     */
+    private function streamRows(\PDOStatement $stmt): Generator
+    {
+        // indexBy() used to be dropped here, silently and only on PDO drivers:
+        // the same query answered with the configured keys under mysqli, which
+        // falls back to all(), and with 0, 1, 2 under pdo_mysql. Whether a key
+        // survives must not depend on which driver is behind the connection.
         while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
-            if ($this->modelClass) {
-                yield $this->getHydrated($row);
+            $value = $this->modelClass ? $this->getHydrated($row) : $row;
+
+            if ($this->indexBy === null) {
+                yield $value;
                 continue;
             }
-            yield $row;
-        }
 
-        $stmt->closeCursor();
+            yield is_string($this->indexBy) ? $row[$this->indexBy] : ($this->indexBy)($row) => $value;
+        }
     }
 }

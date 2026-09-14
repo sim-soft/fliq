@@ -3,6 +3,7 @@
 namespace Simsoft\DB;
 
 use Simsoft\DB\Builder\ActiveQuery;
+use Simsoft\DB\Exceptions\QueryException;
 
 /**
  * Relation class.
@@ -18,7 +19,8 @@ use Simsoft\DB\Builder\ActiveQuery;
  * @method $this notNull(string $attribute)
  * @method $this in(string $attribute, array<int, mixed>|ActiveQuery $values)
  * @method $this notIn(string $attribute, array<int, mixed>|ActiveQuery $values)
- * @method $this orderBy(string|array<string, string> $attribute, string $direction = 'ASC')
+ * @method $this orderBy(string|array<int|string, string> $attribute, string $direction = 'ASC')
+ * @method $this orderByDesc(string|array<int|string, string> $attribute)
  * @method $this limit(int $max, ?int $offset = null)
  */
 class Relation
@@ -181,6 +183,12 @@ class Relation
     protected function applyConstraints(): void
     {
         if ($this->localValue === null) {
+            // No local key value — an unsaved parent, or a saved row whose
+            // foreign key is NULL. Returning here would leave the query
+            // unconstrained and fetch the entire related table, so match
+            // nothing instead. Not where($fk, null): that becomes IS NULL,
+            // which would match unrelated rows that also have a NULL key.
+            $this->query->whereRaw('1 = 0');
             return;
         }
 
@@ -225,6 +233,7 @@ class Relation
      *
      * @param Model|array<string, mixed> $model The related model or attributes array.
      * @return Model The saved model.
+     * @throws QueryException If the model refused to save.
      */
     public function save(Model|array $model): Model
     {
@@ -233,7 +242,20 @@ class Relation
         }
 
         $model->{$this->foreignKey} = $this->localValue;
-        $model->save();
+
+        // The result was discarded and the model handed back regardless, so a
+        // save refused by validation or by a beforeSave hook was indistinguish-
+        // able from one that wrote a row: same return type, no exception, and
+        // exists() still true when updating an existing record. A save that
+        // did not save is a failure, and it is reported like the failures the
+        // driver already raises here.
+        if (!$model->save()) {
+            throw new QueryException(sprintf(
+                'Failed to save related %s.%s',
+                $model::class,
+                $model->getErrors() === [] ? '' : ' ' . implode(' ', $model->getErrors())
+            ));
+        }
 
         return $model;
     }
@@ -275,6 +297,7 @@ class Relation
      *
      * @param array<int, Model|array<string, mixed>> $models The models or attribute arrays.
      * @return array<int, Model> The saved models.
+     * @throws QueryException If any model refused to save.
      */
     public function saveMany(array $models): array
     {

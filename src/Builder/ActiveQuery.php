@@ -18,9 +18,14 @@ use Simsoft\DB\Relation;
 use Simsoft\DB\Traits\Aggregation;
 use Simsoft\DB\Traits\Binds;
 use Simsoft\DB\Traits\Execute;
+use Simsoft\DB\Traits\Groupable;
+use Simsoft\DB\Traits\Joinable;
+use Simsoft\DB\Traits\Likeable;
 use Simsoft\DB\Traits\Fetchable;
 use Simsoft\DB\Traits\PlaceHolder;
 use Simsoft\DB\Traits\Qualifier;
+use Simsoft\DB\Traits\SectionBinds;
+use Simsoft\DB\Traits\TemporaryAlias;
 
 /**
  * Class ActiveQuery.
@@ -30,10 +35,33 @@ use Simsoft\DB\Traits\Qualifier;
  */
 class ActiveQuery implements Executable, Updatable, Deletable
 {
-    use Qualifier, Execute, PlaceHolder, Binds, Aggregation, Fetchable;
+    use Qualifier, Execute, PlaceHolder, Aggregation, Fetchable, TemporaryAlias, Likeable, Groupable, Joinable;
 
-    /** @var null|string The table name */
+    // SectionBinds supplies getBinds() and clearBinds(), which cover every
+    // section; the Binds versions cover the WHERE list alone and are reached
+    // through these aliases.
+    use SectionBinds, Binds {
+        SectionBinds::getBinds insteadof Binds;
+        SectionBinds::clearBinds insteadof Binds;
+        Binds::getBinds as private whereSectionBinds;
+        Binds::clearBinds as private clearWhereSectionBinds;
+    }
+
+    // The FROM and JOIN sources are kept unquoted and only rendered in
+    // getSQL(). Quoting them at from()/join() time froze whichever grammar was
+    // current into the stored string, so a connection named afterwards — as
+    // DB::table('user', 'pg') does, and as the fluent order invites everywhere
+    // else — produced a statement quoted for one engine and run against
+    // another. It also left getTable() returning "`user` `u`", which every
+    // caller then tried to unpick with trim($t, '`"'); that cannot remove the
+    // interior backticks, so count(), sum() and updateAll() on an aliased query
+    // asked the server for a table named "user` `u".
+
+    /** @var null|string The FROM table name, unquoted and without its alias. */
     protected ?string $table = null;
+
+    /** @var null|string The FROM sub-query SQL, when the query selects from one. */
+    protected ?string $fromSubQuery = null;
 
     /** @var bool Distinct is enabled */
     protected bool $distinct = false;
@@ -44,13 +72,10 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /** @var array<int, string> The WHERE statements. */
     protected array $conditions = [];
 
-    /** @var array<string, string> Jointed relationship. */
-    protected array $joins = [];
-
     /** @var array<int, string> The GROUP BY statements. */
     protected array $groupBys = [];
 
-    /** @var array<int, string> The query having */
+    /** @var array<int, string> The query having, with logical operators interleaved. */
     protected array $having = [];
 
     /** @var array<int, string> The query order */
@@ -203,13 +228,28 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Get FROM table name
+     * Get FROM table name, unquoted and without its alias.
+     *
+     * Null when the query selects from a sub-query, which has no table name to
+     * report — a caller needing one for its own FROM clause cannot use this
+     * query's source and should say so rather than build a table reference out
+     * of a SELECT statement.
      *
      * @return string|null
      */
     public function getTable(): ?string
     {
         return $this->table;
+    }
+
+    /**
+     * Get the FROM sub-query SQL, if this query selects from one.
+     *
+     * @return string|null
+     */
+    public function getFromSubQuery(): ?string
+    {
+        return $this->fromSubQuery;
     }
 
     /**
@@ -223,7 +263,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function merge(ActiveQuery $query, string $logicalOperator = 'AND'): static
     {
-        if ($this->table !== $query->getTable()) {
+        if ($this->table !== $query->getTable() || $this->fromSubQuery !== $query->getFromSubQuery()) {
             throw new QueryException(
                 "Cannot merge queries from different tables: '$this->table' and '{$query->getTable()}'",
                 ''
@@ -237,10 +277,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $this->mergeSimpleList($this->orderBys, $query->orderBys);
         $this->mergeJoins($query->joins);
 
-        $queryBinds = $query->getBinds();
-        if ($queryBinds !== null) {
-            $this->appendBinds($queryBinds);
-        }
+        $this->mergeSectionBinds($query);
 
         return $this;
     }
@@ -264,12 +301,15 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param array<int, string> $conditions
      * @param string $logicalOperator
      * @return void
+     * @throws InvalidArgumentException If the logical operator is not AND or OR.
      */
     private function mergeConditions(array $conditions, string $logicalOperator): void
     {
         if (empty($conditions)) {
             return;
         }
+
+        $logicalOperator = $this->validateLogicalOperator($logicalOperator);
 
         if (!empty($this->conditions)) {
             $this->conditions[] = $logicalOperator;
@@ -317,19 +357,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Merge JOIN clauses from another query.
-     *
-     * @param array<string, string> $joins
-     * @return void
-     */
-    private function mergeJoins(array $joins): void
-    {
-        foreach ($joins as $key => $join) {
-            $this->joins[$key] = $join;
-        }
-    }
-
-    /**
      * Merge with another query object.
      *
      * Prepend 'OR' to the query.
@@ -363,15 +390,32 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *
      * @param string|array<string, string|ActiveQuery|Raw>|Model $table the table name
      * @return static
+     * @throws InvalidArgumentException If the sub-query has no usable alias.
      */
     public function from(string|array|Model $table): static
     {
         if (is_array($table)) {
+            // The key names the derived table, which MySQL and PostgreSQL both
+            // require. Written as a list — from(['SELECT ...']) — the key is the
+            // integer 0, which quoted to the identifier `0`; given no entry at
+            // all it was the empty string, which quoted to ``. Both cases built
+            // a statement naming a table the caller never wrote, so say which
+            // argument is at fault rather than reporting an odd identifier or
+            // leaving the server to complain.
+            $alias = array_key_first($table);
+            if (!is_string($alias) || $alias === '') {
+                throw new InvalidArgumentException(
+                    'A sub-query used as a table must be given an alias as the array key: '
+                    . "from(['t' => \$subQuery])."
+                );
+            }
+
             $subQuery = current($table);
-            $alias = (string)array_key_first($table);
-            $this->table = $this->getQualifiedSubQuery((string)$subQuery, $alias);
+            $this->table = null;
+            $this->fromSubQuery = (string)$subQuery;
+            $this->alias($alias);
             if ($subQuery instanceof ActiveQuery || $subQuery instanceof Raw) {
-                $this->appendBinds($subQuery->getBinds());
+                $this->appendSectionBinds($this->fromBinds, $subQuery->getBinds());
             }
             return $this;
         }
@@ -384,140 +428,63 @@ class ActiveQuery implements Executable, Updatable, Deletable
         $expressions = explode(' ', trim($table));
         $table = $expressions[0];
         $alias = end($expressions);
-        $this->table = $this->getQualifiedTable($table, $table === $alias ? null : $alias);
+
+        self::validateIdentifier($table);
+        if ($table !== $alias) {
+            self::validateIdentifier($alias);
+        }
+
+        $this->fromSubQuery = null;
+        $this->table = $table;
+
+        // Columns are qualified against the alias, and an unaliased table is
+        // its own qualifier. A schema-qualified name keeps only its last part,
+        // since `schema`.`table`.`column` is not a valid reference.
+        $parts = explode('.', $table);
+        $this->alias($table === $alias ? end($parts) : $alias);
 
         return $this;
     }
 
     /**
-     * Join table.
+     * Render the FROM clause for the current grammar.
      *
-     * @param string|array<string, string|ActiveQuery|Raw> $table The table name
-     * @param array<string, string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @param string $type Join type. LEFT, RIGHT, INNER, OUTER, etc.
-     * @return static
+     * @return string
      */
-    public function join(string|array $table, array $on = [], string $type = 'INNER'): static
+    private function getFromSQL(): string
     {
-        $alias = null;
+        $alias = $this->getAlias();
 
-        if (is_array($table)) {
-            $alias = (string)array_key_first($table);
-            $subQuery = current($table);
-            $table = "($subQuery) AS $alias";
-        }
-
-        if (!str_contains($table, '(')) {
-            $expressions = explode(' ', trim($table));
-            $table = $expressions[0];
-            $alias = end($expressions);
-        }
-
-        $join = $type ? strtoupper($type) . ' JOIN' : 'JOIN';
-
-        $foreignKey = (string)array_key_first($on);
-        $localKey = (string)current($on);
-
-        // Strip a table / alias prefix from a foreign key if it matches the join table or alias
-        // e.g., ['s.supp_idx' => 'supp_idx'] with alias 's' → foreignKey becomes 'supp_idx'
-        if (str_contains($foreignKey, '.')) {
-            $fkParts = explode('.', $foreignKey, 2);
-            if ($fkParts[0] === $table || $fkParts[0] === $alias) {
-                $foreignKey = $fkParts[1];
+        if ($this->fromSubQuery !== null) {
+            // from() will not accept a sub-query without an alias, but alias()
+            // is public and alias(null) after the fact left this quoting the
+            // empty string. `` is an identifier MySQL happens to accept and
+            // PostgreSQL rejects outright, so the same builder produced a
+            // statement that ran on one engine and would not parse on the
+            // other — and on MySQL the derived table then had no name to
+            // reference it by.
+            if ($alias === null) {
+                throw new InvalidArgumentException(
+                    'A sub-query used as a table must keep an alias to be referred to by.'
+                );
             }
+
+            return 'FROM (' . $this->fromSubQuery . ') ' . $this->quote($alias);
         }
 
-        if ($table === $alias) {
-            $quotedTable = $this->quote($table);
-            $this->joins[$table] = "$join $quotedTable ON $quotedTable." . $this->quote($foreignKey) . " = " . $this->queryAttribute($localKey);
-            return $this;
+        if ($this->table === null) {
+            return '';
         }
 
-        $qt = $this->quote($table);
-        $qa = $this->quote((string)$alias);
-        $this->joins[(string)$alias] = "$join $qt AS $qa ON $qa." . $this->quote($foreignKey) . " = " . $this->queryAttribute($localKey);
+        $source = $this->quoteTableName($this->table);
 
-        return $this;
-    }
-
-    /**
-     * Cross-join table.
-     *
-     * @param string|array<string, string|ActiveQuery|Raw> $table the join table
-     * @param array<string, string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function crossJoin(string|array $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'CROSS');
-    }
-
-    /**
-     * Left join table.
-     *
-     * @param string|array<string, string|ActiveQuery|Raw> $table the join table
-     * @param array<string, string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function leftJoin(string|array $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'LEFT');
-    }
-
-    /**
-     * Right join table.
-     *
-     * @param string|array<string, string|ActiveQuery|Raw> $table the join table
-     * @param array<string, string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function rightJoin(string|array $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'RIGHT');
-    }
-
-    /**
-     * Left outer join table.
-     *
-     * @param string $table the join table
-     * @param array<string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function leftOuterJoin(string $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'LEFT OUTER');
-    }
-
-    /**
-     * Right outer join table.
-     *
-     * @param string $table the join table
-     * @param array<string> $on The matching attributes. ['join_table_attribute' => 'main_table_attribute']
-     * @return static
-     */
-    public function rightOuterJoin(string $table, array $on = []): static
-    {
-        return $this->join($table, $on, 'RIGHT OUTER');
-    }
-
-    /**
-     * Apply conditions with a temporary alias.
-     *
-     * @param string $alias The alias to use temporarily.
-     * @param callable $condition The condition callback.
-     * @return static
-     */
-    public function withAlias(string $alias, callable $condition): static
-    {
-        if ($condition instanceof Closure
-            && ($callable = Closure::bind($condition, $this, get_class($this)))
-        ) {
-            $backup = $this->getAlias();
-            $this->alias($alias);
-            $callable($this);
-            $this->alias($backup);
+        // The table's own name is its default alias and is not repeated.
+        $parts = explode('.', $this->table);
+        if ($alias === null || $alias === end($parts)) {
+            return "FROM $source";
         }
-        return $this;
+
+        return "FROM $source " . $this->quote($alias);
     }
 
     /**
@@ -532,16 +499,34 @@ class ActiveQuery implements Executable, Updatable, Deletable
             if ($attribute instanceof Clause) {
                 $attribute->alias($this->getAlias());
                 $attribute->setPlaceHolder($this->getPlaceHolder());
-                $this->selects[] = (string)$attribute;
-                if ($attribute->getBinds()) {
-                    $this->appendBinds($attribute->getBinds());
+                $sql = (string)$attribute;
+
+                // A clause naming no columns builds an empty string, which was
+                // still added to the list and emitted as `SELECT  FROM` — or
+                // `SELECT a, , b` beside others. An empty entry contributes no
+                // column, so it is dropped; a query left with none falls back
+                // to `*` as it already does when select() is never called.
+                if ($sql === '') {
+                    continue;
                 }
+
+                $this->selects[] = $sql;
+                $this->appendSectionBinds($this->selectBinds, $attribute->getBinds());
                 continue;
             }
 
-            $this->selects[] = $attribute instanceof Raw
-                ? (string)$attribute
-                : $this->queryAttribute($attribute);
+            if ($attribute instanceof Raw) {
+                $this->selects[] = (string)$attribute;
+
+                // A Raw select expression may carry placeholders of its own —
+                // `IF(score > ?, 1, 0) AS grade`. Its binds were dropped on the
+                // floor, so the statement was left one value short and the
+                // driver refused to execute it at all.
+                $this->appendSectionBinds($this->selectBinds, $attribute->getBinds());
+                continue;
+            }
+
+            $this->selects[] = $this->queryAttribute($attribute);
         }
         return $this;
     }
@@ -561,11 +546,18 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Construct the query conditions.
      *
-     * @param string|array<int, array<int, mixed>>|callable|Raw|Clause $attribute the attribute
+     * Two array forms are accepted: a list of [attribute, operator, value]
+     * triplets, and a map of attribute => value where an array value means IN.
+     * Only the list form was declared, so the map form — which the method has
+     * always built, and which the array tests cover — did not type-check.
+     *
+     * @param string|array<int, array<int, mixed>>|array<string, mixed>|callable|Raw|Clause $attribute the attribute
      * @param mixed $operator the comparison operator or the attribute value
      * @param mixed $value the value for the attribute
      * @param string $logicalOperator The logical operator. Default: 'AND'.
      * @return static
+     * @throws InvalidArgumentException If the operator is not on the whitelist,
+     *     or its value does not match the shape the operator needs.
      */
     public function where(
         string|array|callable|Raw|Clause $attribute,
@@ -588,10 +580,16 @@ class ActiveQuery implements Executable, Updatable, Deletable
             if ($resolved !== null) {
                 return $resolved;
             }
+
+            $resolved = $this->resolveShapedOperator($attribute, $operator, $value, $logicalOperator);
+            if ($resolved !== null) {
+                return $resolved;
+            }
         }
 
         [$operator, $value] = $this->normaliseOperatorValue($operator, $value);
         $operator = $this->validateOperator((string)$operator);
+        $this->assertNullComparison($operator, $value);
 
         // Fast path: a simple string attribute with scalar value (the most common case)
         // Avoids Condition object allocation entirely
@@ -658,22 +656,115 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     private function resolveNullCondition(string $attribute, mixed $operator, mixed $value, string $logicalOperator): ?static
     {
-        // where('col', null) → IS NULL
-        if ($value === null && $operator === null) {
-            return $this->isNull($attribute, $logicalOperator);
+        // Only a null value can be a NULL check. A non-string operator is the
+        // where('col', $value) shorthand carrying its value in the operator
+        // slot, which the caller normalises afterwards.
+        if ($value !== null || !($operator === null || is_string($operator))) {
+            return null;
         }
 
-        // where('col', '=', null) → IS NULL
-        if ($value === null && $operator === '=') {
-            return $this->isNull($attribute, $logicalOperator);
+        // IS and IS NOT are on the documented operator whitelist, but nothing
+        // handled them: the shorthand saw a null value and took the operator
+        // as the value, so the query became `col = 'IS'` and matched nothing
+        // at all — wrong results with no error to notice. `<>` had the same
+        // fate, though `!=` was already handled.
+        return match ($operator === null ? '=' : strtoupper(trim($operator))) {
+            '=', 'IS' => $this->isNull($attribute, $logicalOperator),
+            '!=', '<>', 'IS NOT' => $this->notNull($attribute, $logicalOperator),
+            default => null,
+        };
+    }
+
+    /**
+     * Route operators whose right-hand side is not a single placeholder.
+     *
+     * @param string $attribute The attribute name.
+     * @param mixed $operator The operator.
+     * @param mixed $value The value.
+     * @param string $logicalOperator The logical operator.
+     * @return static|null Null when normal processing should continue.
+     * @throws InvalidArgumentException If a range operator is not given exactly two bounds.
+     */
+    private function resolveShapedOperator(
+        string $attribute,
+        mixed  $operator,
+        mixed  $value,
+        string $logicalOperator
+    ): ?static
+    {
+        if (!is_string($operator) || $value === null) {
+            return null;
         }
 
-        // where('col', '!=', null) → IS NOT NULL
-        if ($value === null && $operator === '!=') {
-            return $this->notNull($attribute, $logicalOperator);
+        // IN, NOT IN, BETWEEN and NOT BETWEEN are on the documented operator
+        // whitelist, so where('id', 'IN', [1, 2]) looks supported. Both paths
+        // below emit exactly one placeholder, so it built `id IN ?` and the
+        // server rejected the statement. These are the same conditions in()
+        // and between() already build correctly, so they are routed there.
+        return match (strtoupper(trim($operator))) {
+            'IN' => $this->in($attribute, $this->setValues($attribute, 'IN', $value), $logicalOperator),
+            'NOT IN' => $this->notIn($attribute, $this->setValues($attribute, 'NOT IN', $value), $logicalOperator),
+            'BETWEEN' => $this->betweenBounds($attribute, $value, true, $logicalOperator),
+            'NOT BETWEEN' => $this->betweenBounds($attribute, $value, false, $logicalOperator),
+            default => null,
+        };
+    }
+
+    /**
+     * Normalise the right-hand side of a set operator.
+     *
+     * @param string $attribute The attribute being matched, for the error message.
+     * @param string $operator The set operator.
+     * @param mixed $value The values to match against.
+     * @return array<int, mixed>|ActiveQuery|Raw The values as a list.
+     * @throws InvalidArgumentException If the value cannot form a set.
+     */
+    private function setValues(string $attribute, string $operator, mixed $value): array|ActiveQuery|Raw
+    {
+        // A set only uses the values, so keys are discarded; keeping them
+        // would leave a map here where the placeholders are positional.
+        if (is_array($value)) {
+            return array_values($value);
         }
 
-        return null;
+        if ($value instanceof ActiveQuery || $value instanceof Raw) {
+            return $value;
+        }
+
+        throw new InvalidArgumentException(sprintf(
+            '%s on "%s" needs an array, subquery or Raw expression; got %s.',
+            $operator,
+            $attribute,
+            get_debug_type($value)
+        ));
+    }
+
+    /**
+     * Apply a range condition from a two-element bounds array.
+     *
+     * @param string $attribute The attribute name.
+     * @param mixed $value The bounds.
+     * @param bool $is False to negate the range.
+     * @param string $logicalOperator The logical operator.
+     * @return static
+     * @throws InvalidArgumentException If the bounds are not exactly two values.
+     */
+    private function betweenBounds(string $attribute, mixed $value, bool $is, string $logicalOperator): static
+    {
+        $keyword = $is ? 'BETWEEN' : 'NOT BETWEEN';
+
+        if (!is_array($value) || count($value) !== 2) {
+            throw new InvalidArgumentException(sprintf(
+                '%s on "%s" needs exactly two bounds; got %s.',
+                $keyword,
+                $attribute,
+                is_array($value) ? count($value) . ' values' : get_debug_type($value)
+            ));
+        }
+
+        [$start, $end] = array_values($value);
+
+        return $this->between($attribute, $start, $end, $is, $logicalOperator);
     }
 
     /**
@@ -686,22 +777,55 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     private function addConditionSQL(string $sql, mixed $bindValue, string $logicalOperator): void
     {
+        $this->pushCondition($sql, $logicalOperator);
+        $this->appendBinds($bindValue);
+    }
+
+    /**
+     * Append a condition fragment, joining it to any preceding condition.
+     *
+     * Every condition method needs the same three steps: validate the logical
+     * operator, emit it unless this is the first condition in the current
+     * group, then push the fragment. Nine methods each inlined that sequence
+     * and none of them validated, so this exists to give them one
+     * implementation and one place where the operator is checked.
+     *
+     * @param string $sql The condition SQL fragment.
+     * @param string $logicalOperator The logical operator. Either 'AND' or 'OR'.
+     * @return void
+     * @throws InvalidArgumentException If the logical operator is not AND or OR.
+     */
+    private function pushCondition(string $sql, string $logicalOperator): void
+    {
+        $logicalOperator = $this->validateLogicalOperator($logicalOperator);
+
         if ($this->conditions && end($this->conditions) !== '(') {
             $this->conditions[] = $logicalOperator;
         }
 
         $this->conditions[] = $sql;
-        $this->appendBinds($bindValue);
     }
 
     /**
      * Or condition.
      *
-     * @param string|callable|Raw $attribute the attribute name
-     * @param string|null $operator the comparison operator or the attribute value
+     * Accepts everything where() accepts. The signature used to omit the array
+     * and Clause forms and narrow the operator to ?string, so orWhere([...])
+     * raised a TypeError and orWhere($clause) stringified the clause into the
+     * attribute slot, building SQL that could not be executed.
+     *
+     * @param string|array<int, array<int, mixed>>|array<string, mixed>|callable|Raw|Clause $attribute the attribute
+     * @param mixed $operator the comparison operator or the attribute value
      * @param mixed $value the value for the attribute
+     * @return static
+     * @throws InvalidArgumentException If the operator is not on the whitelist,
+     *     or its value does not match the shape the operator needs.
      */
-    public function orWhere(string|callable|Raw $attribute, ?string $operator = '=', mixed $value = null): static
+    public function orWhere(
+        string|array|callable|Raw|Clause $attribute,
+        mixed $operator = '=',
+        mixed $value = null
+    ): static
     {
         return $this->where($attribute, $operator, $value, 'OR');
     }
@@ -766,12 +890,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function isNull(string $attribute, string $logicalOperator = 'AND'): static
     {
         $sql = $this->queryAttribute($attribute) . ' IS NULL';
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -796,12 +915,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function notNull(string $attribute, string $logicalOperator = 'AND'): static
     {
         $sql = $this->queryAttribute($attribute) . ' IS NOT NULL';
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -977,12 +1091,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
 
         $group = '(' . implode(" $joiner ", $parts) . ')';
         $sql = $negate ? "NOT $group" : $group;
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -1035,6 +1144,11 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * In condition.
      *
+     * An empty list matches no rows, the answer SQL gives for membership of a
+     * set with nothing in it. It is not treated as an absent condition, so an
+     * empty allow-list narrows the query to nothing rather than widening it to
+     * everything.
+     *
      * @param string $attribute the attribute name
      * @param array<int, mixed>|ActiveQuery|Raw $values the array of values for the query
      * @param string $logicalOperator The logical operator. Either 'AND' or 'OR'.
@@ -1042,18 +1156,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function in(string $attribute, array|ActiveQuery|Raw $values, string $logicalOperator = 'AND'): static
     {
-        if (!$values) {
-            return $this;
-        }
-
-        // Fast path for array values (most common)
-        if (is_array($values)) {
-            $placeholders = implode(',', array_fill(0, count($values), '?'));
-            $sql = "{$this->queryAttribute($attribute)} IN ($placeholders)";
-            $this->addConditionSQL($sql, $values, $logicalOperator);
-            return $this;
-        }
-
         return $this->onCondition(new InCondition($attribute, $values), $logicalOperator);
     }
 
@@ -1072,6 +1174,9 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Not in condition.
      *
+     * An empty list matches every row: nothing is excluded when the exclusion
+     * list is empty.
+     *
      * @param string $attribute the attribute name
      * @param array<int, mixed>|ActiveQuery|Raw $values the array of values for the query
      * @param string $logicalOperator The logical operator. Either 'AND' or 'OR'.
@@ -1079,18 +1184,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function notIn(string $attribute, array|ActiveQuery|Raw $values, string $logicalOperator = 'AND'): static
     {
-        if (!$values) {
-            return $this;
-        }
-
-        // Fast path for array values
-        if (is_array($values)) {
-            $placeholders = implode(',', array_fill(0, count($values), '?'));
-            $sql = "{$this->queryAttribute($attribute)} NOT IN ($placeholders)";
-            $this->addConditionSQL($sql, $values, $logicalOperator);
-            return $this;
-        }
-
         return $this->onCondition(new InCondition($attribute, $values, false), $logicalOperator);
     }
 
@@ -1154,126 +1247,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function orWhereNotIn(string $attribute, array|ActiveQuery|Raw $values): static
     {
         return $this->notIn($attribute, $values, 'OR');
-    }
-
-    /**
-     * Like condition.
-     *
-     * Case-sensitive by default (plain LIKE). Set caseSensitive: false for case-insensitive matching.
-     *
-     * @param string $attribute the attribute name
-     * @param string|string[] $value the like's value
-     * @param bool $is the comparison operator (true = LIKE, false = NOT LIKE)
-     * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param string $logicalOperator The logical operator. Either 'AND' or 'OR'.
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: true.
-     * @return static
-     */
-    public function like(
-        string       $attribute,
-        string|array $value,
-        bool         $is = true,
-        bool         $matchAll = true,
-        string       $logicalOperator = 'AND',
-        bool         $caseSensitive = true
-    ): static
-    {
-        [$col, $operator, $useLowerBind] = $this->prepareLikeColumn($attribute, $is, $caseSensitive);
-
-        // Fast path: single string value (most common)
-        if (is_string($value)) {
-            $sql = $this->buildLikePart($col, $operator, $useLowerBind);
-            $this->addConditionSQL($sql, $value, $logicalOperator);
-            return $this;
-        }
-
-        // Array of values — build compound condition
-        $joiner = $matchAll ? ' AND ' : ' OR ';
-        $parts = array_fill(0, count($value), $this->buildLikePart($col, $operator, $useLowerBind));
-        $binds = array_values($value);
-
-        $sql = '(' . implode($joiner, $parts) . ')';
-        $this->addConditionSQL($sql, $binds, $logicalOperator);
-        return $this;
-    }
-
-    /**
-     * Prepare the column expression and operator for LIKE based on case sensitivity.
-     *
-     * @param string $attribute The attribute name.
-     * @param bool $is Whether positive (LIKE) or negated (NOT LIKE).
-     * @param bool $caseSensitive Whether the comparison is case-sensitive.
-     * @return array{0: string, 1: string, 2: bool} [column, operator, useLowerBind]
-     */
-    private function prepareLikeColumn(string $attribute, bool $is, bool $caseSensitive): array
-    {
-        $col = $this->queryAttribute($attribute);
-        $operator = $is ? 'LIKE' : 'NOT LIKE';
-
-        if ($caseSensitive) {
-            return [$col, $operator, false];
-        }
-
-        if ($this->getGrammar()->getDriverName() === 'pgsql') {
-            return [$col, $is ? 'ILIKE' : 'NOT ILIKE', false];
-        }
-
-        return ["LOWER($col)", $operator, true];
-    }
-
-    /**
-     * Build a single LIKE expression segment.
-     *
-     * @param string $col The column expression.
-     * @param string $operator The LIKE operator.
-     * @param bool $useLowerBind Whether to wrap the placeholder in LOWER().
-     * @return string
-     */
-    private function buildLikePart(string $col, string $operator, bool $useLowerBind): string
-    {
-        return $useLowerBind ? "$col $operator LOWER(?)" : "$col $operator ?";
-    }
-
-    /**
-     * Or like condition.
-     *
-     * @param string $attribute the attribute name
-     * @param string|string[] $value the like's value
-     * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @return static
-     */
-    public function orLike(string $attribute, string|array $value, bool $matchAll = true, bool $caseSensitive = true): static
-    {
-        return $this->like($attribute, $value, true, $matchAll, 'OR', $caseSensitive);
-    }
-
-    /**
-     * Not like condition.
-     *
-     * @param string $attribute the attribute name
-     * @param string|string[] $value the like's value
-     * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @return static
-     */
-    public function notLike(string $attribute, string|array $value, bool $matchAll = true, bool $caseSensitive = true): static
-    {
-        return $this->like($attribute, $value, false, $matchAll, 'AND', $caseSensitive);
-    }
-
-    /**
-     * Or not like condition.
-     *
-     * @param string $attribute the attribute name
-     * @param string|string[] $value the like's value
-     * @param bool $matchAll Whether to match all values in the array. Default: true
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @return static
-     */
-    public function orNotLike(string $attribute, string|array $value, bool $matchAll = true, bool $caseSensitive = true): static
-    {
-        return $this->like($attribute, $value, false, $matchAll, 'OR', $caseSensitive);
     }
 
     /**
@@ -1554,90 +1527,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Group by statement.
-     *
-     * Accepts column names or Raw expressions.
-     *
-     * @param string|Raw ...$attributes The attributes or raw expressions.
-     * @return static
-     */
-    public function groupBy(string|Raw ...$attributes): static
-    {
-        foreach ($attributes as $name) {
-            if ($name instanceof Raw) {
-                $this->groupBys[] = (string)$name;
-                if ($name->getBinds()) {
-                    $this->appendBinds($name->getBinds());
-                }
-                continue;
-            }
-            $this->groupBys[] = $this->queryAttribute($name);
-        }
-
-        return $this;
-    }
-
-    /**
-     * Group by raw expression.
-     *
-     * @param string $expression The raw SQL expression.
-     * @param array<int, mixed>|null $binds Optional bind values.
-     * @return static
-     */
-    public function groupByRaw(string $expression, ?array $binds = null): static
-    {
-        $this->groupBys[] = $expression;
-        if ($binds !== null) {
-            $this->appendBinds($binds);
-        }
-        return $this;
-    }
-
-    /**
-     * Having clause.
-     *
-     * @param string|Raw $attribute The attribute or Raw expression.
-     * @param string|null $operator The comparison operator or the attribute value.
-     * @param mixed|null $value The value for the attribute.
-     * @return static
-     */
-    public function having(mixed $attribute, ?string $operator = '=', mixed $value = null): static
-    {
-        if ($value === null && $operator != '=') {
-            $value = $operator;
-            $operator = '=';
-        }
-
-        $condition = (new Condition($attribute, $value))
-            ->operator($this->validateOperator($operator ?? '='))
-            ->setPlaceHolder($this->getPlaceHolder());
-
-        // Eagerly build and collect binds
-        $this->having[] = (string)$condition;
-        if ($condition->getBinds()) {
-            $this->appendBinds($condition->getBinds());
-        }
-
-        return $this;
-    }
-
-    /**
-     * Having with raw expression.
-     *
-     * @param string $expression The raw SQL expression.
-     * @param array<int, mixed>|null $binds Optional bind values.
-     * @return static
-     */
-    public function havingRaw(string $expression, ?array $binds = null): static
-    {
-        $this->having[] = $expression;
-        if ($binds !== null) {
-            $this->appendBinds($binds);
-        }
-        return $this;
-    }
-
-    /**
      * Order by statement.
      *
      * Example usages:
@@ -1648,27 +1537,83 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *  'attribute1' => 'ASC',
      *  'attribute2' => 'DESC',
      * ]);
+     * $this->orderBy(['attribute1', 'attribute2'], 'DESC'); // both DESC
      *
-     * @param string|array<string, string> $attribute the attribute
+     * A list entry takes the $direction argument; a keyed entry takes its own
+     * value. The two may be mixed in one array.
+     *
+     * A Raw expression or Clause is emitted as written, with any values it
+     * carries bound:
+     *
+     * $this->orderBy(new Raw('FIELD(status, ?, ?)', ['draft', 'live']));
+     * $this->orderBy(CaseExpression::when('role', '=', 'admin')->then(1)->else(2));
+     *
+     * @param string|Raw|Clause|array<int|string, string|Raw|Clause> $attribute the attribute
      * @param string $direction the order direction for the attribute
      * @return static
      */
-    public function orderBy(string|array $attribute, string $direction = 'ASC'): static
+    public function orderBy(string|Raw|Clause|array $attribute, string $direction = 'ASC'): static
     {
         if (is_array($attribute)) {
+            /** @var string|Raw|Clause $dir */
             foreach ($attribute as $col => $dir) {
-                $this->orderBys[] = $this->queryAttribute($col) . ' ' . $this->normaliseDirection($dir);
+                // A list entry arrives as position => name, so the name is the
+                // value and the direction is the argument. Reading the key as
+                // the name put the position into the SQL — ['a','b'] ordered by
+                // columns "0" and "1", which the server rejects as unknown —
+                // and reading the value as the direction meant orderByDesc()
+                // silently sorted ASC.
+                if (is_int($col)) {
+                    $this->addOrderBy($dir, $direction);
+                    continue;
+                }
+
+                $this->addOrderBy($col, is_string($dir) ? $dir : $direction);
             }
             return $this;
         }
 
+        $this->addOrderBy($attribute, $direction);
+        return $this;
+    }
+
+    /**
+     * Append a single ORDER BY term.
+     *
+     * Shared by both shapes of orderBy() so the RAND() special case and the
+     * direction whitelist cannot apply to one and not the other.
+     *
+     * @param string|Raw|Clause $attribute The attribute name, or an expression to sort by.
+     * @param string $direction The requested sort direction.
+     * @return void
+     */
+    private function addOrderBy(string|Raw|Clause $attribute, string $direction): void
+    {
+        // An expression is emitted as written. It used to be quoted as though
+        // it were a column name, so orderBy(new Raw('FIELD(status, ?)')) asked
+        // the server for a column literally called "FIELD(status, ?)" — and its
+        // bind value was dropped besides. A direction is not appended: an
+        // expression that wants one says so itself, and one built around CASE
+        // or FIELD usually does not.
+        if ($attribute instanceof Raw || $attribute instanceof Clause) {
+            if ($attribute instanceof Clause) {
+                $attribute->alias($this->getAlias());
+                $attribute->setPlaceHolder($this->getPlaceHolder());
+            }
+
+            // Ask for the SQL first: a clause collects its binds while it
+            // builds, so reading them beforehand reads them too early.
+            $this->orderBys[] = $attribute->getSQL();
+            $this->appendSectionBinds($this->orderBinds, $attribute->getBinds());
+            return;
+        }
+
         if (strtoupper($attribute) === 'RAND()') {
             $this->orderBys[] = 'RAND()';
-            return $this;
+            return;
         }
 
         $this->orderBys[] = $this->queryAttribute($attribute) . ' ' . $this->normaliseDirection($direction);
-        return $this;
     }
 
     /**
@@ -1689,7 +1634,10 @@ class ActiveQuery implements Executable, Updatable, Deletable
     /**
      * Order by desc.
      *
-     * @param string|array<string, string> $attribute The attribute name.
+     * Accepts the same shapes as orderBy(): a name, a list of names, or a map
+     * of name => direction. A list takes DESC; a keyed entry keeps its own.
+     *
+     * @param string|array<int|string, string> $attribute The attribute name.
      * @return static
      */
     public function orderByDesc(string|array $attribute): static
@@ -1858,7 +1806,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function union(ActiveQuery $query): static
     {
         $this->unions[] = ['type' => 'UNION', 'sql' => (string)$query];
-        $this->appendBinds($query->getBinds());
+        $this->appendSectionBinds($this->unionBinds, $query->getBinds());
         return $this;
     }
 
@@ -1871,7 +1819,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function unionDistinct(ActiveQuery $query): static
     {
         $this->unions[] = ['type' => 'UNION DISTINCT', 'sql' => (string)$query];
-        $this->appendBinds($query->getBinds());
+        $this->appendSectionBinds($this->unionBinds, $query->getBinds());
         return $this;
     }
 
@@ -1884,7 +1832,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function unionAll(ActiveQuery $query): static
     {
         $this->unions[] = ['type' => 'UNION ALL', 'sql' => (string)$query];
-        $this->appendBinds($query->getBinds());
+        $this->appendSectionBinds($this->unionBinds, $query->getBinds());
         return $this;
     }
 
@@ -1894,24 +1842,47 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string|Clause $query the SQL query statement
      * @param null|string $operator The logical operator. Either: "AND" or "OR".
      * @return static
+     * @throws InvalidArgumentException If the logical operator is not AND or OR.
      */
     protected function onCondition(string|Clause $query, ?string $operator = null): static
     {
+        // Null means "this is the first condition, do not join it to anything",
+        // which is distinct from an unrecognised operator and stays permitted.
+        if ($operator !== null) {
+            $operator = $this->validateLogicalOperator($operator);
+        }
+
+        $binds = null;
+
+        if ($query instanceof Clause) {
+            $query->setPlaceHolder($this->getPlaceHolder());
+            // Eagerly build SQL and collect binds now. The binds are populated
+            // while the SQL is built, so they can only be read afterwards.
+            $sql = (string)$query;
+            $binds = $query->getBinds();
+            $query = $sql;
+        }
+
+        // A clause with nothing to say builds an empty string — a LIKE with no
+        // patterns, or an array condition with no fields. The operator was
+        // appended before the clause was built, so the empty result left a
+        // dangling `AND` behind it and the query died with a syntax error
+        // pointing nowhere near the call. Testing the built SQL here covers
+        // every clause rather than each one separately.
+        if ($query === '') {
+            return $this;
+        }
+
         if ($operator && $this->conditions && end($this->conditions) !== '(') {
             $this->conditions[] = $operator;
         }
 
-        if ($query instanceof Clause) {
-            $query->setPlaceHolder($this->getPlaceHolder());
-            // Eagerly build SQL and collect binds now
-            $this->conditions[] = (string)$query;
-            if ($query->getBinds()) {
-                $this->appendBinds($query->getBinds());
-            }
-            return $this;
+        $this->conditions[] = $query;
+
+        if ($binds) {
+            $this->appendBinds($binds);
         }
 
-        $this->conditions[] = $query;
         return $this;
     }
 
@@ -1924,19 +1895,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function getSQL(): string
     {
-        $from = "FROM $this->table";
-        $alias = $this->getAlias();
-        if ($alias !== null && $this->table !== null) {
-            $quotedAlias = $this->quote($alias);
-            if (!str_contains($this->table, $quotedAlias)) {
-                // Replace any existing alias or append a new one
-                // a Table format is either `table` or `table` `old_alias`
-                $parts = explode(' ', $this->table, 2);
-                $from = "FROM " . $parts[0] . " " . $quotedAlias;
-            }
-        }
-
-        $segments = [$this->buildSelectClause(), $from];
+        $segments = array_filter([$this->buildSelectClause(), $this->getFromSQL()]);
 
         $clauses = [
             $this->getJoinSQL(),
@@ -2012,16 +1971,6 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
-     * Generate JOINS statement
-     *
-     * @return string|null
-     */
-    public function getJoinSQL(): ?string
-    {
-        return empty($this->joins) ? null : implode(' ', $this->joins);
-    }
-
-    /**
      * Generate WHERE statement.
      *
      * All binds are already collected at condition-building time.
@@ -2054,7 +2003,12 @@ class ActiveQuery implements Executable, Updatable, Deletable
      */
     public function getHavingSQL(): ?string
     {
-        return empty($this->having) ? null : 'HAVING ' . implode(', ', $this->having);
+        // The entries were joined with a comma, which HAVING does not accept —
+        // unlike GROUP BY, it takes one boolean expression. So a second
+        // having() call produced a syntax error and the query never ran. The
+        // logical operators are interleaved into the list as conditions are
+        // added, exactly as the WHERE list does, and joined with spaces here.
+        return empty($this->having) ? null : 'HAVING ' . implode(' ', $this->having);
     }
 
     /**
@@ -2383,12 +2337,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         $operator = $this->validateOperator($operator);
         $sql = $this->queryAttribute($first) . " $operator " . $this->queryAttribute($second);
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -2516,12 +2465,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         [$col, $path] = $this->parseJsonPath($column);
         $sql = $this->getGrammar()->jsonKeyExists($this->qualifyJsonColumn($col), $path);
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -2536,12 +2480,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
     {
         [$col, $path] = $this->parseJsonPath($column);
         $sql = 'NOT ' . $this->getGrammar()->jsonKeyExists($this->qualifyJsonColumn($col), $path);
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition($sql, $logicalOperator);
         return $this;
     }
 
@@ -2793,9 +2732,12 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param array<int, string>|string $columns Column(s) to search.
      * @param string $term The search term.
      * @param string $mode The search mode: 'plain', 'phrase', or 'websearch'.
+     *     Use 'websearch' for boolean operators (+, -, "); any other name is
+     *     refused rather than answered in plain mode.
      * @param string $language The text search config/language. Default: 'english'.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the mode is not one of the three supported.
      */
     public function whereFulltext(
         array|string $columns,
@@ -2820,6 +2762,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string $mode The search mode: 'plain', 'phrase', or 'websearch'.
      * @param string $language The text search config/language. Default: 'english'.
      * @return static
+     * @throws InvalidArgumentException If the mode is not one of the three supported.
      */
     public function orWhereFulltext(
         array|string $columns,
@@ -2995,6 +2938,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string $relationName The relation method name on the model.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
     public function has(string $relationName, string $logicalOperator = 'AND'): static
     {
@@ -3007,6 +2951,7 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param string $relationName The relation method name on the model.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
     public function doesntHave(string $relationName, string $logicalOperator = 'AND'): static
     {
@@ -3022,21 +2967,13 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param callable|null $callback Optional callback to add conditions to the sub-query.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
     public function whereHas(string $relationName, ?callable $callback = null, string $logicalOperator = 'AND'): static
     {
         $subQuery = $this->buildRelationExistsQuery($relationName, $callback);
-        if ($subQuery === null) {
-            return $this;
-        }
 
-        $sql = "EXISTS ($subQuery)";
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition("EXISTS ($subQuery)", $logicalOperator);
         return $this;
     }
 
@@ -3047,21 +2984,13 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * @param callable|null $callback Optional callback to add conditions to the sub-query.
      * @param string $logicalOperator The logical operator.
      * @return static
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
     public function whereDoesntHave(string $relationName, ?callable $callback = null, string $logicalOperator = 'AND'): static
     {
         $subQuery = $this->buildRelationExistsQuery($relationName, $callback);
-        if ($subQuery === null) {
-            return $this;
-        }
 
-        $sql = "NOT EXISTS ($subQuery)";
-
-        if ($this->conditions && end($this->conditions) !== '(') {
-            $this->conditions[] = $logicalOperator;
-        }
-
-        $this->conditions[] = $sql;
+        $this->pushCondition("NOT EXISTS ($subQuery)", $logicalOperator);
         return $this;
     }
 
@@ -3070,47 +2999,38 @@ class ActiveQuery implements Executable, Updatable, Deletable
      *
      * @param string $relationName The relation method name.
      * @param callable|null $callback Optional callback for additional conditions.
-     * @return string|null The sub-query SQL, or null if the relation doesn't exist.
+     * @return string The sub-query SQL.
+     * @throws InvalidArgumentException If the name is not a relation on the model.
      */
-    private function buildRelationExistsQuery(string $relationName, ?callable $callback): ?string
+    private function buildRelationExistsQuery(string $relationName, ?callable $callback): string
     {
-        if (!$this->modelClass || !method_exists($this->modelClass, $relationName)) {
-            return null;
-        }
+        $relation = $this->resolveRelation($relationName);
 
         /** @var Model $model */
         $model = new $this->modelClass();
-        $relation = $model->{$relationName}();
 
-        if (!$relation instanceof Relation) {
-            return null;
-        }
+        // The parent row is referenced by the name it has in THIS query. Built
+        // from $model->getTable(), an aliased query produced
+        // `post`.`user_id` = `user`.`id` under FROM `user` `u` and died with
+        // "Unknown column 'user.id'" — every relation filter was unusable
+        // together with alias().
+        $parent = $this->getAlias() ?? $model->getTable();
 
-        $foreignKey = $relation->getForeignKey();
-        $localKey = $relation->getLocalKey();
-        $relatedClass = $relation->getRelatedClass();
-
-        // Build: SELECT 1 FROM related_table WHERE related.fk = parent.local_key
-        /** @var Model $relatedModel */
-        $relatedModel = new $relatedClass();
-        $relatedTable = $relatedModel->getTable();
-        $parentTable = $model->getTable();
-
-        $quotedTable = $this->quote($relatedTable);
-        $fk = $this->quote($foreignKey);
-        $parentRef = $this->quote($parentTable) . '.' . $this->quote($localKey);
-
+        // The sub-query must speak the same dialect as its parent. A default
+        // ActiveQuery resolves the DEFAULT connection's grammar, so a query on
+        // any other connection mixed quoting styles in a single statement —
+        // SELECT "user".* ... EXISTS (SELECT 1 FROM `post` ...) — which no
+        // engine parses.
         $subQuery = new ActiveQuery();
+        $subQuery->withConnection($this->getConnectionName());
         $subQuery->selectRaw('1');
-        $subQuery->from($relatedTable);
-        $subQuery->whereRaw("$quotedTable.$fk = $parentRef");
 
-        // Apply user callback for additional conditions
+        $this->relationExistsSource($subQuery, $relation, $parent);
+
         if ($callback !== null) {
             $callback($subQuery);
         }
 
-        // Build the SQL and collect binds
         $sql = $subQuery->getSQL();
         $binds = $subQuery->getBinds();
         if ($binds !== null) {
@@ -3121,14 +3041,114 @@ class ActiveQuery implements Executable, Updatable, Deletable
     }
 
     /**
+     * Resolve a relation name against the query's model.
+     *
+     * @param string $relationName The relation method name.
+     * @return Relation
+     * @throws InvalidArgumentException If the name is not a relation on the model.
+     */
+    private function resolveRelation(string $relationName): Relation
+    {
+        // Returning the query untouched on a name that is not a relation made
+        // has('psots') a filter that silently did nothing: the caller asked to
+        // narrow the result and got every row back instead. A typo must not
+        // widen a result set.
+        if (!$this->modelClass) {
+            throw new InvalidArgumentException(
+                "Cannot filter by the relation '$relationName': this query has no model to resolve it against."
+            );
+        }
+
+        $class = is_string($this->modelClass) ? $this->modelClass : $this->modelClass::class;
+
+        if (!method_exists($this->modelClass, $relationName)) {
+            throw new InvalidArgumentException("$class has no method '$relationName' to use as a relation.");
+        }
+
+        /** @var Model $model */
+        $model = new $this->modelClass();
+
+        // The same question __get() and EagerLoader ask, asked the same way.
+        // method_exists() was the whole guard here too, and then the name was
+        // called: has('getTable') ran getTable() before deciding it was not a
+        // relation — harmless there, but has('delete') is the same code path —
+        // and a method declaring a required argument escaped as a bare
+        // ArgumentCountError naming neither the filter nor the relation. A
+        // filter must not run the thing it is deciding about.
+        if (!$model->isRelationMethod($relationName)) {
+            throw new InvalidArgumentException(
+                "$class::$relationName() does not return a relation: a relation is a public method that takes"
+                . ' no arguments and declares Relation, not null and not a nullable Relation, as its return'
+                . ' type.'
+            );
+        }
+
+        // No instanceof check after the call: eligibility already required a
+        // declared Relation return type, which PHP enforces itself. The old
+        // check was the only thing standing between the caller and whatever the
+        // method did, and it ran after the damage.
+        return $model->{$relationName}();
+    }
+
+    /**
+     * Point an EXISTS sub-query at the related rows, correlated to the parent.
+     *
+     * @param ActiveQuery $subQuery The sub-query to populate.
+     * @param Relation $relation The relation being tested.
+     * @param string $parent The name the parent row is known by in the outer query.
+     * @return void
+     */
+    private function relationExistsSource(ActiveQuery $subQuery, Relation $relation, string $parent): void
+    {
+        /** @var Model $relatedModel */
+        $relatedModel = new ($relation->getRelatedClass())();
+        $relatedTable = $relatedModel->getTable();
+        $foreignKey = $relation->getForeignKey();
+
+        $parentRef = $this->quote($parent) . '.' . $this->quote($relation->getLocalKey());
+
+        $viaTable = $relation->getViaTable();
+        $viaLink = $relation->getViaLink();
+
+        // Many-to-many: the parent is not in the related table at all, it is in
+        // the junction. Ignoring viaTable produced `tag`.`tag_id` = `post`.`id`
+        // — a column that does not exist — so every M:N relation filter raised
+        // "Unknown column" rather than answering. Only the junction is needed
+        // to decide existence; the related table itself adds nothing.
+        if ($viaTable !== null && $viaLink !== null) {
+            $junction = $viaTable === $parent ? "{$viaTable}_exists" : $viaTable;
+            $subQuery->from($junction === $viaTable ? $viaTable : "$viaTable $junction");
+            $subQuery->whereRaw(
+                $subQuery->quote($junction) . '.' . $subQuery->quote((string)key($viaLink)) . " = $parentRef"
+            );
+            return;
+        }
+
+        // A self-referencing relation puts the same name on both sides, so an
+        // unaliased sub-query resolved `category`.`parent_id` = `category`.`id`
+        // against its own FROM. That is a row compared to itself, and it
+        // answered with the wrong rows in silence — 0 parents instead of 3, and
+        // every row for doesntHave() instead of the 6 that have no children.
+        // Aliasing only on a collision keeps `related_table`.`col` working in
+        // callbacks everywhere else.
+        $related = $relatedTable === $parent ? "{$relatedTable}_exists" : $relatedTable;
+        $subQuery->from($related === $relatedTable ? $relatedTable : "$relatedTable $related");
+        $subQuery->whereRaw(
+            $subQuery->quote($related) . '.' . $subQuery->quote($foreignKey) . " = $parentRef"
+        );
+    }
+
+    /**
      * Add a raw ORDER BY expression.
      *
      * @param string $expression The raw SQL expression.
+     * @param array<int, mixed>|null $binds Values for any placeholders in the expression.
      * @return static
      */
-    public function orderByRaw(string $expression): static
+    public function orderByRaw(string $expression, ?array $binds = null): static
     {
         $this->orderBys[] = $expression;
+        $this->appendSectionBinds($this->orderBinds, $binds);
         return $this;
     }
 
@@ -3136,11 +3156,13 @@ class ActiveQuery implements Executable, Updatable, Deletable
      * Add a raw SELECT expression.
      *
      * @param string $expression The raw SQL expression.
+     * @param array<int, mixed>|null $binds Values for any placeholders in the expression.
      * @return static
      */
-    public function selectRaw(string $expression): static
+    public function selectRaw(string $expression, ?array $binds = null): static
     {
         $this->selects[] = $expression;
+        $this->appendSectionBinds($this->selectBinds, $binds);
         return $this;
     }
 
@@ -3155,59 +3177,5 @@ class ActiveQuery implements Executable, Updatable, Deletable
     public function orWhereColumn(string $first, string $operator, string $second): static
     {
         return $this->whereColumn($first, $operator, $second, 'OR');
-    }
-
-    /**
-     * Alias for like() — Where LIKE with case-sensitivity control.
-     *
-     * @param string $attribute The attribute name.
-     * @param string $value The LIKE pattern.
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @param string $logicalOperator The logical operator. Default: 'AND'.
-     * @return static
-     */
-    public function whereLike(string $attribute, string $value, bool $caseSensitive = false, string $logicalOperator = 'AND'): static
-    {
-        return $this->like($attribute, $value, true, true, $logicalOperator, $caseSensitive);
-    }
-
-    /**
-     * Alias for orLike() — Or where LIKE with case-sensitivity control.
-     *
-     * @param string $attribute The attribute name.
-     * @param string $value The LIKE pattern.
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @return static
-     */
-    public function orWhereLike(string $attribute, string $value, bool $caseSensitive = false): static
-    {
-        return $this->like($attribute, $value, true, true, 'OR', $caseSensitive);
-    }
-
-    /**
-     * Alias for notLike() — Where NOT LIKE with case-sensitivity control.
-     *
-     * @param string $attribute The attribute name.
-     * @param string $value The LIKE pattern.
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @param string $logicalOperator The logical operator. Default: 'AND'.
-     * @return static
-     */
-    public function whereNotLike(string $attribute, string $value, bool $caseSensitive = false, string $logicalOperator = 'AND'): static
-    {
-        return $this->like($attribute, $value, false, true, $logicalOperator, $caseSensitive);
-    }
-
-    /**
-     * Alias for orNotLike() — Or where NOT LIKE with case-sensitivity control.
-     *
-     * @param string $attribute The attribute name.
-     * @param string $value The LIKE pattern.
-     * @param bool $caseSensitive Whether the comparison is case-sensitive. Default: false.
-     * @return static
-     */
-    public function orWhereNotLike(string $attribute, string $value, bool $caseSensitive = false): static
-    {
-        return $this->like($attribute, $value, false, true, 'OR', $caseSensitive);
     }
 }

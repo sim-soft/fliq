@@ -5,6 +5,7 @@ namespace Simsoft\DB\Drivers;
 use PDO;
 use PDOException;
 use PDOStatement;
+use Simsoft\DB\Interfaces\CachesStatements;
 use Simsoft\DB\Interfaces\Executable;
 
 /**
@@ -13,7 +14,7 @@ use Simsoft\DB\Interfaces\Executable;
  * MySQL connection implementation using PHP PDO extension.
  * Features: prepared statement caching, persistent connections.
  */
-class PDODriver extends Driver
+class PDODriver extends Driver implements CachesStatements
 {
     /** @var array<int, string> Required configuration keys */
     protected array $required = ['host', 'database', 'username', 'password'];
@@ -46,6 +47,8 @@ class PDODriver extends Driver
      */
     protected function connect(): void
     {
+        $this->prepareConnect();
+
         try {
             $this->cacheEnabled = (bool)($this->config['statement_cache'] ?? true);
             $this->maxCacheSize = (int)($this->config['statement_cache_size'] ?? 100);
@@ -74,8 +77,8 @@ class PDODriver extends Driver
                 $defaults[PDO::ATTR_PERSISTENT] = true;
             }
 
-            // User options override defaults
-            $options = array_replace($defaults, (array)($this->config['options'] ?? []));
+            // User options override defaults, bar the error mode.
+            $options = $this->mergePdoOptions($defaults, $this->config['options'] ?? []);
 
             $this->connection = new PDO(
                 $dsn,
@@ -83,41 +86,52 @@ class PDODriver extends Driver
                 $this->config['password'],
                 $options
             );
+
+            $this->markActivity();
         } catch (PDOException $exception) {
             $this->addError($exception->getMessage());
         }
     }
 
     /**
-     * Check if the connection is still alive.
-     *
-     * @return bool
+     * {@inheritdoc}
      */
-    public function ping(): bool
+    protected function probeLiveness(): bool
     {
-        if ($this->connection === null) {
+        $stmt = $this->requireConnection()->query('SELECT 1');
+        if ($stmt === false) {
             return false;
         }
 
-        try {
-            $stmt = $this->connection->query('SELECT 1');
-            return $stmt !== false;
-        } catch (\Throwable) {
-            return false;
-        }
+        // MySQL does not buffer by default, so a result set left unread keeps
+        // the connection busy and the next prepared statement fails with "2014
+        // Cannot execute queries while other unbuffered queries are active".
+        $stmt->fetchAll();
+        $stmt->closeCursor();
+
+        return true;
     }
 
     /**
-     * Reconnect if the connection has been lost.
-     *
-     * @return void
+     * {@inheritdoc}
      */
-    public function reconnectIfNeeded(): void
+    protected function isConnected(): bool
     {
-        if ($this->connection === null || !$this->ping()) {
-            $this->statementCache = [];
-            $this->connect();
-        }
+        return $this->connection !== null;
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @throws \Simsoft\DB\Exceptions\ConnectionException If the server is still unreachable.
+     */
+    protected function forceReconnect(): void
+    {
+        // Statements are bound to the connection that prepared them.
+        $this->statementCache = [];
+        $this->connection = null;
+        $this->connect();
+        $this->assertReconnected();
     }
 
     /**
@@ -140,17 +154,25 @@ class PDODriver extends Driver
     public function execute(Executable $query): bool
     {
         $this->reconnectIfNeeded();
-        $conn = $this->requireConnection();
 
         $sql = $query->getSQL();
         $binds = $query->getBinds();
 
-        if ($binds === null) {
-            return $conn->exec($sql) !== false;
-        }
+        return $this->runWithReconnect(function () use ($sql, $binds): bool {
+            $stmt = $this->prepareStatement($sql);
+            $result = $stmt->execute($binds ?? []);
 
-        $stmt = $this->prepareStatement($sql);
-        return $stmt->execute($binds);
+            // A statement that returned rows holds them until they are read or
+            // the cursor is closed, and MySQL refuses the next one meanwhile.
+            // The unbound branch used PDO::exec(), which gives back no handle
+            // to close, so `execute(new Raw('SELECT 1'))` left the connection
+            // unusable and the failure surfaced on whichever innocent statement
+            // came next. The three other drivers all free their result here.
+            $stmt->closeCursor();
+            $this->markActivity();
+
+            return $result;
+        });
     }
 
     /**
@@ -165,10 +187,13 @@ class PDODriver extends Driver
         $sql = $query->getSQL();
         $binds = $query->getBinds();
 
-        $stmt = $this->prepareStatement($sql);
-        $stmt->execute($binds ?? []);
+        return $this->runWithReconnect(function () use ($sql, $binds): array {
+            $stmt = $this->prepareStatement($sql);
+            $stmt->execute($binds ?? []);
+            $this->markActivity();
 
-        return $stmt->fetchAll();
+            return $stmt->fetchAll();
+        });
     }
 
     /**
@@ -176,28 +201,39 @@ class PDODriver extends Driver
      */
     public function lastInsertId(): false|string
     {
-        return $this->requireConnection()->lastInsertId();
+        return $this->normalizeInsertId(fn(): string|false => $this->requireConnection()->lastInsertId());
     }
 
     /**
      * {@inheritdoc}
      */
-    public function transaction(callable $callback): bool
+    protected function beginTransaction(): void
     {
-        $conn = $this->requireConnection();
-        $conn->beginTransaction();
+        $this->requireConnection()->beginTransaction();
+    }
 
-        try {
-            if ($callback() === true) {
-                return $conn->commit();
-            }
+    /**
+     * {@inheritdoc}
+     */
+    protected function commitTransaction(): bool
+    {
+        return $this->requireConnection()->commit();
+    }
 
-            $conn->rollBack();
-            return false;
-        } catch (\Throwable $e) {
-            $conn->rollBack();
-            throw $e;
-        }
+    /**
+     * {@inheritdoc}
+     */
+    protected function rollBackTransaction(): void
+    {
+        $this->requireConnection()->rollBack();
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    protected function executeRawStatement(string $sql): void
+    {
+        $this->requireConnection()->exec($sql);
     }
 
     /**

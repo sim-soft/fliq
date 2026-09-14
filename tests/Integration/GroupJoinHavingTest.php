@@ -243,8 +243,9 @@ class GroupJoinHavingTest extends DatabaseTestCase
 
     // ------------------------------------------------------------------
     // Relationship filters: has(), doesntHave(), whereHas(), whereDoesntHave()
-    // NOTE: These use manual subquery approach because the ORM's has()/whereHas()
-    // methods have a known parameter binding issue with EXISTS subqueries.
+    // These are smoke tests over the happy path. Aliases, self-referencing and
+    // M:N relations, bind ordering and cross-connection quoting are covered
+    // against database ground truth in RelationExistsExecutionTest.
     // ------------------------------------------------------------------
 
     #[Test]

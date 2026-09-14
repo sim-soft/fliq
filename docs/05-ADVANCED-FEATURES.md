@@ -7,6 +7,7 @@
 - [Global Scopes](#global-scopes)
 - [Batch Insert](#batch-insert)
 - [Batch Update](#batch-update)
+- [Upsert (Insert or Update on Conflict)](#upsert-insert-or-update-on-conflict)
 - [Cursor Pagination](#cursor-pagination)
 - [Cursor (Unbuffered Iteration)](#cursor-unbuffered-iteration)
 - [Chunk By ID](#chunk-by-id)
@@ -47,6 +48,85 @@ $posts = Post::find()->where('published', true)->cache(300)->all();
 $user = User::find()->where('email', 'john@example.com')->cache(120)->first();
 ```
 
+### What `cache()` applies to
+
+Caching covers the reads that return rows — `all()`, `getArray()`, `first()`,
+`paginate()` and `cursorPaginate()`.
+
+It does **not** cover aggregates. `count()`, `sum()`, `avg()`, `min()`, `max()`
+and their `*Distinct()` variants build a separate query that carries no TTL, so
+they run against the database every time even when the query they were called on
+asked for caching:
+
+```php
+$query = User::find()->where('status_code', 1)->cache(60);
+
+foreach ($query->all() as $user) { /* cached */ }
+
+$query->count();  // not cached — runs every time
+```
+
+(`all()` returns a lazy `Collection`, so the cache is consulted when the rows are
+consumed, not when `all()` is called.)
+
+`cursor()` is refused outright rather than silently ignoring the TTL — see
+[Cursor](#cursor-unbuffered-iteration).
+
+### What makes a cache entry unique
+
+The cache key is built from the **connection name**, the SQL, and the bound
+values. Including the connection matters when you run the same query against
+more than one database — for example a tenant per connection. Two tenants
+issuing an identical query get separate cache entries, so one never sees the
+other's rows.
+
+```php
+/* Different connections, same SQL — cached separately */
+User::find()->where('status', 1)->on('tenant_a')->cache(60)->all();
+User::find()->where('status', 1)->on('tenant_b')->cache(60)->all();
+```
+
+### When entries go away
+
+The TTL is the **only** thing that ends a cache entry. Nothing in the framework
+invalidates entries when you write, so a read cached for 300 seconds keeps
+serving the rows it captured for up to 300 seconds after an `UPDATE` changes
+them — including an update issued by your own code, on the same connection, in
+the same request:
+
+```php
+$name = User::find()->where('id', 1)->cache(300)->first()->username;  // 'alice'
+
+User::find()->where('id', 1)->first()->update(['username' => 'alice2']);
+
+$name = User::find()->where('id', 1)->cache(300)->first()->username;  // still 'alice'
+```
+
+Choose a TTL you are willing to be that far out of date by, and keep `cache()`
+off queries whose freshness matters — a balance, a stock level, a permission
+check.
+
+An expired entry is not served, and is dropped from the driver on the first
+`get()` or `has()` that finds it lapsed. `ArrayCache` therefore does not grow
+without bound in a long-running worker, but it only prunes keys that are read
+again — it has no background sweep, so keys that are never read a second time
+stay resident until the process ends. For a long-lived process caching a wide
+spread of one-off queries, prefer a driver with its own eviction (Redis,
+Memcached) over `ArrayCache`.
+
+To drop everything at once, `ArrayCache::clear()` empties the store. It is not
+part of `CacheInterface`, so you need the concrete instance to call it:
+
+```php
+$cache = new ArrayCache();
+QueryCache::setDriver($cache);
+
+$cache->clear();          // works — you are holding the ArrayCache
+
+QueryCache::reset();      // interface-level alternative: drops the driver
+                          // entirely, which also disables caching
+```
+
 ### Custom Cache Driver
 
 Implement `Simsoft\DB\Cache\CacheInterface`:
@@ -64,6 +144,38 @@ class RedisCache implements CacheInterface
 
 QueryCache::setDriver(new RedisCache($redis));
 ```
+
+Those four methods are named and shaped after PSR-16 but this is not PSR-16: it
+omits `clear()`, `getMultiple()`, `setMultiple()` and `deleteMultiple()`, and it
+does not throw on invalid keys. A PSR-16 cache does not satisfy the interface on
+its own — wrap it:
+
+```php
+class Psr16Cache implements CacheInterface
+{
+    public function __construct(private \Psr\SimpleCache\CacheInterface $psr) {}
+
+    public function get(string $key, mixed $default = null): mixed
+    {
+        return $this->psr->get($key, $default);
+    }
+
+    public function set(string $key, mixed $value, int $ttl = 0): bool
+    {
+        return $this->psr->set($key, $value, $ttl > 0 ? $ttl : null);
+    }
+
+    public function delete(string $key): bool { return $this->psr->delete($key); }
+    public function has(string $key): bool    { return $this->psr->has($key); }
+}
+```
+
+Note the `$ttl` translation: this interface spells "no expiry" as `0`, PSR-16
+spells it as `null`.
+
+Only `get()` and `set()` are called by the query cache. `delete()` and `has()`
+are part of the contract for callers holding a driver directly — implement them
+correctly, but nothing in the framework will reach them.
 
 ---
 
@@ -199,9 +311,9 @@ Insert many records efficiently using chunked multi-row INSERT statements.
 
 ```php
 $records = [
-    ['name' => 'Alice', 'email' => 'alice@example.com', 'status' => 1],
-    ['name' => 'Bob', 'email' => 'bob@example.com', 'status' => 1],
-    ['name' => 'Charlie', 'email' => 'charlie@example.com', 'status' => 0],
+    ['username' => 'Alice', 'email' => 'alice@example.com', 'status_code' => 1],
+    ['username' => 'Bob', 'email' => 'bob@example.com', 'status_code' => 1],
+    ['username' => 'Charlie', 'email' => 'charlie@example.com', 'status_code' => 0],
 ];
 
 /* Insert all records (default chunk size: 500) */
@@ -212,7 +324,33 @@ $inserted = User::insertBatch($records);
 $inserted = User::insertBatch($largeDataset, 1000);
 ```
 
-All records must have the same column structure (based on the first record's keys).
+### Column structure
+
+Every record is written against the first record's keys, which is what makes one
+statement per chunk possible. The two ways a later record can differ are not
+treated alike:
+
+```php
+/* Fine — an omitted column is inserted as NULL, so published_at must be nullable */
+Post::insertBatch([
+    ['user_id' => 1, 'title' => 'First', 'slug' => 'first', 'body' => '...',
+     'published_at' => '2026-01-01 09:00:00'],
+    ['user_id' => 1, 'title' => 'Draft', 'slug' => 'draft', 'body' => '...'],
+]);
+
+/* InvalidArgumentException — 'view_count' has no place in the statement */
+Post::insertBatch([
+    ['user_id' => 1, 'title' => 'First', 'slug' => 'first', 'body' => '...'],
+    ['user_id' => 1, 'title' => 'Second', 'slug' => 'second', 'body' => '...',
+     'view_count' => 10],
+]);
+```
+
+A missing value is a value the caller did not give, and it is sent as NULL — so
+a column the first record names must be nullable, or accept the NULL some other
+way. An extra one is a value the caller did give and the database would never
+have seen, so it is refused rather than dropped. Key order does not matter —
+each value binds to the column it names.
 
 ---
 
@@ -238,6 +376,95 @@ OrderItem::updateBatch([
     ['sku' => 'ABC-002', 'stock' => 0],
 ], 'sku');
 ```
+
+---
+
+## Upsert (Insert or Update on Conflict)
+
+Insert a row, or update it if one with the same key already exists — in one
+statement, without a read first.
+
+```php
+use Simsoft\DB\DB;
+
+DB::upsert(
+    'setting',
+    ['group' => 'app', 'key' => 'theme', 'value' => 'dark'],  /* the row */
+    ['value'],                                                 /* update on conflict */
+    null,                                                      /* connection */
+    ['group', 'key']                                           /* conflict target */
+);
+```
+
+The third argument names which columns an existing row takes from the row you
+were inserting. Omit it and every column is updated.
+
+### Updating to a value other than the one inserted
+
+A string key sets a column to a value of its own, bound rather than
+interpolated, instead of the one the INSERT carried:
+
+```php
+/* A new setting is inserted as given; an existing one takes the new value
+   and is marked as overridden, which is not a value the row carries */
+DB::upsert(
+    'setting',
+    ['group' => 'mail', 'key' => 'host', 'value' => 'smtp.example.com'],
+    ['value', 'metadata' => '{"source":"override"}'],
+    null,
+    ['group', 'key']
+);
+```
+
+Numeric and string keys can be mixed: `['value', 'metadata' => ...]` takes
+`value` from the inserted row and sets `metadata` to the value given here.
+
+### Naming the conflict target
+
+MySQL reacts to a conflict on any unique key and takes no target, so the fifth
+argument is ignored there. **PostgreSQL and SQLite require one**, and reject any
+target not backed by a unique constraint:
+
+```
+ERROR: there is no unique or exclusion constraint matching the ON CONFLICT specification
+```
+
+If it is omitted on those engines the first inserted column is used, which is
+usually not a key — so name the target whenever the constraint is not that
+column. Naming it is portable: MySQL accepts and ignores it, so the same call
+runs everywhere.
+
+`Upsert` can also be built directly, which is the same thing without the facade:
+
+```php
+use Simsoft\DB\Builder\Upsert;
+
+(new Upsert('setting', $attributes, ['value'], ['group', 'key']))
+    ->withConnection('pgsql')
+    ->execute();
+```
+
+### Knowing which row it touched
+
+`DB::upsert()` runs the statement and hands back whether it succeeded, so the
+builder form is the one to use when you need the row itself. On PostgreSQL and
+SQLite, `returning()` asks the statement to name it:
+
+```php
+$upsert = (new Upsert('setting', $attributes, ['value'], ['group', 'key']))
+    ->returning('id')
+    ->withConnection('pgsql');
+$upsert->execute();
+
+$upsert->getLastInsertId();    /* '42', whether it inserted or updated */
+$upsert->getReturningResult(); /* [['id' => 42]] */
+```
+
+Ask, rather than reading the connection's last insert id: that id is
+session-scoped on both engines and an upsert that took the update branch reports
+one belonging to a row it did not write — a consumed sequence number on
+PostgreSQL, the previous statement's id on SQLite. MySQL needs no clause and
+emits none; see [PostgreSQL Guide](10-POSTGRESQL.md#knowing-which-row-the-upsert-touched).
 
 ---
 
@@ -296,7 +523,7 @@ Fetch one row at a time without buffering the full result set. Ideal for process
 
 ```php
 /* Iterates without loading all rows into memory */
-foreach (User::find()->where('status', 1)->cursor() as $user) {
+foreach (User::find()->where('status_code', 1)->cursor() as $user) {
     processUser($user);
 }
 
@@ -307,6 +534,60 @@ foreach (Order::find()->where('total', '>', 100)->orderBy('id')->cursor() as $or
 ```
 
 Works with PDO-based drivers (MySQL, PostgreSQL, SQLite). Falls back to buffered iteration for MySQLi.
+
+### You cannot query the same connection while a cursor is open
+
+This is what streaming *is*: the server is still sending rows, so on MySQL any
+other query on that connection fails with *"Cannot execute queries while other
+unbuffered queries are active"*. That includes a lazy relation read, an update,
+or a count — anything issued from inside the loop.
+
+```php
+/* Not this — the relation read is a second query on a busy connection */
+foreach (User::find()->cursor() as $user) {
+    foreach ($user->posts()->fetch() as $post) { /* ... */ }
+}
+
+/* This — collect while streaming, act afterwards */
+$ids = [];
+foreach (User::find()->cursor() as $user) {
+    $ids[] = $user->id;
+}
+foreach (Post::find()->whereIn('user_id', $ids)->all() as $post) { /* ... */ }
+```
+
+For the same reason `with()` cannot be combined with `cursor()`: eager loading
+batches the related rows in a second query once every parent is known, and a
+cursor never has them all at once. Asking for both raises a `QueryException`
+rather than handing back models whose relations are quietly unloaded.
+
+### You cannot cache a cursor either
+
+`cache()` stores the whole result set, which is the one thing a cursor exists
+not to do. Asking for both raises a `QueryException`:
+
+```php
+/* Not this — the two requests contradict each other */
+User::find()->cache(60)->cursor();
+
+/* Cache the rows */
+User::find()->cache(60)->all();
+
+/* Or stream them */
+User::find()->cursor();
+```
+
+If you need to query as you iterate, use `each()`, which fetches a chunk at a
+time and has no such restriction:
+
+```php
+foreach (User::find()->with('posts')->each(500) as $user) {
+    /* free to query here — each() buffers 500 rows at a time */
+}
+```
+
+`each()` trades constant memory for a bounded chunk; `cursor()` trades the
+ability to query for constant memory. Both beat loading the whole table.
 
 ---
 
@@ -338,15 +619,20 @@ use Simsoft\DB\QueryLogger;
 // Enable logging first
 QueryLogger::enable();
 
-// Run your application queries...
-$users = User::find()->where('status', 1)->where('role', 'admin')->get();
-$posts = Post::find()->join('user', ['id' => 'post.user_id'])->get();
+// Run your application queries. get() is lazy, so the advisor only sees a
+// query once its results have been consumed.
+foreach (User::find()->where('status', 1)->where('role', 'admin')->get() as $user) {
+    // ...
+}
+foreach (Post::find()->join('user', ['id' => 'post.user_id'])->get() as $post) {
+    // ...
+}
 
 // Get suggestions
 $suggestions = IndexAdvisor::suggest();
 // [
 /* ['table' => 'user', 'columns' => ['status', 'role'], 'reason' => 'Used in WHERE clause'],
-   ['table' => 'post', 'columns' => ['user_id'], 'reason' => 'Used in JOIN condition'], */
+   ['table' => 'user', 'columns' => ['id'], 'reason' => 'Used in JOIN condition'], */
 // ]
 
 // Get as CREATE INDEX SQL statements
@@ -451,18 +737,23 @@ $plan = User::find()
 /* EXPLAIN ANALYZE — actually runs the query and shows real timings */
 $plan = User::find()->where('role', 'admin')->explain(analyze: true);
 
-/* JSON format for programmatic analysis (PostgreSQL) */
+/* JSON format for programmatic analysis (MySQL and PostgreSQL) */
 $plan = Post::find()
     ->whereFulltext(['title', 'body'], 'optimization')
     ->explain(format: 'json');
 ```
 
-Works on all drivers:
+Works on all drivers, each with its own formats. `$format` is validated against
+the driver the query runs on, so an unsupported combination raises an
+`InvalidArgumentException` instead of returning a plan in the wrong shape:
 
-- **MySQL**: `EXPLAIN` / `EXPLAIN ANALYZE`
-- **PostgreSQL**: `EXPLAIN` / `EXPLAIN ANALYZE` /
-  `EXPLAIN (FORMAT JSON|YAML|XML)`
-- **SQLite**: `EXPLAIN QUERY PLAN`
+- **MySQL**: `EXPLAIN` / `EXPLAIN FORMAT=JSON|TREE` / `EXPLAIN ANALYZE`.
+  `ANALYZE` always reports the tree format and cannot be combined with
+  `FORMAT=JSON`.
+- **PostgreSQL**: `EXPLAIN` / `EXPLAIN (FORMAT JSON|YAML|XML)` /
+  `EXPLAIN (ANALYZE, FORMAT ...)` — every option goes in one parenthesised list.
+- **SQLite**: `EXPLAIN QUERY PLAN`. There is no `EXPLAIN ANALYZE`; the plan is
+  described without executing the statement.
 
 ---
 

@@ -178,12 +178,18 @@ class EdgeCasesTest extends DatabaseTestCase
     #[Test]
     public function emptyInArrayHandledGracefully(): void
     {
-        // IN with empty array — ORM may generate invalid SQL or skip condition
-        // This tests that it doesn't crash
-        $query = User::find()->in('id', []);
-        $count = $query->count();
-        // With empty IN, MySQL treats IN() as always false OR the ORM skips it
-        $this->assertGreaterThanOrEqual(0, $count);
+        // Membership of a set with nothing in it is false for every row, so an
+        // empty list matches none. This used to assert only that the count was
+        // not negative, which every possible answer satisfies — including the
+        // wrong one it was actually getting, where the condition was dropped
+        // and all ten users came back.
+        $this->assertSame(0, User::find()->in('id', [])->count());
+
+        // The exclusion is the mirror: excluding nothing excludes nothing.
+        $this->assertSame(
+            User::find()->count(),
+            User::find()->notIn('id', [])->count()
+        );
     }
 
     #[Test]

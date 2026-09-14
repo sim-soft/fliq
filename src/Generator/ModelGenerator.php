@@ -2,6 +2,7 @@
 
 namespace Simsoft\DB\Generator;
 
+use RuntimeException;
 use Simsoft\DB\Builder\Raw;
 use Simsoft\DB\Connection;
 
@@ -39,11 +40,144 @@ class ModelGenerator
      *
      * @param string $table The table name.
      * @param string|null $connectionName The connection name. Null for default.
+     * @throws RuntimeException If the table or connection name cannot be written out.
      */
     public function __construct(string $table, ?string $connectionName = null)
     {
+        self::assertTableName($table);
+
         $this->table = $table;
         $this->connectionName = $connectionName ?? Connection::getDefaultName();
+
+        self::assertConnectionName($this->connectionName);
+    }
+
+    /**
+     * Reject a table name that cannot be safely interpolated into SQL.
+     *
+     * Two of the three introspection queries name the table inline, because
+     * SHOW COLUMNS and PRAGMA take an identifier rather than a bindable value.
+     * An identifier cannot be parameter-bound, so the name is checked against
+     * the same grammar the query builder uses before it reaches the server.
+     *
+     * @param string $table The table name.
+     * @return void
+     * @throws RuntimeException If the name is not a plain identifier.
+     */
+    private static function assertTableName(string $table): void
+    {
+        if (preg_match('/^[a-zA-Z0-9_$]+$/', $table) === 1) {
+            return;
+        }
+
+        throw new RuntimeException(
+            "Invalid table name: '$table'. "
+            . 'Only letters, digits, underscores and dollar signs are allowed.'
+        );
+    }
+
+    /**
+     * Reject a namespace PHP will not parse.
+     *
+     * The value is written straight into `namespace X;`, so anything that is
+     * not a namespace is a parse error in a file the reader did not write —
+     * or, for a value carrying a semicolon, a statement of the caller's
+     * choosing that PHP parses perfectly well and runs on every include.
+     * Checked rather than escaped, because there is no escaping that turns a
+     * non-namespace into one.
+     *
+     * @param string $namespace The namespace.
+     * @return void
+     * @throws RuntimeException If the value is not a namespace.
+     */
+    private static function assertNamespace(string $namespace): void
+    {
+        if (preg_match('/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*(\\\\[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*)*$/', $namespace) === 1) {
+            return;
+        }
+
+        throw new RuntimeException(
+            "Invalid namespace: '$namespace'. "
+            . 'Expected a PHP namespace such as App\\Models.'
+        );
+    }
+
+    /**
+     * Reject a connection name that cannot be written as a single-quoted string.
+     *
+     * The name is interpolated into `protected string $connection = '...';`, so
+     * a name holding a quote ends the string early and the file no longer
+     * parses. Connection::add() accepts any string, so this is reachable
+     * without anything unusual on the caller's part.
+     *
+     * @param string $connectionName The connection name.
+     * @return void
+     * @throws RuntimeException If the name cannot be safely written out.
+     */
+    private static function assertConnectionName(string $connectionName): void
+    {
+        if (!str_contains($connectionName, "'") && !str_contains($connectionName, '\\')) {
+            return;
+        }
+
+        throw new RuntimeException(
+            "Connection name '$connectionName' cannot be written into a generated model, "
+            . 'because it contains a quote or a backslash. Rename the connection.'
+        );
+    }
+
+    /**
+     * PHP reserved words that cannot be used as a class name.
+     *
+     * A table named "class" or "list" produces a class declaration PHP will
+     * not parse. The name is checked rather than mangled, because there is no
+     * mangling the reader would expect.
+     *
+     * @var array<int, string>
+     */
+    private const RESERVED_CLASS_NAMES = [
+        'abstract', 'and', 'array', 'as', 'break', 'callable', 'case', 'catch',
+        'class', 'clone', 'const', 'continue', 'declare', 'default', 'do',
+        'echo', 'else', 'elseif', 'empty', 'enddeclare', 'endfor', 'endforeach',
+        'endif', 'endswitch', 'endwhile', 'enum', 'eval', 'exit', 'extends',
+        'final', 'finally', 'fn', 'for', 'foreach', 'function', 'global',
+        'goto', 'if', 'implements', 'include', 'instanceof', 'insteadof',
+        'interface', 'isset', 'list', 'match', 'namespace', 'new', 'or',
+        'print', 'private', 'protected', 'public', 'readonly', 'require',
+        'return', 'static', 'switch', 'throw', 'trait', 'try', 'unset', 'use',
+        'var', 'while', 'xor', 'yield',
+        // Not reserved words, but reserved as class names.
+        'bool', 'false', 'float', 'int', 'iterable', 'mixed', 'never', 'null',
+        'object', 'parent', 'self', 'string', 'true', 'void',
+    ];
+
+    /**
+     * Reject a class name PHP will not accept.
+     *
+     * The name is derived from the table, so a table PHP has no name for
+     * cannot produce a loadable file. Failing here names the table; failing
+     * later is a parse error in a file the reader did not write.
+     *
+     * @param string $className The class name.
+     * @param string $table The table it came from.
+     * @return void
+     * @throws RuntimeException If the name is not usable.
+     */
+    private static function assertClassName(string $className, string $table): void
+    {
+        if (preg_match('/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/', $className) !== 1) {
+            throw new RuntimeException(
+                "Table '$table' produces the class name '$className', which is not a valid PHP "
+                . 'class name. Pass an explicit name with className().'
+            );
+        }
+
+        if (in_array(strtolower($className), self::RESERVED_CLASS_NAMES, true)) {
+            throw new RuntimeException(
+                "Table '$table' produces the class name '$className', which is a PHP reserved "
+                . 'word. Pass an explicit name with className().'
+            );
+        }
     }
 
     /**
@@ -63,9 +197,12 @@ class ModelGenerator
      *
      * @param string $namespace The PHP namespace.
      * @return static
+     * @throws RuntimeException If the value is not a PHP namespace.
      */
     public function namespace(string $namespace): static
     {
+        self::assertNamespace($namespace);
+
         $this->namespace = $namespace;
         return $this;
     }
@@ -121,10 +258,11 @@ class ModelGenerator
      * Generate the model file.
      *
      * @return string|false The file path written, or false if skipped (a file exists and force=false).
+     * @throws RuntimeException If the directory or the file cannot be written.
      */
     public function generate(): string|false
     {
-        $className = $this->customClassName ?? $this->tableToClassName($this->table);
+        $className = $this->resolveClassName();
         $filePath = $this->outputDir . DIRECTORY_SEPARATOR . $className . '.php';
 
         if (!$this->force && file_exists($filePath)) {
@@ -135,11 +273,21 @@ class ModelGenerator
         $code = $this->buildClassCode($className, $columns);
 
         $directory = dirname($filePath);
-        if (!is_dir($directory)) {
-            mkdir($directory, 0755, true);
+        if (!is_dir($directory) && !@mkdir($directory, 0755, true) && !is_dir($directory)) {
+            // Both returns used to be discarded, so a directory that could not
+            // be created and a file that was never written produced two PHP
+            // warnings and then a return of the path as though it had been
+            // written. generate() is documented to answer the path it wrote, and
+            // generateAll() counts that answer — so a run into an unwritable
+            // directory reported every table as created while the disk stayed
+            // empty. The second is_dir() re-check is for the concurrent case,
+            // where another process created the directory between the two calls.
+            throw new RuntimeException("Cannot create output directory: $directory");
         }
 
-        file_put_contents($filePath, $code);
+        if (@file_put_contents($filePath, $code) === false) {
+            throw new RuntimeException("Cannot write model file: $filePath");
+        }
 
         return $filePath;
     }
@@ -152,6 +300,7 @@ class ModelGenerator
      * @param string $outputDir The output directory.
      * @param bool $force Whether to overwrite existing files.
      * @return array{created: array<int, string>, skipped: array<int, string>}
+     * @throws RuntimeException If the namespace is not a PHP namespace, or a file cannot be written.
      */
     public static function generateAll(
         ?string $connectionName = null,
@@ -160,6 +309,12 @@ class ModelGenerator
         bool    $force = false
     ): array
     {
+        // Checked here rather than left to the per-table namespace() call, so a
+        // bad namespace fails before the first table is introspected instead of
+        // after — the loop writes as it goes, and a run that stops partway
+        // leaves a directory half full of models.
+        self::assertNamespace($namespace);
+
         $tables = self::listTables($connectionName);
         $created = [];
         $skipped = [];
@@ -225,10 +380,24 @@ class ModelGenerator
      */
     public function preview(): string
     {
-        $className = $this->customClassName ?? $this->tableToClassName($this->table);
+        $className = $this->resolveClassName();
         $columns = $this->introspectColumns();
 
         return $this->buildClassCode($className, $columns);
+    }
+
+    /**
+     * Resolve the class name to generate, and check PHP will accept it.
+     *
+     * @return string The class name.
+     * @throws RuntimeException If the name is not a usable class name.
+     */
+    private function resolveClassName(): string
+    {
+        $className = $this->customClassName ?? $this->tableToClassName($this->table);
+        self::assertClassName($className, $this->table);
+
+        return $className;
     }
 
     /**
@@ -281,17 +450,27 @@ class ModelGenerator
      */
     private function introspectPostgres(): array
     {
+        // The primary key is looked up as a pre-filtered set rather than joined
+        // constraint-by-constraint. Joining key_column_usage directly returns
+        // one row per constraint the column belongs to, so a column that is
+        // also UNIQUE or a foreign key came back two or three times — and each
+        // copy became another @property line and another relation method, i.e.
+        // "Cannot redeclare" in the generated file.
         $sql = "SELECT c.column_name, c.data_type, c.udt_name, c.is_nullable, c.column_default,
-                CASE WHEN tc.constraint_type = 'PRIMARY KEY' THEN true ELSE false END AS is_primary
+                (pk.column_name IS NOT NULL) AS is_primary
                 FROM information_schema.columns c
-                LEFT JOIN information_schema.key_column_usage kcu
-                    ON c.table_name = kcu.table_name AND c.column_name = kcu.column_name
-                LEFT JOIN information_schema.table_constraints tc
-                    ON kcu.constraint_name = tc.constraint_name AND tc.constraint_type = 'PRIMARY KEY'
+                LEFT JOIN (
+                    SELECT kcu.column_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                        ON kcu.constraint_name = tc.constraint_name
+                        AND kcu.table_schema = tc.table_schema
+                    WHERE tc.table_name = ? AND tc.constraint_type = 'PRIMARY KEY'
+                ) pk ON pk.column_name = c.column_name
                 WHERE c.table_name = ?
                 ORDER BY c.ordinal_position";
 
-        $raw = new Raw($sql, [$this->table]);
+        $raw = new Raw($sql, [$this->table, $this->table]);
         $raw->withConnection($this->connectionName);
         $rows = $raw->fetchAll();
 
@@ -645,6 +824,7 @@ class ModelGenerator
     {
         $excluded = array_merge($primaryKeys, ['created_at', 'updated_at', 'deleted_at', 'created', 'updated']);
         $relations = [];
+        $taken = $this->reservedMethodNames();
 
         foreach ($columns as $column) {
             $name = $column['name'];
@@ -654,21 +834,73 @@ class ModelGenerator
             }
 
             // Detect *_id pattern → hasOne relation
-            if (str_ends_with($name, '_id')) {
-                $relatedTable = substr($name, 0, -3); // user_id → user
-                $relatedClass = $this->tableToClassName($relatedTable);
-                $relationName = lcfirst($relatedClass);
-
-                $relations[] = [
-                    'name' => $relationName,
-                    'related' => $relatedClass,
-                    'foreignKey' => 'id',
-                    'localKey' => $name,
-                ];
+            if (!str_ends_with($name, '_id')) {
+                continue;
             }
+
+            $relatedTable = substr($name, 0, -3); // user_id → user
+            $relatedClass = $this->tableToClassName($relatedTable);
+            $relationName = lcfirst($relatedClass);
+
+            // A relation is a method on the generated class, so its name has to
+            // be one PHP will accept and one nothing else has claimed. Three
+            // ways it can fail, each of them fatal at load rather than at
+            // generation, so each is skipped rather than written:
+            //
+            //   "save_id"  → save(): Relation, which does not match the
+            //                signature of Model::save() it overrides
+            //   "class_id" → Class::class, a reserved word used as a class
+            //                reference, which is a parse error
+            //   two columns resolving to the same name → Cannot redeclare
+            //
+            // Skipping loses a convenience method; writing it loses the file.
+            $key = strtolower($relationName);
+            if (isset($taken[$key]) || !$this->isUsableClassName($relatedClass)) {
+                continue;
+            }
+
+            $taken[$key] = true;
+
+            $relations[] = [
+                'name' => $relationName,
+                'related' => $relatedClass,
+                'foreignKey' => 'id',
+                'localKey' => $name,
+            ];
         }
 
         return $relations;
+    }
+
+    /**
+     * Method names a generated relation must not take.
+     *
+     * Everything public on Model, because a relation with one of those names
+     * is an override whose signature cannot match.
+     *
+     * @return array<string, bool> Lowercased name => true.
+     */
+    private function reservedMethodNames(): array
+    {
+        $taken = [];
+
+        foreach (get_class_methods(\Simsoft\DB\Model::class) as $method) {
+            $taken[strtolower($method)] = true;
+        }
+
+        return $taken;
+    }
+
+    /**
+     * Whether a name can be written as a class reference in generated code.
+     *
+     * @param string $className The candidate class name.
+     * @return bool
+     */
+    private function isUsableClassName(string $className): bool
+    {
+        return preg_match('/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/', $className) === 1
+            && !in_array(strtolower($className), self::RESERVED_CLASS_NAMES, true);
     }
 
     /**

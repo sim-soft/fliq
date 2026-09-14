@@ -65,8 +65,8 @@ $users = User::find()
 
 | Principle         | What it means                                                                                           |
 |-------------------|---------------------------------------------------------------------------------------------------------|
-| **Fast**          | One object per query, zero-allocation fast path, prepared statement caching. Query building takes ~7μs. |
-| **Lightweight**   | ~100KB install size, zero runtime dependencies. No service containers, no config files.                 |
+| **Fast**          | Two objects per query however many conditions, prepared statement caching. Query building takes ~6μs.   |
+| **Lightweight**   | ~650KB of source, zero runtime dependencies. No service containers, no config files.                    |
 | **Independent**   | No framework coupling. Works in any PHP project — vanilla, Slim, Symfony, or your own framework.        |
 | **Query Builder** | Fluent API that compiles directly to optimized SQL. Every query shows you the actual SQL it generates.  |
 
@@ -87,12 +87,14 @@ Requires PHP 8.4+ with `ext-pdo`.
 - JOIN (inner, left, right, cross) with dot notation
 - JSON column queries with auto `->` path notation
 - Array column queries: `arrayContains()`, `arrayOverlaps()` (PostgreSQL native,
-  MySQL JSON fallback)
+  emulated over JSON on MySQL and SQLite)
 - Sub-queries, unions, aggregations (count, sum, avg, min, max)
-- Raw expressions: `selectRaw()`, `whereRaw()`, `orderByRaw()`, `havingRaw()`
+- Raw expressions: `selectRaw()`, `whereRaw()`, `orderByRaw()`, `havingRaw()`,
+  `groupByRaw()` — each taking bind values for its own placeholders
 - Date filters: `whereDate()`, `whereMonth()`, `whereYear()`, `whereTime()`
 - Multi-column conditions: `whereAny()`, `whereAll()`, `whereNone()`
-- Full-text search: `whereFulltext()` (PostgreSQL tsvector, MySQL MATCH AGAINST)
+- Full-text search: `whereFulltext()` (PostgreSQL tsvector, MySQL MATCH AGAINST,
+  SQLite FTS5), with `plain`, `phrase` and `websearch` modes on each
 - Row-level locking: `forUpdate()`, `forShare()`, `forUpdateNoWait()`,
   `forUpdateSkipLocked()`
 - Conditional clauses: `when()`, `unless()`, `scope()`, `tap()`
@@ -114,7 +116,8 @@ Requires PHP 8.4+ with `ext-pdo`.
 - hasOne, hasMany, viaTable (many-to-many)
 - Nested eager loading: `with('posts.comments.author')`
 - Constrained eager loading with callbacks
-- Relation filtering: `has()`, `doesntHave()`, `whereHas()`
+- Relation filtering: `has()`, `doesntHave()`, `whereHas()` — including
+  self-referencing and many-to-many relations, and under `alias()`
 - Write operations: `save()`, `saveMany()`, `attach()`, `detach()`, `sync()`
 
 ### Collections
@@ -150,12 +153,12 @@ Requires PHP 8.4+ with `ext-pdo`.
 
 | Metric                       | Result           |
 |------------------------------|------------------|
-| Simple SELECT build          | 6.9μs per query  |
-| Complex WHERE (5 conditions) | 9.1μs per query  |
-| Model hydration              | 0.67μs per model |
-| ActiveQuery object size      | 448 bytes        |
-| Model instance size          | 536 bytes        |
-| Install size                 | ~100KB           |
+| Simple SELECT build          | 5.6μs per query  |
+| Complex WHERE (5 conditions) | 11.4μs per query |
+| Model hydration              | 0.48μs per model |
+| ActiveQuery object size      | 640 bytes        |
+| Model instance size          | 600 bytes        |
+| Source size                  | ~650KB           |
 | Dependencies                 | 0                |
 
 See [full benchmarks](07-COMPARISON.md) for comparison with Eloquent, Doctrine,

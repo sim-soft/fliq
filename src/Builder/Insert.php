@@ -2,15 +2,17 @@
 
 namespace Simsoft\DB\Builder;
 
+use InvalidArgumentException;
 use Simsoft\DB\Connection;
 use Simsoft\DB\Grammar\Grammar;
+use Simsoft\DB\Interfaces\ReturnsRows;
 use Simsoft\DB\Traits\Ignore;
 
 /**
  * Insert Query Builder Class.
  *
  */
-class Insert extends Builder
+class Insert extends Builder implements ReturnsRows
 {
     use Ignore;
 
@@ -41,6 +43,7 @@ class Insert extends Builder
     public function returning(string $column): static
     {
         $this->returningColumn = $column;
+        $this->invalidateSQL();
         return $this;
     }
 
@@ -68,11 +71,17 @@ class Insert extends Builder
     /**
      * Check if this INSERT has a RETURNING clause.
      *
+     * Rows already captured count as well as a clause asked for, matching the
+     * other three write builders. Insert tested the request alone, so a result
+     * in hand on a builder whose request had been cleared read as "never asked"
+     * and sent getLastInsertId() to the driver's session-scoped id with the
+     * statement's own answer sitting unread beside it.
+     *
      * @return bool
      */
     public function hasReturning(): bool
     {
-        return $this->returningColumn !== null;
+        return $this->returningColumn !== null || $this->returningResult !== null;
     }
 
     /**
@@ -80,12 +89,23 @@ class Insert extends Builder
      */
     protected function buildSQL(): string
     {
+        $this->assertHasData();
+
         $grammar = Connection::grammar($this->connection);
 
         // PostgreSQL/SQLite: grammar provides full INSERT...ON CONFLICT DO NOTHING SQL
         if ($this->ignore) {
             $fullSQL = $this->buildIgnoreSQL($grammar);
             if ($fullSQL !== null) {
+                // The grammar's override ends at DO NOTHING and dropped the
+                // RETURNING clause with it, so a caller asking for one got no
+                // rows back and no indication why. The clause belongs after the
+                // conflict action, where it returns a row when the insert
+                // happened and none when it was skipped.
+                if ($this->returningColumn !== null && $grammar->supportsReturning()) {
+                    $fullSQL .= ' ' . $grammar->returningSQL($this->returningColumn);
+                }
+
                 return $this->getQualifiedSQL($fullSQL);
             }
         }
@@ -95,7 +115,7 @@ class Insert extends Builder
 
         $sql = implode(' ', array_filter([
             $insertKeyword,
-            'INTO ' . $this->quote($this->table),
+            'INTO ' . $this->quoteTable($this->table),
             $this->isBulkData() ? $this->bulkData() : $this->normalData(),
         ]));
 
@@ -108,6 +128,50 @@ class Insert extends Builder
     }
 
     /**
+     * Refuse a statement that names no columns to insert.
+     *
+     * INSERT INTO `user` () VALUES () is not a statement any engine accepts,
+     * and the shapes that produced it — no attributes at all, a list of bare
+     * values with no column names, a bulk set whose first row is empty — all
+     * come from the caller passing something other than column => value pairs.
+     * Left alone the empty array raised "Undefined array key 0" followed by a
+     * TypeError out of array_keys(), naming a line in this class rather than
+     * the argument at fault.
+     *
+     * @return void
+     * @throws InvalidArgumentException If there is nothing to insert.
+     */
+    private function assertHasData(): void
+    {
+        if ($this->attributes === []) {
+            throw new InvalidArgumentException(
+                'INSERT requires at least one column => value pair; none were given.'
+            );
+        }
+
+        if (!$this->isBulkData()) {
+            return;
+        }
+
+        foreach ($this->attributes as $index => $row) {
+            if (!is_array($row)) {
+                throw new InvalidArgumentException(sprintf(
+                    'A bulk INSERT takes an array of rows, each a column => value map; row %d is %s. '
+                    . 'To insert a single row, pass the map itself rather than a list.',
+                    $index,
+                    get_debug_type($row)
+                ));
+            }
+
+            if ($row === []) {
+                throw new InvalidArgumentException(
+                    "A bulk INSERT row must name at least one column; row $index is empty."
+                );
+            }
+        }
+    }
+
+    /**
      * Build INSERT IGNORE SQL using grammar-specific full override.
      *
      * @param Grammar $grammar The grammar instance.
@@ -115,24 +179,31 @@ class Insert extends Builder
      */
     private function buildIgnoreSQL(Grammar $grammar): ?string
     {
-        /** @var array<int, string> $columns */
-        $columns = $this->isBulkData()
-            ? array_map('strval', array_keys($this->attributes[0]))
-            : array_map('strval', array_keys($this->attributes));
-        $quotedTable = $this->quote($this->table);
+        $columns = $this->columnNames();
+        $quotedTable = $this->quoteTable($this->table);
 
         if ($this->isBulkData()) {
-            // Check if grammar supports full override before appending binds
-            $placeholders = $this->getBulkPlaceholders();
-            $fullSQL = $grammar->insertIgnoreFullSQL($quotedTable, $columns, $placeholders);
+            // Check if grammar supports full override before appending binds.
+            //
+            // The grammars wrap what they are handed in a single pair of
+            // parentheses, which is right for one row's placeholders and wrong
+            // for a bulk set that brings its own. Written as "VALUES ((?,?),
+            // (?,?))" PostgreSQL read the whole thing as one row holding two
+            // row-constructors, and refused it as having fewer expressions than
+            // target columns — so bulk insertOrIgnore never ran there at all.
+            $fullSQL = $grammar->insertIgnoreFullSQL(
+                $quotedTable,
+                $columns,
+                $this->rowPlaceholders($columns)
+            );
             if ($fullSQL === null) {
                 return null;
             }
-            $this->bulkData();
+            $this->appendBulkBinds($columns);
             return $fullSQL;
         }
 
-        $placeholders = implode(',', array_fill(0, count($this->attributes), $this->getPlaceHolder()));
+        $placeholders = '(' . implode(',', array_fill(0, count($this->attributes), $this->getPlaceHolder())) . ')';
         $fullSQL = $grammar->insertIgnoreFullSQL($quotedTable, $columns, $placeholders);
         if ($fullSQL === null) {
             return null;
@@ -143,15 +214,74 @@ class Insert extends Builder
     }
 
     /**
-     * Get bulk insert placeholders string.
+     * The column names this statement writes, taken from the first row.
      *
+     * @return array<int, string>
+     * @throws InvalidArgumentException If a later row names a column the first does not.
+     */
+    private function columnNames(): array
+    {
+        if (!$this->isBulkData()) {
+            return array_map('strval', array_keys($this->attributes));
+        }
+
+        /** @var array<string|int, mixed> $first */
+        $first = $this->attributes[0];
+        $columns = array_map('strval', array_keys($first));
+
+        foreach ($this->attributes as $index => $row) {
+            /** @var array<string|int, mixed> $row */
+            $extra = array_diff(array_map('strval', array_keys($row)), $columns);
+            if ($extra !== []) {
+                // Every row is written against the first row's columns, so a
+                // key only a later row has was dropped without a word: the
+                // statement inserted, reported success, and left the column at
+                // its default. A row short of a column is a different matter —
+                // that one is filled with null, which is a reasonable reading of
+                // an absent value — but a value the caller supplied and the
+                // database never saw is not something to infer an intent from.
+                throw new InvalidArgumentException(sprintf(
+                    'Bulk INSERT row %d names columns the first row does not: %s. '
+                    . 'Every row is inserted against the first row\'s columns, so give them all '
+                    . 'the same keys.',
+                    $index,
+                    implode(', ', $extra)
+                ));
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Placeholders for every row, each row parenthesised.
+     *
+     * @param array<int, string> $columns The columns being written.
      * @return string
      */
-    private function getBulkPlaceholders(): string
+    private function rowPlaceholders(array $columns): string
     {
-        $columns = array_keys($this->attributes[0]);
-        $rowPlaceholder = '(' . implode(',', array_fill(0, count($columns), $this->getPlaceHolder())) . ')';
-        return implode(',', array_fill(0, count($this->attributes), $rowPlaceholder));
+        $row = '(' . implode(',', array_fill(0, count($columns), $this->getPlaceHolder())) . ')';
+
+        return implode(',', array_fill(0, count($this->attributes), $row));
+    }
+
+    /**
+     * Append every row's values in the column order the statement declares.
+     *
+     * @param array<int, string> $columns The columns being written.
+     * @return void
+     */
+    private function appendBulkBinds(array $columns): void
+    {
+        foreach ($this->attributes as $row) {
+            /** @var array<string|int, mixed> $row */
+            $values = [];
+            foreach ($columns as $column) {
+                $values[] = $row[$column] ?? null;
+            }
+            $this->appendBinds($values);
+        }
     }
 
     /**
@@ -182,29 +312,20 @@ class Insert extends Builder
     /**
      * Build SQL for bulk insert.
      *
-     * Normalizes all rows to have the same columns (based on the first row).
-     * Missing keys in subsequent rows default to null.
+     * All rows are written against the first row's columns. A row missing one
+     * of them supplies null; a row naming one the first does not is refused by
+     * columnNames(), since its value would otherwise be dropped in silence.
      *
      * @return string
      */
     protected function bulkData(): string
     {
-        $columns = array_keys($this->attributes[0]);
-        $data = [];
-
-        foreach ($this->attributes as $attributes) {
-            $data[] = '(' . implode(',', array_fill(0, count($columns), $this->getPlaceHolder())) . ')';
-            // Normalize row to match column order, defaulting missing keys to null
-            $row = [];
-            foreach ($columns as $col) {
-                $row[] = $attributes[$col] ?? null;
-            }
-            $this->appendBinds($row);
-        }
+        $columns = $this->columnNames();
+        $this->appendBulkBinds($columns);
 
         return implode(' VALUES ', [
-            '(' . implode(', ', $this->getAttributes($this->attributes[0])) . ')',
-            implode(',', $data),
+            '(' . implode(', ', array_map(fn(string $col): string => $this->quoteColumn($col), $columns)) . ')',
+            $this->rowPlaceholders($columns),
         ]);
     }
 
@@ -217,7 +338,7 @@ class Insert extends Builder
     protected function getAttributes(array $attributes): array
     {
         return array_map(
-            fn($attribute) => $this->quote((string)$attribute),
+            fn($attribute) => $this->quoteColumn((string)$attribute),
             array_keys($attributes)
         );
     }

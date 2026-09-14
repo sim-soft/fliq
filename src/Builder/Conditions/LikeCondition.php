@@ -33,6 +33,13 @@ class LikeCondition extends Clause
         $operator = $this->is ? 'LIKE' : 'NOT LIKE';
 
         if (is_array($this->value)) {
+            // No patterns means nothing to match on. Returning the group anyway
+            // produced an empty `()`, which the server rejects; the caller
+            // drops an empty clause instead.
+            if ($this->value === []) {
+                return '';
+            }
+
             $conditions = [];
             foreach ($this->value as $value) {
                 $conditions[] = "$attribute $operator {$this->getPlaceHolder()}";

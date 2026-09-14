@@ -3,6 +3,7 @@
 ## Table of Contents
 - [Connection Management](#connection-management)
 - [Database Drivers](#database-drivers)
+- [Dropped Connections](#dropped-connections)
 - [Read/Write Connection Splitting](#readwrite-connection-splitting)
 - [N+1 Query Detection](#n1-query-detection)
 - [Query Logging](#query-logging)
@@ -10,6 +11,7 @@
 - [DB Facade](#using-the-db-facade)
 - [DB Facade CRUD](#db-facade-crud-operations)
 - [DB Facade Transactions](#db-facade-transactions)
+- [DB Facade SQL-Only Mode](#db-facade-sql-only-mode)
 
 ## Connection Management
 Setup database connections.
@@ -40,6 +42,58 @@ Connection::remove('replica');
 Connection::reset();
 ```
 
+### Loading connections from a file
+
+`Connection::configure()` reads a PHP file that **returns an array** mapping
+connection names to configuration arrays — the same arrays you would pass to
+`add()`:
+
+```php
+/* config/db.php */
+return [
+    'mysql' => [
+        'driver'   => 'mysqli',
+        'host'     => '127.0.0.1',
+        'database' => 'app',
+        'username' => 'root',
+        'password' => '',
+    ],
+    'replica' => [
+        'driver'   => 'mysqli',
+        'host'     => 'replica-host',
+        'database' => 'app',
+        'username' => 'readonly',
+        'password' => '',
+    ],
+];
+```
+
+```php
+Connection::configure('config/db.php');
+```
+
+`configure()` **adds to** whatever is already registered rather than replacing
+it, so you can combine it with `add()` and call it more than once. A later entry
+under an existing name overwrites that name.
+
+It never throws. Anything wrong with the file is reported with
+`trigger_error(..., E_USER_WARNING)` and the connections it could not read are
+simply absent, so the failure surfaces at the first `Connection::get()`. Make
+sure your error handler is not discarding warnings during bootstrap, or you will
+see the second failure without the first. Warnings are raised when:
+
+| Situation | Result |
+|-----------|--------|
+| File does not exist, or the path is a directory | Nothing registered |
+| File throws, or has a parse error | Nothing registered |
+| File returns something other than an array | Nothing registered |
+| An individual entry is not an array | **That entry** skipped, the rest still registered |
+
+That last row is the important one: one malformed entry does not cost you the
+connections declared after it. Each bad entry is named in its own warning.
+
+An empty array is legitimate and registers nothing without complaint.
+
 ## Database Drivers
 
 | Driver      | Config `driver` value | Extension required |
@@ -68,11 +122,19 @@ Connection::add('mysql', [
     'charset' => 'utf8mb4',     // default: utf8mb4
     'persistent' => false,      // default: false (reuse TCP across requests)
     'timeout' => 5,             // default: 5 (connection timeout in seconds)
+    'ping_idle_seconds' => 30,  // default: 30 (see "Dropped connections" below)
     'init_command' => [         // SQL commands to run after connecting
         "SET time_zone = '+08:00'",
     ],
 ]);
 ```
+
+Every entry in `init_command` runs, in order, on each new connection — including
+the one opened by an automatic reconnect, which is the point of putting session
+settings here rather than issuing them once after connecting. Each must be a
+single complete statement; a command the server rejects fails the connection,
+since a session silently missing the settings you asked for is the worse
+outcome.
 
 Pass `MYSQLI_OPT_*` constants via `options` for driver-level tuning:
 
@@ -107,6 +169,8 @@ Connection::add('pgsql', [
     'schema' => 'public',       // default: public
     'persistent' => false,      // default: false
     'timeout' => 5,             // default: 5
+    'statement_cache' => true,      // default: true
+    'statement_cache_size' => 100,  // default: 100
 ]);
 ```
 
@@ -132,6 +196,8 @@ Connection::add('pgsql', [
 Connection::add('sqlite', [
     'driver' => 'sqlite',
     'database' => __DIR__ . '/database.db',
+    'statement_cache' => true,      // default: true
+    'statement_cache_size' => 100,  // default: 100
 ]);
 
 // In-memory (useful for testing)
@@ -155,7 +221,8 @@ Connection::add('sqlite', [
 
 ### MySQL via PDO
 
-Only use this if you need PDO-specific features (e.g., statement caching):
+Only use this if you need PDO-specific features (e.g. statement caching, which
+`mysqli` does not do — see [Statement Cache](#statement-cache) below):
 
 ```php
 Connection::add('mysql', [
@@ -196,23 +263,33 @@ PDO defaults (applied automatically, user options override):
 
 | Option                         | Default                  | Description                    |
 |--------------------------------|--------------------------|--------------------------------|
-| `PDO::ATTR_ERRMODE`            | `PDO::ERRMODE_EXCEPTION` | Throw exceptions on errors     |
+| `PDO::ATTR_ERRMODE`            | `PDO::ERRMODE_EXCEPTION` | Fixed — see below              |
 | `PDO::ATTR_DEFAULT_FETCH_MODE` | `PDO::FETCH_ASSOC`       | Return associative arrays      |
 | `PDO::ATTR_EMULATE_PREPARES`   | `false`                  | Use real prepared statements   |
 | `PDO::ATTR_STRINGIFY_FETCHES`  | `false`                  | Keep native PHP types          |
 | `PDO::ATTR_TIMEOUT`            | `5`                      | Connection timeout (seconds)   |
 | `PDO::ATTR_PERSISTENT`         | `false`                  | Set via `'persistent' => true` |
 
-**Statement Cache (PDO only):**
+`PDO::ATTR_ERRMODE` is the one default `options` cannot change. Setting it to
+`PDO::ERRMODE_SILENT` or `PDO::ERRMODE_WARNING` does not make FLIQ quieter — it
+makes it unable to report anything. The drivers are written for the exception
+form throughout, so under `ERRMODE_SILENT` a failing `prepare()` returns `false`
+and you get `TypeError: prepareStatement(): Return value must be of type
+PDOStatement, false returned` instead of the database error that caused it. The
+value is pinned to `PDO::ERRMODE_EXCEPTION`; every other option you pass applies
+as written. To handle failures rather than see them, catch `QueryException`.
 
-The PDO driver caches prepared statements to avoid repeated `prepare()` calls.
-Enabled by default via `statement_cache` and `statement_cache_size` in the
-config above.
+### Statement Cache
 
-Runtime control:
+The PDO-backed drivers — `pdo_mysql`, `pgsql` and `sqlite` — cache prepared
+statements to avoid repeated `prepare()` calls. Enabled by default, and
+configured with `statement_cache` and `statement_cache_size` in the config
+above. `mysqli` prepares nothing and so caches nothing.
+
+Runtime control, on a connection you know is one of those three:
 
 ```php
-$driver = Connection::get('mysql');
+$driver = Connection::get('pgsql');
 
 $driver->disableStatementCache();      // disable + clear cache
 $driver->enableStatementCache();       // re-enable
@@ -221,24 +298,90 @@ $driver->setStatementCacheSize(50);    // change max size
 $driver->isStatementCacheEnabled();    // check status
 ```
 
-Disable when running many unique one-off queries (migrations, bulk imports) to
-avoid filling memory.
-
-**Statement Cache** — the PDO driver caches prepared statements to avoid
-repeated `prepare()` calls. Enabled by default.
+All five are declared by `Simsoft\DB\Interfaces\CachesStatements`, so a driver
+offers the whole set or is not a caching driver at all. Where the driver comes
+from configuration and might be `mysqli`, ask before calling — the methods do
+not exist on it:
 
 ```php
+use Simsoft\DB\Interfaces\CachesStatements;
+
 $driver = Connection::get('mysql');
 
-$driver->disableStatementCache();      // disable + clear cache
-$driver->enableStatementCache();       // re-enable
-$driver->clearStatementCache();        // flush without disabling
-$driver->setStatementCacheSize(50);    // change max size
-$driver->isStatementCacheEnabled();    // check status
+if ($driver instanceof CachesStatements) {
+    $driver->disableStatementCache();
+}
 ```
 
 Disable caching when running many unique one-off queries (e.g., migrations, bulk
 imports) to avoid filling memory.
+
+Eviction is by insertion order: at `statement_cache_size` the oldest entry is
+dropped, not the least recently used.
+
+## Dropped Connections
+
+Database servers close idle connections — MySQL's `wait_timeout` defaults to
+eight hours, and load balancers are usually far less patient. A long-running
+worker or daemon will therefore find its connection gone at some point. All four
+drivers recover from this automatically, in three ways:
+
+**When a statement fails.** If a query fails with an error that names a lost
+connection, the driver reconnects and runs it once more. Errors that are not
+connection losses are re-thrown untouched and never retried, so a constraint
+violation or a syntax error behaves exactly as it always did.
+
+**When a connection has been idle.** Before using a connection that has sat
+unused for `ping_idle_seconds` (default 30), the driver checks it is still alive
+and reconnects if not. A connection used more recently than that is not
+re-checked — the check costs a full round trip, which for small queries was the
+larger part of their cost.
+
+```php
+Connection::add('mysql', [
+    // ...
+    'ping_idle_seconds' => 30,   // default
+    'ping_idle_seconds' => 0,    // check before every query
+]);
+```
+
+Lower the window if your network drops connections aggressively. Raise it if
+your queries are small and frequent. Recovery does not depend on it — the
+statement-level retry covers a connection that dies inside the window.
+
+**When a transaction opens.** `transaction()` checks the connection before
+opening the block, regardless of `ping_idle_seconds`. Neither of the other two
+routes can help here: reconnecting is only allowed while no transaction is open,
+so a drop discovered by the first statement *inside* the block is discovered too
+late to recover from. The check costs one round trip per outermost transaction,
+against a block whose statements each pay one anyway. Nested calls, which become
+savepoints, do not re-check.
+
+### Inside a transaction
+
+A connection lost mid-transaction throws `ConnectionException` and is **not**
+retried. Reconnecting would start a fresh transaction, so retrying the failed
+statement would commit it on its own and leave the earlier statements behind — a
+partial write, which is precisely what the transaction was there to prevent.
+
+```php
+try {
+    $driver->transaction(function () {
+        // ...
+    });
+} catch (ConnectionException $e) {
+    // Nothing was written. Safe to retry the whole block.
+}
+```
+
+The server discards an interrupted transaction, so nothing is committed and the
+whole block can be retried.
+
+### In-memory SQLite
+
+An in-memory SQLite database exists only inside its connection. If that
+connection is lost the data is gone, so rather than silently reconnecting to an
+empty database, the driver throws `ConnectionException`.
 
 ## Read/Write Connection Splitting
 
@@ -291,17 +434,22 @@ QueryMonitor::enable(threshold: 5);
 // Your code runs...
 $users = User::find()->get();
 foreach ($users as $user) {
-    echo $user->posts; // N+1! Will trigger a warning after 5 iterations
+    foreach ($user->posts as $post) {  // N+1! One query per user
+        echo $post->title;
+    }
 }
 
 // Check detected patterns
 $patterns = QueryMonitor::getDetectedPatterns();
-/* ['SELECT ... FROM `posts` WHERE `user_id` = ?' => ['count' => 50, 'origin' => 'app/Controller.php:42']] */
+/* ['SELECT `post`.* FROM `post` WHERE `post`.`user_id` = ?' => ['count' => 50, 'origin' => '/app/Controller.php:42']] */
 
 // Custom handler instead of trigger_error
 QueryMonitor::setHandler(function (string $pattern, int $count, string $origin) {
     logger()->warning("N+1 detected: $pattern ($count queries) from $origin");
 });
+
+// Restore the default trigger_error behaviour
+QueryMonitor::clearHandler();
 
 // Disable when done
 QueryMonitor::disable();
@@ -309,6 +457,20 @@ QueryMonitor::disable();
 /* Reset counters */
 QueryMonitor::reset();
 ```
+
+`origin` is the first frame outside the library — the line in your own code that
+issued the query, which is the line to fix. Counting stops mattering once the
+relation is eager loaded: `User::find()->with('posts')->get()` issues two
+queries regardless of how many users come back, and the monitor reports nothing.
+
+`disable()` and `reset()` leave a handler installed. Call `clearHandler()` when
+the block that registered it is done, or it keeps receiving queries for the rest
+of the process.
+
+A handler that throws does not stop the query it was reporting on — see
+[A handler that fails](#a-handler-that-fails) below, which applies to both
+observers.
+
 ### Query Logging
 
 ```php
@@ -317,9 +479,14 @@ use Simsoft\DB\QueryLogger;
 // Enable logging
 QueryLogger::enable();
 
-// Run queries...
-$users = User::find()->where('status', 1)->get();
-$posts = Post::find()->where('published', true)->get();
+// Run queries. get() returns a lazy Collection, so nothing is logged until
+// the results are actually consumed.
+foreach (User::find()->where('status', 1)->get() as $user) {
+    // ...
+}
+foreach (Post::find()->where('published', true)->get() as $post) {
+    // ...
+}
 
 // Get all logged queries with timing
 $queries = QueryLogger::getQueries();
@@ -342,10 +509,62 @@ QueryLogger::setHandler(function (string $sql, ?array $binds, float $timeMs) {
     file_put_contents('queries.log', "$timeMs ms: $sql\n", FILE_APPEND);
 });
 
+// Stop sending queries to the handler
+QueryLogger::clearHandler();
+
 // Reset
 QueryLogger::reset();
 QueryLogger::disable();
 ```
+
+As with the monitor, neither `disable()` nor `reset()` removes the handler —
+`clearHandler()` does.
+
+#### A handler that fails
+
+The handler above writes to a file, which is a thing that can fail: a full disk,
+a rotated-away directory, a dead APM socket. Whatever it throws is caught and
+reported as an `E_USER_WARNING` naming the exception, and the query is left
+alone.
+
+```php
+QueryLogger::setHandler(function (string $sql, ?array $binds, float $timeMs) {
+    throw new RuntimeException('log sink is gone');
+});
+
+$user = User::find()->where('id', 1)->first();  // still returns the row
+// Warning: QueryLogger handler threw RuntimeException: log sink is gone.
+//          The query itself was unaffected.
+```
+
+This matters more than it sounds. Both observers are called from inside the
+execution path, so before this was guarded a throwing handler surfaced as a
+`QueryException` naming your SQL — a write reported failure *after* the row was
+committed, and a caller that retried wrote it twice. `QueryMonitor`'s handler
+runs before the statement reaches the driver, so a failure there stopped the
+query outright.
+
+The warning is not suppressible from here on purpose: a handler that silently
+never runs looks exactly like one that runs and finds nothing. Handle the error
+inside your own handler if you would rather it stayed quiet.
+
+#### Retention
+
+The log keeps the most recent 1000 queries and discards older ones. Without a
+cap, a long-running process — a queue worker, a daemon, a batch import — retains
+the SQL and bind values of every query it has ever run, and eventually runs out
+of memory.
+
+```php
+QueryLogger::setLimit(100);   // keep the last 100
+QueryLogger::setLimit(0);     // unlimited (only for short-lived scripts)
+
+QueryLogger::getDroppedCount();  // how many were discarded
+```
+
+Discarding entries does not distort the summary: `getQueryCount()` and
+`getTotalTime()` describe every query that ran, not just the retained ones. Only
+`getQueries()` and `getSlowestQuery()` are limited to what is still held.
 # Raw Query
 Interact with the database using raw queries.
 
@@ -429,6 +648,11 @@ $rows = DB::query('SELECT * FROM logs', [], 'pgsql');
 $users = DB::table('users')
     ->where('status', 1)
     ->get();
+
+// A model works too, and takes the same optional connection argument.
+// Without one, the model keeps its own connection.
+$users = DB::table(new User())->where('status', 1)->get();
+$users = DB::table(new User(), 'reporting')->get();
 ```
 
 ## DB Facade CRUD Operations
@@ -495,3 +719,55 @@ DB::transaction('mysql', function () {
 `User::transaction(fn() => ...)` instead — it automatically uses the model's
 > connection.
 > See [Transactions in Active Record](03-ACTIVE-RECORD.md#transactions).
+
+The exception a callback throws is wrapped in a `QueryException`, but it is kept
+as the previous exception, so the original cause is still reachable:
+
+```php
+try {
+    DB::transaction('mysql', fn() => throw new RuntimeException('out of stock'));
+} catch (QueryException $e) {
+    $e->getMessage();          // 'out of stock'
+    $e->getPrevious();         // the original RuntimeException
+}
+```
+
+## DB Facade SQL-Only Mode
+
+`DB::sqlOnly()` makes the write methods return their builder instead of
+executing it — useful for inspecting or logging the SQL a call would produce:
+
+```php
+DB::sqlOnly();
+
+$builder = DB::insert('users', ['name' => 'John']);
+$builder->getSQL();      // 'INSERT INTO `users` (`name`) VALUES (?)'
+$builder->getBinds();    // ['John']
+
+DB::disableSqlOnly();    // back to executing
+```
+
+Reading the SQL does not finalise the builder. You can keep configuring it
+afterwards and the statement is rebuilt, so what executes is what the last read
+showed:
+
+```php
+$builder = DB::update('user', ['status_code' => 4], 'id = 3');
+$builder->getSQL();                  // inspect
+$builder->returning('id');           // still takes effect
+$builder->withConnection('pg')->execute();
+```
+
+`getSQL()` and `getBinds()` agree with each other in either order.
+
+Three things to know before using it:
+
+- **It is global and it stays on.** The flag is static, so it applies to every
+  `DB::` call anywhere in the process until `DB::disableSqlOnly()` is called.
+  Turn it off in a `finally` block if the code in between might throw.
+- **`raw()` and `query()` ignore it.** They do not go through the builder, so
+  they execute even in SQL-only mode. Only `insert()`, `insertOrIgnore()`, the
+  `update*()` family, the `delete*()` family and `upsert()` are affected.
+- **Clauses are not builders.** `CaseExpression` and the other
+  `Builder\Clauses` types collect their binds as they render, so for those you
+  still read `getBinds()` *after* casting to a string.

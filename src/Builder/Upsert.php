@@ -2,8 +2,10 @@
 
 namespace Simsoft\DB\Builder;
 
+use InvalidArgumentException;
 use Simsoft\DB\Connection;
 use Simsoft\DB\Grammar\Grammar;
+use Simsoft\DB\Interfaces\ReturnsRows;
 
 /**
  * Upsert Query Builder Class.
@@ -11,8 +13,20 @@ use Simsoft\DB\Grammar\Grammar;
  * Generates INSERT ... ON DUPLICATE KEY UPDATE / ON CONFLICT SQL statements.
  * Uses the Grammar interface for database-specific syntax.
  */
-class Upsert extends Builder
+class Upsert extends Builder implements ReturnsRows
 {
+    /**
+     * @var array<int, string>|null Columns to return via RETURNING clause,
+     *                              null when no clause was asked for.
+     *
+     * An empty array is a request — returning() with no arguments means
+     * RETURNING *, which is why it cannot double as the "never asked" marker.
+     */
+    protected ?array $returningColumns = null;
+
+    /** @var array<int, array<string, mixed>>|null Rows returned by RETURNING clause */
+    protected ?array $returningResult = null;
+
     /**
      * Constructor.
      *
@@ -31,96 +45,188 @@ class Upsert extends Builder
     }
 
     /**
+     * Add a RETURNING clause to the upsert.
+     *
+     * Supported by PostgreSQL and SQLite 3.35+; MySQL has no RETURNING and the
+     * grammar omits the clause there, where it is not needed — MySQL's
+     * LAST_INSERT_ID() is per-statement and already reports nothing for an
+     * upsert that wrote no new row.
+     *
+     * On the two engines that do support it this is the only way to learn what
+     * the statement did. Their lastInsertId() is session-scoped, so an upsert
+     * that took the conflict branch still answered with an id: the sequence
+     * number the failed attempt consumed on PostgreSQL, the previous
+     * statement's id on SQLite. Neither names a row this statement wrote.
+     *
+     * @param string ...$columns The columns to return. Empty = RETURNING *.
+     * @return static
+     */
+    public function returning(string ...$columns): static
+    {
+        $this->returningColumns = array_values($columns);
+        $this->invalidateSQL();
+        return $this;
+    }
+
+    /**
+     * Check if this upsert has a RETURNING clause.
+     *
+     * @return bool
+     */
+    public function hasReturning(): bool
+    {
+        return $this->returningColumns !== null || $this->returningResult !== null;
+    }
+
+    /**
+     * Get the result from a RETURNING clause execution.
+     *
+     * @return array<int, array<string, mixed>>|null
+     */
+    public function getReturningResult(): ?array
+    {
+        return $this->returningResult;
+    }
+
+    /**
+     * Set the RETURNING result after execution.
+     *
+     * @param array<int, array<string, mixed>> $result The returned rows.
+     * @return void
+     */
+    public function setReturningResult(array $result): void
+    {
+        $this->returningResult = $result;
+    }
+
+    /**
      * {@inheritdoc}
      */
     protected function buildSQL(): string
     {
         $grammar = Connection::grammar($this->connection);
+
+        // INSERT INTO t () VALUES () is not a statement any engine accepts. On
+        // MySQL it reached the server and was rejected there; on the engines
+        // that need a conflict target, $columns[0] was read off an empty array
+        // and raised "Undefined array key 0" followed by a TypeError naming a
+        // line in the grammar. Insert refuses the same shape for the same
+        // reason.
+        if ($this->attributes === []) {
+            throw new InvalidArgumentException(
+                'UPSERT requires at least one column => value pair; none were given.'
+            );
+        }
+
         $columns = array_keys($this->attributes);
         $placeholders = implode(', ', array_fill(0, count($columns), '?'));
 
+        // Every name here is interpolated into the statement and none can be
+        // bound, so each is checked before it is quoted: the grammars double an
+        // embedded quote rather than reject it, which left a column name
+        // carrying its own punctuation usable as SQL.
+        $this->assertIdentifiers($columns);
+        $this->assertIdentifiers($this->conflictColumns);
+
         $this->appendBinds(array_values($this->attributes));
 
-        if ($grammar->getDriverName() === 'mysql') {
-            return $this->buildMySQLUpsert($grammar, $columns, $placeholders);
+        $sql = 'INSERT INTO ' . $this->quoteTable($this->table)
+            . ' (' . implode(', ', array_map(
+                fn(string $col): string => $grammar->quoteIdentifier($col),
+                $columns
+            )) . ')'
+            . " VALUES ($placeholders)";
+
+        // One path for every engine. There used to be two — a MySQL branch here
+        // and a call to the grammar for everything else — and only the MySQL
+        // one understood an explicit update value, so ['v' => 'x'] wrote 'x' on
+        // MySQL and the inserted value on PostgreSQL and SQLite. The assignments
+        // are the part that does not vary by engine; only the wrapper does.
+        $sql .= $grammar->onConflictSQL(
+            $this->buildAssignments($grammar, $columns),
+            $this->resolveConflictColumns($grammar, $columns)
+        );
+
+        // After the conflict action, where the clause returns a row when this
+        // statement wrote one and none when it took the conflict branch without
+        // writing. Tested against null, not emptiness, for the reason Update
+        // gives at the same point: returning() with no arguments asks for
+        // RETURNING * and leaves an empty array behind.
+        if ($this->returningColumns !== null && $grammar->supportsReturning()) {
+            $sql .= ' ' . $grammar->returningColumnsSQL($this->returningColumns);
         }
 
-        // PostgreSQL / SQLite: use Grammar's upsertSQL with conflict columns
-        $updateCols = $this->resolveUpdateColumns($columns);
-        $quotedTable = $grammar->quoteIdentifier($this->table);
-
-        return $grammar->upsertSQL($quotedTable, $columns, $updateCols, $placeholders, $this->conflictColumns);
+        return $sql;
     }
 
     /**
-     * Resolve which columns should be updated on conflict.
+     * The `col = expr` clauses that follow the conflict keyword.
      *
+     * A numeric entry names a column that takes the value the INSERT carried; a
+     * string key names one that takes the value given beside it, which is bound
+     * rather than interpolated.
+     *
+     * @param Grammar $grammar The connection's grammar.
      * @param array<int, string> $columns All insert columns.
      * @return array<int, string>
      */
-    private function resolveUpdateColumns(array $columns): array
+    private function buildAssignments(Grammar $grammar, array $columns): array
     {
         if (empty($this->updateColumns)) {
-            return $columns;
+            return array_map(
+                fn(string $col): string => $this->quoteColumn($col) . ' = ' . $grammar->excludedColumnSQL($col),
+                $columns
+            );
         }
 
-        $updateCols = [];
-        foreach ($this->updateColumns as $col => $value) {
-            $updateCols[] = is_int($col) ? (string)$value : $col;
-        }
+        $assignments = [];
 
-        return $updateCols;
-    }
-
-    /**
-     * Build MySQL-specific upsert with support for explicit update values.
-     *
-     * @param Grammar $grammar The grammar instance.
-     * @param array<int, string> $columns The insert columns.
-     * @param string $placeholders The VALUES placeholders.
-     * @return string
-     */
-    private function buildMySQLUpsert(Grammar $grammar, array $columns, string $placeholders): string
-    {
-        $quotedColumns = array_map(fn($col) => $grammar->quoteIdentifier($col), $columns);
-
-        $sql = "INSERT INTO " . $grammar->quoteIdentifier($this->table) . " ("
-            . implode(', ', $quotedColumns)
-            . ") VALUES ($placeholders)";
-
-        $updates = $this->buildMySQLUpdateClauses($grammar, $columns);
-
-        return $sql . ' ON DUPLICATE KEY UPDATE ' . implode(', ', $updates);
-    }
-
-    /**
-     * Build the SET clauses for MySQL ON DUPLICATE KEY UPDATE.
-     *
-     * @param Grammar $grammar The grammar instance.
-     * @param array<int, string> $columns All insert columns.
-     * @return array<int, string>
-     */
-    private function buildMySQLUpdateClauses(Grammar $grammar, array $columns): array
-    {
-        if (empty($this->updateColumns)) {
-            return array_map(function (string $col) use ($grammar): string {
-                $quoted = $grammar->quoteIdentifier($col);
-                return "$quoted = VALUES($quoted)";
-            }, $columns);
-        }
-
-        $updates = [];
         foreach ($this->updateColumns as $col => $value) {
             if (is_int($col)) {
-                $quoted = $grammar->quoteIdentifier($value);
-                $updates[] = "$quoted = VALUES($quoted)";
+                $name = (string)$value;
+                $assignments[] = $this->quoteColumn($name) . ' = ' . $grammar->excludedColumnSQL($name);
                 continue;
             }
-            $quoted = $grammar->quoteIdentifier($col);
-            $updates[] = "$quoted = ?";
+
+            $assignments[] = $this->quoteColumn($col) . ' = ?';
             $this->appendBinds($value);
         }
 
-        return $updates;
+        return $assignments;
     }
+
+    /**
+     * Which columns the conflict is detected on.
+     *
+     * @param Grammar $grammar The connection's grammar.
+     * @param array<int, string> $columns All insert columns.
+     * @return array<int, string>
+     */
+    private function resolveConflictColumns(Grammar $grammar, array $columns): array
+    {
+        if ($this->conflictColumns !== [] || !$grammar->requiresConflictTarget()) {
+            return $this->conflictColumns;
+        }
+
+        // PostgreSQL and SQLite reject a target that is not backed by a unique
+        // constraint, and the first inserted column usually is not one. Falling
+        // back to it produced a statement the engine refused outright, which is
+        // still better than guessing a target that happens to parse and then
+        // updating on the wrong key.
+        return [$columns[0]];
+    }
+
+    /**
+     * Validate a set of column names.
+     *
+     * @param array<int, string> $columns The column names to check.
+     * @return void
+     */
+    private function assertIdentifiers(array $columns): void
+    {
+        foreach ($columns as $column) {
+            $this->quoteColumn($column);
+        }
+    }
+
 }

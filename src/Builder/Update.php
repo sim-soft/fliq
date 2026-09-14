@@ -3,6 +3,7 @@
 namespace Simsoft\DB\Builder;
 
 use Simsoft\DB\Connection;
+use Simsoft\DB\Interfaces\ReturnsRows;
 use Simsoft\DB\Traits\Condition;
 use Simsoft\DB\Traits\Ignore;
 use Simsoft\DB\Traits\LowPriority;
@@ -10,15 +11,35 @@ use Simsoft\DB\Traits\LowPriority;
 /**
  * Update Query Builder Class
  */
-class Update extends Builder
+class Update extends Builder implements ReturnsRows
 {
     use LowPriority, Ignore, Condition;
 
-    /** @var array<int, string> */
-    protected array $set = [];
+    /**
+     * @var array<int, array{string, int|float}> Counter assignments, applied at build time.
+     *
+     * These used to be rendered and bound the moment setCounter() was called.
+     * Two things followed from that. The column was quoted for whichever
+     * grammar was current then, and Model::updateCounter() calls setCounter()
+     * before withConnection() — so on PostgreSQL the statement was built with
+     * MySQL backticks and the server rejected it outright. And the value was
+     * bound ahead of the attribute values, though the assignment it belongs to
+     * is emitted after them, so update(['name' => 'x']) combined with a counter
+     * sent the two values in the wrong order and wrote each into the other's
+     * column. Both go away once the rendering happens in the same pass, and in
+     * the same order, as everything else.
+     */
+    protected array $counters = [];
 
-    /** @var array<int, string> Columns to return via RETURNING clause */
-    protected array $returningColumns = [];
+    /**
+     * @var array<int, string>|null Columns to return via RETURNING clause,
+     *                              null when no clause was asked for.
+     *
+     * An empty array is a request — returning() with no arguments means
+     * RETURNING *, which is why it cannot double as the "never asked" marker
+     * the way it used to.
+     */
+    protected ?array $returningColumns = null;
 
     /** @var array<int, array<string, mixed>>|null Rows returned by RETURNING clause */
     protected ?array $returningResult = null;
@@ -53,6 +74,7 @@ class Update extends Builder
     public function returning(string ...$columns): static
     {
         $this->returningColumns = array_values($columns);
+        $this->invalidateSQL();
         return $this;
     }
 
@@ -63,7 +85,7 @@ class Update extends Builder
      */
     public function hasReturning(): bool
     {
-        return !empty($this->returningColumns) || $this->returningResult !== null;
+        return $this->returningColumns !== null || $this->returningResult !== null;
     }
 
     /**
@@ -96,19 +118,43 @@ class Update extends Builder
      */
     public function setCounter(string $attribute, int|float $value): static
     {
-        $quoted = $this->quote($attribute);
+        // Validated here rather than only at build time so an invalid column
+        // name is refused by the call that named it, which is where the caller
+        // can see it. The quoted form is discarded: it belongs to whichever
+        // grammar is current now, and the build quotes it again for whichever
+        // grammar is current then.
+        $this->quoteColumn($attribute);
 
-        if ($value == 0) {
-            $this->set[] = "$quoted = {$this->getPlaceHolder()}";
-            $this->appendBinds($value);
-            return $this;
-        }
-
-        $operator = $value > 0 ? '+' : '-';
-        $this->set[] = "$quoted = $quoted $operator {$this->getPlaceHolder()}";
-        $this->appendBinds(abs($value));
+        $this->counters[] = [$attribute, $value];
+        $this->invalidateSQL();
 
         return $this;
+    }
+
+    /**
+     * Render the counter assignments, binding their values in place.
+     *
+     * @return array<int, string>
+     */
+    private function buildCounterSQL(): array
+    {
+        $sets = [];
+
+        foreach ($this->counters as [$attribute, $value]) {
+            $quoted = $this->quoteColumn($attribute);
+
+            if ($value == 0) {
+                $sets[] = "$quoted = {$this->getPlaceHolder()}";
+                $this->appendBinds($value);
+                continue;
+            }
+
+            $operator = $value > 0 ? '+' : '-';
+            $sets[] = "$quoted = $quoted $operator {$this->getPlaceHolder()}";
+            $this->appendBinds(abs($value));
+        }
+
+        return $sets;
     }
 
     /**
@@ -118,23 +164,29 @@ class Update extends Builder
     {
         $data = [];
         foreach ($this->attributes as $attribute => $value) {
-            $data[] = $this->quote($attribute) . " = {$this->getPlaceHolder()}";
+            $data[] = $this->quoteColumn($attribute) . " = {$this->getPlaceHolder()}";
             $this->appendBinds($value);
         }
 
-        $sets = array_merge($data, $this->set);
+        // Appended after the attribute assignments because that is the order
+        // they are emitted in, and the binds have to arrive in the order their
+        // placeholders do.
+        $sets = array_merge($data, $this->buildCounterSQL());
 
         $sql = implode(' ', array_filter([
             'UPDATE',
             $this->lowPriorityModifier(),
             $this->ignoreModifier(),
-            $this->quote($this->table),
+            $this->quoteTable($this->table),
             'SET ' . ($sets ? implode(', ', $sets) : '1 = 1'),
             $this->getCondition(),
         ]));
 
-        // Append RETURNING clause if columns specified
-        if (!empty($this->returningColumns)) {
+        // Append RETURNING clause if one was asked for. Tested against null, not
+        // emptiness: returning() with no arguments asks for RETURNING * and
+        // leaves an empty array behind, which an empty() test read as no request
+        // at all and dropped on the floor.
+        if ($this->returningColumns !== null) {
             $grammar = Connection::grammar($this->connection);
             if ($grammar->supportsReturning()) {
                 $sql .= ' ' . $grammar->returningColumnsSQL($this->returningColumns);
