@@ -9,7 +9,10 @@ namespace Simsoft\DB\Grammar;
  */
 class MySQLGrammar implements Grammar
 {
-    use EscapesStringLiteral, ExplainFormat, FulltextMode, JsonKeyPath;
+    use EscapesStringLiteral;
+    use ExplainFormat;
+    use FulltextMode;
+    use JsonKeyPath;
 
     /** @var array<int, string> Plan formats MySQL accepts after FORMAT=. */
     private const EXPLAIN_FORMATS = ['text', 'traditional', 'json', 'tree'];

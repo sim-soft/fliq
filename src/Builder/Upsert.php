@@ -40,8 +40,7 @@ class Upsert extends Builder implements ReturnsRows
         protected array $attributes,
         protected array $updateColumns = [],
         protected array $conflictColumns = []
-    )
-    {
+    ) {
     }
 
     /**
@@ -228,5 +227,4 @@ class Upsert extends Builder implements ReturnsRows
             $this->quoteColumn($column);
         }
     }
-
 }

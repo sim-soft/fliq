@@ -29,14 +29,13 @@ trait Likeable
      * @return static
      */
     public function like(
-        string       $attribute,
+        string $attribute,
         string|array $value,
-        bool         $is = true,
-        bool         $matchAll = true,
-        string       $logicalOperator = 'AND',
-        bool         $caseSensitive = true
-    ): static
-    {
+        bool $is = true,
+        bool $matchAll = true,
+        string $logicalOperator = 'AND',
+        bool $caseSensitive = true
+    ): static {
         // No patterns means nothing to match on. Building the compound form
         // anyway produced an empty group — `WHERE ()` alone, or a dangling
         // `AND ()` beside another condition — which the server rejects, so an

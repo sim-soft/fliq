@@ -13,7 +13,9 @@ use Simsoft\DB\Traits\LowPriority;
  */
 class Update extends Builder implements ReturnsRows
 {
-    use LowPriority, Ignore, Condition;
+    use LowPriority;
+    use Ignore;
+    use Condition;
 
     /**
      * @var array<int, array{string, int|float}> Counter assignments, applied at build time.
@@ -55,8 +57,7 @@ class Update extends Builder implements ReturnsRows
         protected string $table,
         protected array $attributes = [],
         string|ActiveQuery|Raw|null $condition = null
-    )
-    {
+    ) {
         if ($condition instanceof ActiveQuery) {
             $this->setPlaceHolder($condition->getPlaceHolder());
         }

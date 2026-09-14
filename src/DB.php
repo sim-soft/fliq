@@ -76,10 +76,9 @@ class DB
      */
     public static function insert(
         string|Model $table,
-        array        $attributes,
-        ?string      $connection = null
-    ): Executable|bool
-    {
+        array $attributes,
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = new Insert($tableName, $attributes);
 
@@ -96,10 +95,9 @@ class DB
      */
     public static function insertOrIgnore(
         string|Model $table,
-        array        $attributes,
-        ?string      $connection = null
-    ): Executable|bool
-    {
+        array $attributes,
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = (new Insert($tableName, $attributes))->ignore();
 
@@ -116,12 +114,11 @@ class DB
      * @return Executable|bool
      */
     public static function update(
-        string|Model           $table,
-        array                  $attributes,
+        string|Model $table,
+        array $attributes,
         string|ActiveQuery|Raw $condition,
-        ?string                $connection = null
-    ): Executable|bool
-    {
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = new Update($tableName, $attributes, $condition);
 
@@ -138,12 +135,11 @@ class DB
      * @return Executable|bool
      */
     public static function updateIgnore(
-        string|Model           $table,
-        array                  $attributes,
+        string|Model $table,
+        array $attributes,
         string|ActiveQuery|Raw $condition,
-        ?string                $connection = null
-    ): Executable|bool
-    {
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = (new Update($tableName, $attributes, $condition))->ignore();
 
@@ -160,12 +156,11 @@ class DB
      * @return Executable|bool
      */
     public static function updateLowPriorityIgnore(
-        string|Model           $table,
-        array                  $attributes,
+        string|Model $table,
+        array $attributes,
         string|ActiveQuery|Raw $condition,
-        ?string                $connection = null
-    ): Executable|bool
-    {
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = (new Update($tableName, $attributes, $condition))->lowPriority()->ignore();
 
@@ -181,11 +176,10 @@ class DB
      * @return Executable|bool
      */
     public static function delete(
-        string|Model           $table,
+        string|Model $table,
         string|ActiveQuery|Raw $condition,
-        ?string                $connection = null
-    ): Executable|bool
-    {
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = new Delete($tableName, $condition);
 
@@ -201,11 +195,10 @@ class DB
      * @return Executable|bool
      */
     public static function deleteIgnore(
-        string|Model           $table,
+        string|Model $table,
         string|ActiveQuery|Raw $condition,
-        ?string                $connection = null
-    ): Executable|bool
-    {
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = (new Delete($tableName, $condition))->ignore();
 
@@ -221,11 +214,10 @@ class DB
      * @return Executable|bool
      */
     public static function deleteQuick(
-        string|Model           $table,
+        string|Model $table,
         string|ActiveQuery|Raw $condition,
-        ?string                $connection = null
-    ): Executable|bool
-    {
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = (new Delete($tableName, $condition))->quick();
 
@@ -241,11 +233,10 @@ class DB
      * @return Executable|bool
      */
     public static function deleteQuickIgnore(
-        string|Model           $table,
+        string|Model $table,
         string|ActiveQuery|Raw $condition,
-        ?string                $connection = null
-    ): Executable|bool
-    {
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = (new Delete($tableName, $condition))->quick()->ignore();
 
@@ -261,11 +252,10 @@ class DB
      * @return Executable|bool
      */
     public static function deleteLowPriorityQuickIgnore(
-        string|Model           $table,
+        string|Model $table,
         string|ActiveQuery|Raw $condition,
-        ?string                $connection = null
-    ): Executable|bool
-    {
+        ?string $connection = null
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = (new Delete($tableName, $condition))->lowPriority()->quick()->ignore();
 
@@ -323,12 +313,11 @@ class DB
      */
     public static function upsert(
         string|Model $table,
-        array        $attributes,
-        array        $updateColumns = [],
-        ?string      $connection = null,
-        array        $conflictColumns = []
-    ): Executable|bool
-    {
+        array $attributes,
+        array $updateColumns = [],
+        ?string $connection = null,
+        array $conflictColumns = []
+    ): Executable|bool {
         [$tableName, $connectionName] = self::resolveTable($table, $connection);
         $builder = new Upsert($tableName, $attributes, $updateColumns, $conflictColumns);
 

@@ -13,7 +13,9 @@ use Simsoft\DB\Traits\Qualifier;
  */
 abstract class Clause
 {
-    use PlaceHolder, Qualifier, Binds;
+    use PlaceHolder;
+    use Qualifier;
+    use Binds;
 
     /** @var string|null Cached SQL output */
     private ?string $sql = null;
@@ -29,8 +31,7 @@ abstract class Clause
         protected mixed $attribute,
         protected mixed $value = null,
         protected bool $is = true,
-    )
-    {
+    ) {
     }
 
     /**

@@ -11,7 +11,10 @@ use InvalidArgumentException;
  */
 class PostgresGrammar implements Grammar
 {
-    use EscapesStringLiteral, ExplainFormat, FulltextMode, JsonKeyPath;
+    use EscapesStringLiteral;
+    use ExplainFormat;
+    use FulltextMode;
+    use JsonKeyPath;
 
     /** @var array<int, string> Plan formats PostgreSQL accepts in the option list. */
     private const EXPLAIN_FORMATS = ['text', 'json', 'yaml', 'xml'];

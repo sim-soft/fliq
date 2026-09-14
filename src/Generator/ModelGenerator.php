@@ -304,11 +304,10 @@ class ModelGenerator
      */
     public static function generateAll(
         ?string $connectionName = null,
-        string  $namespace = 'App\\Models',
-        string  $outputDir = 'app/Models',
-        bool    $force = false
-    ): array
-    {
+        string $namespace = 'App\\Models',
+        string $outputDir = 'app/Models',
+        bool $force = false
+    ): array {
         // Checked here rather than left to the per-table namespace() call, so a
         // bad namespace fails before the first table is introspected instead of
         // after — the loop writes as it goes, and a run that stops partway

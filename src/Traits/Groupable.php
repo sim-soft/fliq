@@ -70,12 +70,11 @@ trait Groupable
      *     or its value does not match the shape the operator needs.
      */
     public function having(
-        mixed   $attribute,
+        mixed $attribute,
         ?string $operator = '=',
-        mixed   $value = null,
-        string  $logicalOperator = 'AND'
-    ): static
-    {
+        mixed $value = null,
+        string $logicalOperator = 'AND'
+    ): static {
         if (is_string($attribute) && $value === null) {
             $resolved = $this->resolveNullHaving($attribute, $operator, $logicalOperator);
             if ($resolved !== null) {

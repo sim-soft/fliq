@@ -13,7 +13,9 @@ use Simsoft\DB\Traits\LowPriority;
  */
 class Delete extends Builder implements ReturnsRows
 {
-    use LowPriority, Ignore, Condition;
+    use LowPriority;
+    use Ignore;
+    use Condition;
 
     /** @var bool */
     protected bool $quick = false; // used by delete operation only

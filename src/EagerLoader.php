@@ -293,8 +293,7 @@ class EagerLoader
         string $localKey,
         string $relationName,
         bool $isMultiple
-    ): void
-    {
+    ): void {
         foreach ($models as $model) {
             $key = $model->{$localKey};
             $related = $grouped[$key] ?? [];
@@ -318,8 +317,7 @@ class EagerLoader
         string $foreignKey,
         array $values,
         ?callable $constraint = null
-    ): ActiveQuery
-    {
+    ): ActiveQuery {
         $query = $relatedClass::find();
 
         // Handle viaTable (many-to-many through junction)

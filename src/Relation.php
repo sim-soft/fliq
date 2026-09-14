@@ -45,14 +45,13 @@ class Relation
      * @param string $relatedClass The related model class name.
      */
     public function __construct(
-        protected ActiveQuery     $query,
-        protected string          $foreignKey,
+        protected ActiveQuery $query,
+        protected string $foreignKey,
         protected int|string|null $localValue,
-        protected bool            $multiple = false,
-        protected string          $localKey = 'id',
-        protected string          $relatedClass = ''
-    )
-    {
+        protected bool $multiple = false,
+        protected string $localKey = 'id',
+        protected string $relatedClass = ''
+    ) {
     }
 
     /**

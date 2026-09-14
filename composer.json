@@ -63,9 +63,10 @@
   "scripts": {
     "qc": [
       "phpstan analyse --memory-limit=512M",
-      "phpmd src text phpmd.xml"
+      "phpmd src text phpmd.xml",
+      "phpcs"
     ],
-    "qc-fix": "phpcbf --standard=PSR12 src",
+    "qc-fix": "phpcbf",
     "test": "phpunit tests"
   }
 }

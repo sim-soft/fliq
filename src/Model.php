@@ -168,7 +168,6 @@ abstract class Model implements ArrayAccess
      */
     protected function init(): void
     {
-
     }
 
     /**
@@ -628,7 +627,6 @@ abstract class Model implements ArrayAccess
      */
     protected function afterFind(): void
     {
-
     }
 
     /**
@@ -638,7 +636,6 @@ abstract class Model implements ArrayAccess
      */
     protected function beforeFill(): void
     {
-
     }
 
     /**
@@ -1006,7 +1003,6 @@ abstract class Model implements ArrayAccess
      */
     protected function beforeSave(): void
     {
-
     }
 
     /**
@@ -1016,7 +1012,6 @@ abstract class Model implements ArrayAccess
      */
     protected function afterSave(): void
     {
-
     }
 
     /**
